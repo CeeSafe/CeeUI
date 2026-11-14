@@ -178,3 +178,24 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
 - **Still open:** live resizing on macOS. While the user drags the window's edge, AppKit's own loop holds the
   program's loop, so no frames are drawn (ADR 0137 §4).
 
+## J. Found while building the GPU backends (2026-11-14, ceesafec 0.46.0)
+
+- **J1. A manifest cannot name a C file per system.** `[target.linux]`, `[target.macos]` and `[target.windows]` take
+  only `links`, `lib-dirs` and `include-dirs` (spec/tooling.md §4.1, ADR 0047). `claywind-hosts/gpu` needs `metal.c`
+  on macOS and `vulkan.c` elsewhere. It lists both in `c`, and each file wraps itself in `#if` so it compiles to
+  nothing on the others. That works, but every file has to know which systems it is for, and a file meant for
+  one system still has to compile on all of them. **Proposed:** let a `[target.OS]` table take `c` too, added after
+  `[package]`'s, as its other fields are.
+- **J2. With GCC on Windows (MinGW), a program that uses the runtime's sockets or windows does not link.** The
+  hosted runtime names its system libraries with `#pragma comment(lib, …)` (`ceesafe_rt_io.c`, `ceesafe_rt_async.c`,
+  `ceesafe_rt_window.c`). MSVC and clang-cl honour that, but GCC ignores it ("ignoring '#pragma comment'"). With
+  WinLibs GCC 16.2 on Windows 11 x64 and ceesafec 0.46.0, `ws2_32`, `gdi32` and `bcrypt` were missing:
+  `undefined reference to __imp_WSASocketW`, `StretchDIBits`, `BCryptGenRandom` and others. `claywind-hosts/gpu`
+  works around it with `[target.windows] links = ["ws2_32", "gdi32", "user32", "bcrypt"]`. **Proposed:** the driver
+  passes `-lws2_32 -lgdi32 -luser32 -lbcrypt` itself when the compiler is GCC or MinGW clang on Windows. The release
+  workflow builds Windows with `cl` only, so a GCC smoke build there would catch this.
+  - The same build warns only in CeeSafe's C: `ceesafe_rt_async.c` converts an object pointer to a function pointer
+    four times (`-Wpedantic`; `memcpy`, as `ceesafe_rt_window.c` does, avoids it); `ceesafe_rt_io.c:3655` has an
+    unused parameter `s`; and the generated `main.c` has `'t_9' may be used uninitialized` (GCC 16,
+    `-Wmaybe-uninitialized`).
+
