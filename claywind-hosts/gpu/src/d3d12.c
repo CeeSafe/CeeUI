@@ -82,10 +82,12 @@ static const char *const cw_hlsl_parts[] = {
     "Texture2D<float4> dstTex : register(t4);\n"
     "SamplerState lin : register(s0);\n"
     /* target: the target's origin in the frame (xy) and size (zw); box: a blur pass's axis, radius, width, height. */
-    "cbuffer Push : register(b0) { float4 target; int4 box; };\n"
+    /* first: the draw's first instance, as SV_InstanceID counts from 0 whatever the draw's start instance */
+    "cbuffer Push : register(b0) { float4 target; int4 box; uint first; };\n"
     "struct VOut { float4 position : SV_Position; nointerpolation uint inst : INST; float2 local : LOCAL; };\n"
     "VOut vmain(uint vid : SV_VertexID, uint iid : SV_InstanceID) {\n"
-    "    Inst I = insts[iid];\n"
+    "    uint i = first + iid;\n"
+    "    Inst I = insts[i];\n"
     "    float outset = I.misc.w + 1.0;\n"
     "    float4 r = float4(I.rect.xy - outset, I.rect.xy + I.rect.zw + outset);\n"
     "    bool xf = I.xf1.w != 0.0;\n"
@@ -95,7 +97,7 @@ static const char *const cw_hlsl_parts[] = {
     "                           I.xf0.y * local.x + I.xf0.w * local.y + I.xf1.y) : local;\n"
     "    VOut o;\n"
     "    o.position = float4((s.x - target.x) / target.z * 2.0 - 1.0, 1.0 - (s.y - target.y) / target.w * 2.0, 0.0, 1.0);\n"
-    "    o.inst = iid;\n"
+    "    o.inst = i;\n"
     "    o.local = local;\n"
     "    return o;\n"
     "}\n"
@@ -191,7 +193,7 @@ static const char *const cw_hlsl_parts[] = {
     "              nointerpolation float4 clip : CLIP; nointerpolation float chain : CHAIN; };\n"
     "FOut vfill(uint vid : SV_VertexID, uint iid : SV_InstanceID) {\n"
     "    VOut v = vmain(vid, iid);\n"
-    "    Inst I = insts[iid];\n"
+    "    Inst I = insts[first + iid];\n"
     "    FOut o;\n"
     "    o.position = v.position; o.rect = I.rect; o.radii = I.radii; o.color = I.c0; o.clip = I.clip;\n"
     "    o.chain = I.misc.z;\n"
@@ -704,7 +706,7 @@ static int make_root_signature(void) {
     memset(params, 0, sizeof params);
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     params[0].Constants.ShaderRegister = 0;
-    params[0].Constants.Num32BitValues = 8;
+    params[0].Constants.Num32BitValues = 9;
     params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; /* t0: the instances */
     params[1].Descriptor.ShaderRegister = 0;
@@ -1011,7 +1013,7 @@ static void begin_target(cw_texture *t, const float box[4], int clear, float r, 
 /* Draws `count` instances of `data` (which the instance buffer holds from `base`) into `t`, whose box in the frame
    is `box`: shapes and fills in runs, each layer composite on its own after a scratch copy of what it covers. */
 static void draw_target(cw_texture *t, const float *data, uint32_t base, uint32_t count, const float box[4],
-                        cw_texture **textures, D3D12_GPU_VIRTUAL_ADDRESS instances, D3D12_GPU_DESCRIPTOR_HANDLE atlas) {
+                        cw_texture **textures, D3D12_GPU_DESCRIPTOR_HANDLE atlas) {
     ID3D12GraphicsCommandList_SetGraphicsRootDescriptorTable(d.list, 3, atlas);
     ID3D12PipelineState *bound = NULL;
     uint32_t k = 0;
@@ -1049,8 +1051,7 @@ static void draw_target(cw_texture *t, const float *data, uint32_t base, uint32_
                         ID3D12GraphicsCommandList_SetPipelineState(d.list, d.composite);
                         bound = d.composite;
                     }
-                    ID3D12GraphicsCommandList_SetGraphicsRootShaderResourceView(
-                        d.list, 1, instances + (UINT64)(base + k) * CW_FLOATS * sizeof(float));
+                    ID3D12GraphicsCommandList_SetGraphicsRoot32BitConstant(d.list, 0, base + k, 8);
                     ID3D12GraphicsCommandList_DrawInstanced(d.list, 4, 1, 0, 0);
                 }
             }
@@ -1069,9 +1070,9 @@ static void draw_target(cw_texture *t, const float *data, uint32_t base, uint32_
             ID3D12GraphicsCommandList_SetPipelineState(d.list, p);
             bound = p;
         }
-        /* SV_InstanceID starts at 0 whatever the start instance, so the instances' view starts at the run. */
-        ID3D12GraphicsCommandList_SetGraphicsRootShaderResourceView(
-            d.list, 1, instances + (UINT64)(base + k) * CW_FLOATS * sizeof(float));
+        /* The run's first instance as a root constant (not an offset view of the buffer, which Parallels's
+           driver ignores). */
+        ID3D12GraphicsCommandList_SetGraphicsRoot32BitConstant(d.list, 0, base + k, 8);
         ID3D12GraphicsCommandList_DrawInstanced(d.list, 4, run - k, 0, 0);
         k = run;
     }
@@ -1146,7 +1147,8 @@ static int record(cw_texture *target, const float *frame, uint32_t count, const 
     av.Texture2D.MipLevels = 1;
     ID3D12Device_CreateShaderResourceView(d.device, d.atlas, &av, srv_cpu(0));
     D3D12_GPU_DESCRIPTOR_HANDLE atlas = srv_gpu(0);
-    D3D12_GPU_VIRTUAL_ADDRESS instances = ID3D12Resource_GetGPUVirtualAddress(d.instances.resource);
+    ID3D12GraphicsCommandList_SetGraphicsRootShaderResourceView(
+        d.list, 1, ID3D12Resource_GetGPUVirtualAddress(d.instances.resource));
     ID3D12GraphicsCommandList_SetGraphicsRootShaderResourceView(
         d.list, 2, ID3D12Resource_GetGPUVirtualAddress(d.clips.resource));
     cw_texture *textures[CW_MAX_LAYERS];
@@ -1166,8 +1168,7 @@ static int record(cw_texture *target, const float *frame, uint32_t count, const 
         float box[4] = {(float)x0, (float)y0, (float)w, (float)h};
         begin_target(t, box, 1, 0, 0, 0, 0);
         uint32_t first = (uint32_t)rec[0];
-        draw_target(t, layers + (size_t)first * CW_FLOATS, count + first, (uint32_t)rec[1], box, textures, instances,
-                    atlas);
+        draw_target(t, layers + (size_t)first * CW_FLOATS, count + first, (uint32_t)rec[1], box, textures, atlas);
         int k0 = (int)rec[6], k1 = (int)rec[7];
         if (k0 > 0 || k1 > 0) {
             cw_texture *other = pooled(w, h);
@@ -1192,7 +1193,7 @@ static int record(cw_texture *target, const float *frame, uint32_t count, const 
     }
     float whole[4] = {0.0f, 0.0f, (float)width, (float)height};
     begin_target(target, whole, 1, r, g, b, 1.0f);
-    draw_target(target, frame, 0, count, whole, textures, instances, atlas);
+    draw_target(target, frame, 0, count, whole, textures, atlas);
     return 1;
 }
 
