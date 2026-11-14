@@ -1,0 +1,16 @@
+[package]
+name = "gpu"
+version = "0.1.0"
+kind = "executable"
+ceesafec = ">=0.46.0"
+c = ["src/metal.c", "src/vulkan.c"]
+include-dirs = ["src"]
+
+[target.windows]
+include-dirs = ["$VULKAN_SDK/Include"] # the Vulkan SDK's headers; Linux's are the system's (libvulkan-dev)
+# CeeSafe's runtime names these with #pragma comment(lib), which GCC ignores (CEESAFE-FINDINGS.md J2).
+links = ["ws2_32", "gdi32", "user32", "bcrypt"]
+
+[dependencies]
+claywind = { path = "../../claywind" }
+claywind_demo = { path = "../../claywind-demo" }

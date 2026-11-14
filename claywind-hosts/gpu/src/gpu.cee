@@ -50,9 +50,9 @@ const LAYER_FILTER: u32 = 2;
 
 extern "C" {
     @effects(sleep)
-    fn cw_metal_atlas(pixels: *u8, stride: u32, x0: u32, y0: u32, x1: u32, y1: u32);
+    fn cw_gpu_atlas(pixels: *u8, stride: u32, x0: u32, y0: u32, x1: u32, y1: u32);
     @effects(sleep)
-    fn cw_metal_present(
+    fn cw_gpu_present(
         frame: *f32,
         count: u32,
         layers: *f32,
@@ -66,7 +66,7 @@ extern "C" {
         b: f32,
     ) -> i32;
     @effects(sleep)
-    fn cw_metal_render_to(
+    fn cw_gpu_render_to(
         frame: *f32,
         count: u32,
         layers: *f32,
@@ -81,7 +81,7 @@ extern "C" {
         out: *mut u32,
     ) -> i32;
     @effects(sleep)
-    fn cw_metal_render_only(
+    fn cw_gpu_render_only(
         frame: *f32,
         count: u32,
         layers: *f32,
@@ -406,7 +406,7 @@ impl<region r> GpuBackend<r> {
         }
         let pixels = this.atlas.view();
         unsafe {
-            cw_metal_atlas(
+            cw_gpu_atlas(
                 pixels.ptr,
                 truncate<u32>(ATLAS),
                 truncate<u32>(this.dirtyX0),
@@ -430,7 +430,7 @@ impl<region r> GpuBackend<r> {
         let frame = this.stream.view();
         let layers = this.layerData.view();
         let records = this.records.view();
-        return unsafe { cw_metal_present(
+        return unsafe { cw_gpu_present(
             frame.ptr,
             truncate<u32>(frame.length / FLOATS),
             layers.ptr,
@@ -458,7 +458,7 @@ impl<region r> GpuBackend<r> {
         let frame = this.stream.view();
         let layers = this.layerData.view();
         let records = this.records.view();
-        return unsafe { cw_metal_render_to(
+        return unsafe { cw_gpu_render_to(
             frame.ptr,
             truncate<u32>(frame.length / FLOATS),
             layers.ptr,
@@ -483,7 +483,7 @@ impl<region r> GpuBackend<r> {
         let frame = this.stream.view();
         let layers = this.layerData.view();
         let records = this.records.view();
-        return unsafe { cw_metal_render_only(
+        return unsafe { cw_gpu_render_only(
             frame.ptr,
             truncate<u32>(frame.length / FLOATS),
             layers.ptr,

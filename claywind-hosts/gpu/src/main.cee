@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
-// The GPU spike: the ClayWind demo drawn by Metal (gpu.cee, metal.c) in a window the program draws itself
+// The GPU host: the ClayWind demo drawn by the GPU (gpu.cee; metal.c on macOS, vulkan.c on Linux and Windows) in a
+// window the program draws itself
 // (lib/std's WindowSurface.External and Window.nativeHandle, CeeSafe ADR 0137). macOS only.
 //
-//   ./out/metal                      the demo in a window, redrawn only when its instances change
+//   ./out/gpu                        the demo in a window, redrawn only when its instances change
 //   CLAYWIND_STATS=1                 also print the CPU and GPU time per frame, every 120 frames shown
 //   CLAYWIND_COMPARE=DIR             no window: draw every tab with Raster and with Metal from the same commands,
 //                                    print how far apart they are, and write both and their difference to DIR
@@ -18,11 +19,11 @@ const START_HEIGHT: u32 = 640;
 
 extern "C" {
     @effects(sleep, alloc)
-    fn cw_metal_init(atlasWidth: u32, atlasHeight: u32) -> i32;
+    fn cw_gpu_init(atlasWidth: u32, atlasHeight: u32) -> i32;
     @effects(sleep, alloc)
-    fn cw_metal_attach(nswindow: u64, nsview: u64) -> i32;
+    fn cw_gpu_attach(kind: i32, first: u64, second: u64) -> i32;
     @effects()
-    fn cw_metal_gpu_ms() -> f64;
+    fn cw_gpu_gpu_ms() -> f64;
 }
 
 fn zeros(count: usize) -> Vector<u8> {
@@ -65,29 +66,59 @@ fn fontPath(dir: StringView, file: StringView, path: borrow mut [u8; 512]) -> us
     return w.written().length;
 }
 
-/// Loads the regular, bold and monospaced faces into `raster` from CLAYWIND_FONT_DIR or macOS's fonts.
-fn loadFonts(raster: borrow mut Raster) -> bool {
-    let dir = match (Environment.variable("CLAYWIND_FONT_DIR")) {
-        Some(d) => d,
-        null => "/System/Library/Fonts/Supplemental",
+/// Loads `dir/file` as font `id`; false when it is missing or does not fit.
+fn loadFont(raster: borrow mut Raster, id: u32, dir: StringView, file: StringView) -> bool {
+    var path = [0u8; 512];
+    let n = fontPath(dir, file, mut path);
+    let name = match (StringView.fromUtf8(path[0..n])) {
+        Some(s) => s,
+        null => { return false; }
     };
-    let files: [StringView; 3] = ["Arial.ttf", "Arial Bold.ttf", "Courier New.ttf"];
-    let ids: [u32; 3] = [FONT_18, FONT_BOLD, FONT_MONO];
-    for (k in 0usize..3) {
-        var path = [0u8; 512];
-        let n = fontPath(dir, files[k], mut path);
-        let name = match (StringView.fromUtf8(path[0..n])) {
-            Some(s) => s,
-            null => { return false; }
+    let bytes = readFile(name);
+    return bytes.length > 0 && raster.loadFont(id, bytes.view());
+}
+
+/// The regular, bold and monospaced faces, from CLAYWIND_FONT_DIR or the system's fonts: Arial and Courier New
+/// under macOS's names, Windows's, or Linux's Microsoft core fonts, or else DejaVu.
+fn loadFonts(raster: borrow mut Raster) -> bool {
+    let places: [StringView; 20] = [
+        "/System/Library/Fonts/Supplemental",
+        "Arial.ttf",
+        "Arial Bold.ttf",
+        "Courier New.ttf",
+        "C:/Windows/Fonts",
+        "arial.ttf",
+        "arialbd.ttf",
+        "cour.ttf",
+        "/usr/share/fonts/truetype/msttcorefonts",
+        "Arial.ttf",
+        "Arial_Bold.ttf",
+        "Courier_New.ttf",
+        "/usr/share/fonts/truetype/dejavu",
+        "DejaVuSans.ttf",
+        "DejaVuSans-Bold.ttf",
+        "DejaVuSansMono.ttf",
+        "",
+        "Arial.ttf",
+        "Arial Bold.ttf",
+        "Courier New.ttf",
+    ];
+    let chosen = Environment.variable("CLAYWIND_FONT_DIR");
+    for (k in 0usize..5) {
+        // CLAYWIND_FONT_DIR is tried with each set of names.
+        let dir = match (chosen) {
+            Some(d) => d,
+            null => places[k * 4],
         };
-        let bytes = readFile(name);
-        if (bytes.length == 0 || !raster.loadFont(ids[k], bytes.view())) {
-            Console.writeError("metal: cannot load ");
-            Console.writeErrorLine(name);
-            return false;
+        if (dir.length > 0 && loadFont(mut raster, FONT_18, dir, places[k * 4 + 1])) {
+            if (loadFont(mut raster, FONT_BOLD, dir, places[k * 4 + 2]) &&
+                loadFont(mut raster, FONT_MONO, dir, places[k * 4 + 3])) {
+                return true;
+            }
         }
     }
-    return true;
+    Console.writeErrorLine("gpu: no fonts found; set CLAYWIND_FONT_DIR");
+    return false;
 }
 
 fn nanos() -> u64 => Clock.monotonicNanos();
@@ -103,14 +134,14 @@ fn main() -> i32 {
     var ui = match (Ui.create(uiMemory, UiCapacity.of(4096))) {
         Ok(u) => u,
         Err(_) => {
-            Console.writeErrorLine("metal: not enough memory for the UI");
+            Console.writeErrorLine("gpu: not enough memory for the UI");
             return 1;
         }
     };
     var masks = match (Raster.create(gpuMemory, RasterCapacity.of(CELL, CELL))) {
         Ok(r) => r,
         Err(_) => {
-            Console.writeErrorLine("metal: not enough memory for the mask renderer");
+            Console.writeErrorLine("gpu: not enough memory for the mask renderer");
             return 1;
         }
     };
@@ -118,9 +149,9 @@ fn main() -> i32 {
         return 1;
     }
     var gpu = GpuBackend.create(masks);
-    let started = unsafe { cw_metal_init(truncate<u32>(ATLAS), truncate<u32>(ATLAS)) };
+    let started = unsafe { cw_gpu_init(truncate<u32>(ATLAS), truncate<u32>(ATLAS)) };
     if (started != 0) {
-        Console.write("metal: no Metal device or pipeline (");
+        Console.write("gpu: no GPU device or pipeline (");
         Console.write(started);
         Console.writeLine(")");
         return 1;
@@ -150,24 +181,24 @@ fn number(text: StringView) -> u64 {
 /// The demo in a window that Metal draws: redrawn only when the frame's instances change.
 /// Safety: metal.c keeps the window's handles, which stay valid while `window` lives, through the whole loop.
 fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
-    var window = match (Window.openWith("ClayWind — Metal", START_WIDTH, START_HEIGHT, WindowSurface.External)) {
+    var window = match (Window.openWith("ClayWind — GPU", START_WIDTH, START_HEIGHT, WindowSurface.External)) {
         Ok(w) => w,
         Err(_) => {
-            Console.writeErrorLine("metal: cannot open a window");
+            Console.writeErrorLine("gpu: cannot open a window");
             return 1;
         }
     };
-    match (window.nativeHandle()) {
-        WindowHandle.AppKit(nswindow, nsview) => {
-            if (unsafe { cw_metal_attach(nswindow, nsview) } != 0) {
-                Console.writeErrorLine("metal: cannot attach a Metal layer");
-                return 1;
-            }
-        }
-        _ => {
-            Console.writeErrorLine("metal: this spike needs macOS");
-            return 1;
-        }
+    let attached = match (window.nativeHandle()) {
+        WindowHandle.AppKit(nswindow, nsview) => unsafe { cw_gpu_attach(1, nswindow, nsview) },
+        WindowHandle.Win32(hwnd, hinstance) => unsafe { cw_gpu_attach(2, hwnd, hinstance) },
+        WindowHandle.Xlib(display, xwindow) => unsafe { cw_gpu_attach(3, display, xwindow) },
+        WindowHandle.Scripted => -1,
+    };
+    if (attached != 0) {
+        Console.write("gpu: cannot draw into the window (");
+        Console.write(attached);
+        Console.writeLine(")");
+        return 1;
     }
     let stats = Environment.variable("CLAYWIND_STATS") != null;
     let size = window.size();
@@ -200,7 +231,7 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
         match (ui.endFrame(mut platform, gpu.raster)) {
             Ok() => {}
             Err(_) => {
-                Console.writeErrorLine("metal: the frame does not fit the UI capacity");
+                Console.writeErrorLine("gpu: the frame does not fit the UI capacity");
                 return 1;
             }
         }
@@ -209,13 +240,13 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
         ui.renderInto(mut gpu);
         if (gpu.changed() || width != lastWidth || height != lastHeight) {
             if (gpu.present(width, height, Color.hex(pageBg(ui))) != 0) {
-                Console.writeErrorLine("metal: no drawable");
+                Console.writeErrorLine("gpu: no frame to draw into");
             }
             lastWidth = width;
             lastHeight = height;
             shown += 1;
             cpuTotal += ms(t0, nanos());
-            gpuTotal += unsafe { cw_metal_gpu_ms() };
+            gpuTotal += unsafe { cw_gpu_gpu_ms() };
             if (stats && shown % 120 == 0) {
                 Console.write("frames ");
                 Console.write(shown);
@@ -268,7 +299,7 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
     var reference = match (Raster.create(memory, RasterCapacity.of(width as usize, height as usize))) {
         Ok(r) => r,
         Err(_) => {
-            Console.writeErrorLine("metal: not enough memory for the reference renderer");
+            Console.writeErrorLine("gpu: not enough memory for the reference renderer");
             return 1;
         }
     };
@@ -280,7 +311,7 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
     for (i in 0..width * height) {
         pixels.push(0)!;
     }
-    Console.writeLine("tab        instances  skipped  raster ms  metal ms  mean diff  >8 %     >32 %    max");
+    Console.writeLine("tab        instances  skipped  raster ms  gpu ms  mean diff  >8 %     >32 %    max");
     var worst: f64 = 0.0;
     for (tab in 0usize..NAV_COUNT) {
         var app = DemoApp.create();
@@ -297,7 +328,7 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
         gpu.begin(width, height, ratio);
         ui.renderInto(mut gpu);
         if (gpu.renderTo(width, height, clear, mut pixels.viewMut()) != 0) {
-            Console.writeErrorLine("metal: the offscreen frame failed");
+            Console.writeErrorLine("gpu: the offscreen frame failed");
             return 1;
         }
         let r2 = nanos();
@@ -348,7 +379,7 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
         Console.write("  ");
         Console.writeLine(largest);
         writeImage(dir, tab, "raster", a, width, height);
-        writeImage(dir, tab, "metal", pixels.view(), width, height);
+        writeImage(dir, tab, "gpu", pixels.view(), width, height);
         writeImage(dir, tab, "diff", diff.view(), width, height);
         let ignore = r2;
     }
@@ -437,7 +468,7 @@ fn writeImage(dir: StringView, tab: usize, what: StringView, pixels: Slice<u32>,
             let written = file.write(out.view());
         }
         Err(_) => {
-            Console.writeError("metal: cannot write ");
+            Console.writeError("gpu: cannot write ");
             Console.writeErrorLine(name);
         }
     }
@@ -445,7 +476,7 @@ fn writeImage(dir: StringView, tab: usize, what: StringView, pixels: Slice<u32>,
 
 /// `frames` frames of the dashboard at 5K (2560 × 1440 points at a ratio of 2), offscreen: the time to lay out,
 /// to build the instances, and the GPU's time.
-/// Safety: cw_metal_gpu_ms only reads the last frame's time.
+/// Safety: cw_gpu_gpu_ms only reads the last frame's time.
 fn bench(ui: borrow mut Ui, gpu: borrow mut GpuBackend, frames: u64) -> i32 {
     let ratio: f32 = 2.0;
     let width: u32 = 5120;
@@ -476,7 +507,7 @@ fn bench(ui: borrow mut Ui, gpu: borrow mut GpuBackend, frames: u64) -> i32 {
             layout += ms(t0, t1);
             build += ms(t1, t2);
             total += ms(t0, t3);
-            gpuMs += unsafe { cw_metal_gpu_ms() };
+            gpuMs += unsafe { cw_gpu_gpu_ms() };
         }
     }
     let count = round<f64>(n);

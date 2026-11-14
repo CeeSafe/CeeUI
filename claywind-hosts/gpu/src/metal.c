@@ -13,8 +13,10 @@
  * ThorVG's box passes, two per axis.
  *
  * Objective-C through objc_msgSend; Metal, QuartzCore and CoreGraphics loaded with dlopen, so the package needs no
- * link flags (as CeeSafe's window runtime does). macOS on Apple silicon only.
+ * link flags (as CeeSafe's window runtime does). macOS on Apple silicon only; elsewhere vulkan.c implements the same
+ * cw_gpu_* calls (a manifest cannot name a C file per system, so each file compiles to nothing on the others').
  */
+#if defined(__APPLE__)
 #include <dlfcn.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -40,20 +42,20 @@ typedef struct {
 } cw_clear;
 
 /* The calls gpu.cee makes. */
-int32_t cw_metal_init(uint32_t atlas_width, uint32_t atlas_height);
-int32_t cw_metal_attach(uint64_t nswindow, uint64_t nsview);
-void cw_metal_atlas(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1);
-int32_t cw_metal_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
+int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height);
+int32_t cw_gpu_attach(int32_t kind, uint64_t nswindow, uint64_t nsview);
+void cw_gpu_atlas(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1);
+int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
                          const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r, float g,
                          float b);
-int32_t cw_metal_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
+int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
                            const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r,
                            float g, float b, uint32_t *out);
-int32_t cw_metal_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
+int32_t cw_gpu_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
                              const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r,
                              float g, float b);
-double cw_metal_gpu_ms(void);
-void cw_metal_finish(void);
+double cw_gpu_gpu_ms(void);
+void cw_gpu_finish(void);
 
 #define CW_FLOATS 60 /* gpu.cee's FLOATS: 15 float4s per instance */
 #define CW_RECORD 8  /* gpu.cee's RECORD: a layer's first instance, count, box x0 y0 x1 y1, box radii k0 k1 */
@@ -61,7 +63,7 @@ void cw_metal_finish(void);
 #define CW_KIND_LAYER 6.0f
 #define CW_MAX_LAYERS 256
 
-/* The shader source, in parts that each fit a C string literal; cw_metal_init joins them. */
+/* The shader source, in parts that each fit a C string literal; cw_gpu_init joins them. */
 static const char *const cw_shader_parts[] = {
     "#include <metal_stdlib>\n"
     "using namespace metal;\n"
@@ -458,7 +460,7 @@ static id compile(const char *source, int fast) {
     return library;
 }
 
-int32_t cw_metal_init(uint32_t atlas_width, uint32_t atlas_height) {
+int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height) {
     if (!load()) {
         return 1;
     }
@@ -501,8 +503,9 @@ int32_t cw_metal_init(uint32_t atlas_width, uint32_t atlas_height) {
                : 4;
 }
 
-int32_t cw_metal_attach(uint64_t nswindow, uint64_t nsview) {
-    if (m.device == NULL) {
+/* The window to draw into: WindowHandle's kind and handles; Metal takes AppKit's NSWindow and NSView (kind 1). */
+int32_t cw_gpu_attach(int32_t kind, uint64_t nswindow, uint64_t nsview) {
+    if (m.device == NULL || kind != 1) {
         return 1;
     }
     void *pool = cw.pool_push();
@@ -524,7 +527,7 @@ int32_t cw_metal_attach(uint64_t nswindow, uint64_t nsview) {
 }
 
 /* Waits for the GPU to finish the last frame, and records its time. */
-void cw_metal_finish(void) {
+void cw_gpu_finish(void) {
     if (m.last == NULL) {
         return;
     }
@@ -536,14 +539,14 @@ void cw_metal_finish(void) {
     m.last = NULL;
 }
 
-double cw_metal_gpu_ms(void) { return m.gpu_ms; }
+double cw_gpu_gpu_ms(void) { return m.gpu_ms; }
 
 /* Copies the atlas rows [y0, y1) and columns [x0, x1) from `pixels` (a `stride`-wide R8 image) to the texture. */
-void cw_metal_atlas(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {
+void cw_gpu_atlas(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {
     if (m.atlas == NULL || x1 <= x0 || y1 <= y0) {
         return;
     }
-    cw_metal_finish(); /* the last frame may still read the texture */
+    cw_gpu_finish(); /* the last frame may still read the texture */
     cw_region region = {{x0, y0, 0}, {x1 - x0, y1 - y0, 1}};
     SEND(void, cw_region, unsigned long, const void *, unsigned long)(
         m.atlas, cw.sel("replaceRegion:mipmapLevel:withBytes:bytesPerRow:"), region, 0ul,
@@ -740,13 +743,13 @@ static void encode(id target, int bgra, const float *frame, uint32_t count, cons
 }
 
 /* Draws the frame into the window's next drawable, `width` × `height` pixels, and presents it. */
-int32_t cw_metal_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
+int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
                          const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r, float g,
                          float b) {
     if (m.layer == NULL) {
         return 1;
     }
-    cw_metal_finish();
+    cw_gpu_finish();
     void *pool = cw.pool_push();
     double scale = SEND0(double)(m.window, cw.sel("backingScaleFactor"));
     SEND(void, double)(m.layer, cw.sel("setContentsScale:"), scale);
@@ -764,13 +767,13 @@ int32_t cw_metal_present(const float *frame, uint32_t count, const float *layers
 }
 
 /* Draws the frame into an offscreen texture and copies its pixels to `out` (RGBA bytes, Raster's order). */
-int32_t cw_metal_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
+int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
                            const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r,
                            float g, float b, uint32_t *out) {
     if (m.device == NULL) {
         return 1;
     }
-    cw_metal_finish();
+    cw_gpu_finish();
     void *pool = cw.pool_push();
     if (m.offscreen == NULL || m.offscreen_width != width || m.offscreen_height != height) {
         if (m.offscreen != NULL) {
@@ -786,7 +789,7 @@ int32_t cw_metal_render_to(const float *frame, uint32_t count, const float *laye
         m.offscreen_height = height;
     }
     encode(m.offscreen, 0, frame, count, layers, layer_instances, records, layer_count, width, height, r, g, b, NULL);
-    cw_metal_finish();
+    cw_gpu_finish();
     if (out != NULL) {
         cw_region region = {{0, 0, 0}, {width, height, 1}};
         SEND(void, void *, unsigned long, cw_region, unsigned long)(
@@ -798,9 +801,12 @@ int32_t cw_metal_render_to(const float *frame, uint32_t count, const float *laye
 }
 
 /* Draws the frame offscreen and waits for it, reading nothing back: for timing the GPU. */
-int32_t cw_metal_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
+int32_t cw_gpu_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
                              const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r,
                              float g, float b) {
-    return cw_metal_render_to(frame, count, layers, layer_instances, records, layer_count, width, height, r, g, b,
+    return cw_gpu_render_to(frame, count, layers, layer_instances, records, layer_count, width, height, r, g, b,
                               NULL);
 }
+#else
+typedef int cw_metal_absent; /* not macOS: vulkan.c draws */
+#endif
