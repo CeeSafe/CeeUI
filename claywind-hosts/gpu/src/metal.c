@@ -47,13 +47,13 @@ int32_t cw_gpu_attach(int32_t kind, uint64_t nswindow, uint64_t nsview);
 void cw_gpu_atlas(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1);
 void cw_gpu_image(const uint32_t *pixels, uint32_t stride, uint32_t w, uint32_t h, uint32_t u, uint32_t v);
 int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r, float g,
+                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height, float r, float g,
                          float b);
 int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r,
+                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height, float r,
                            float g, float b, uint32_t *out);
 int32_t cw_gpu_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                             const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r,
+                             const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height, float r,
                              float g, float b);
 double cw_gpu_gpu_ms(void);
 void cw_gpu_finish(void);
@@ -174,8 +174,38 @@ static const char *const cw_shader_parts[] = {
     "    }\n"
     "    return c * I.extra.y;\n"
     "}\n"
+    /* A path tile's coverage of frame pixel p: its row's backdrop (the winding of the edges left of the tile) plus
+       each of the tile's edges' share of the pixel (the part of the pixel's row right of it, as Raster's accumulation
+       counts it) times its direction; nonzero (|sum| up to 1) or even-odd. params: where the tile's 16 backdrops are
+       in `segs` (its edges follow them), how many edges, even-odd; top: the tile's top row. */
+    "static float rightG(float u) { return u <= 0.0 ? u : (u >= 1.0 ? 0.5 : u - 0.5 * u * u); }\n"
+    "static float pathCover(const device float4 *segs, float4 params, float top, float2 p) {\n"
+    "    float px = floor(p.x);\n"
+    "    float py = floor(p.y);\n"
+    "    int first = int(params.x);\n"
+    "    int row = clamp(int(py - top), 0, 15);\n"
+    "    float acc = segs[first + row / 4][row % 4];\n"
+    "    int start = first + 4;\n"
+    "    int end = start + int(params.y);\n"
+    "    for (int i = start; i < end; i++) {\n"
+    "        float4 s = segs[i];\n"
+    "        float t0 = max(min(s.y, s.w), py);\n"
+    "        float t1 = min(max(s.y, s.w), py + 1.0);\n"
+    "        if (t1 <= t0) { continue; }\n"
+    "        float dxdy = (s.z - s.x) / (s.w - s.y);\n"
+    "        float a = s.x + (t0 - s.y) * dxdy - px;\n"
+    "        float b = s.x + (t1 - s.y) * dxdy - px;\n"
+    "        float share = abs(b - a) < 0.001 ? clamp(1.0 - 0.5 * (a + b), 0.0, 1.0) : (rightG(b) - rightG(a)) / (b - a);\n"
+    "        acc += (s.w > s.y ? 1.0 : -1.0) * (t1 - t0) * share;\n"
+    "    }\n"
+    "    float w = abs(acc);\n"
+    "    float c = min(w, 1.0);\n"
+    "    if (params.z > 0.0) { float m = w - floor(w / 2.0) * 2.0; c = m > 1.0 ? 2.0 - m : m; }\n"
+    "    return c < 0.002 ? 0.0 : c;\n"
+    "}\n"
     "fragment float4 fmain(VOut in [[stage_in]], const device Inst *insts [[buffer(0)]],\n"
     "                      constant float4 &target [[buffer(1)]], const device ClipShape *clips [[buffer(2)]],\n"
+    "                      const device float4 *segs [[buffer(3)]],\n"
     "                      texture2d<float> atlas [[texture(0)]], texture2d<float> images [[texture(2)]]) {\n"
     "    const device Inst &I = insts[in.inst];\n"
     "    float2 p = in.position.xy + target.xy;\n"
@@ -209,6 +239,8 @@ static const char *const cw_shader_parts[] = {
     "        color = I.c0 * a;\n"
     "    } else if (kind == 7) {\n"
     "        color = imageColor(I, images, q) * cover(sdRR(q, I.rect, I.radii) * aa);\n"
+    "    } else if (kind == 8) {\n"
+    "        color = I.c0 * pathCover(segs, I.params, I.rect.y, p);\n"
     "    } else {\n"
     "        float t = kind == 3 ? dot(q - I.params.xy, I.params.zw) / I.extra.z\n"
     "                            : length(q - I.params.xy) / I.params.z;\n"
@@ -690,7 +722,7 @@ static int pipeline_class(const float *instance) {
 
 /* Draws instances [first, first + count) of `data` into the target of `encoder`, whose box in the frame is `box`:
    shapes and plain fills in runs, each with its pipeline, and each layer composite on its own with its texture. */
-static void draw_target(id encoder, id shapes, id fills, id composite, id buffer, id clips, const float *data,
+static void draw_target(id encoder, id shapes, id fills, id composite, id buffer, id clips, id segments, const float *data,
                         uint32_t first, uint32_t count, const float box[4], id *textures) {
     SEND(void, id, unsigned long, unsigned long)(encoder, cw.sel("setVertexBuffer:offset:atIndex:"), buffer, 0ul, 0ul);
     SEND(void, const void *, unsigned long, unsigned long)(encoder, cw.sel("setVertexBytes:length:atIndex:"), box,
@@ -698,6 +730,8 @@ static void draw_target(id encoder, id shapes, id fills, id composite, id buffer
     SEND(void, id, unsigned long, unsigned long)(encoder, cw.sel("setFragmentBuffer:offset:atIndex:"), buffer, 0ul,
                                                  0ul);
     SEND(void, id, unsigned long, unsigned long)(encoder, cw.sel("setFragmentBuffer:offset:atIndex:"), clips, 0ul, 2ul);
+    SEND(void, id, unsigned long, unsigned long)(encoder, cw.sel("setFragmentBuffer:offset:atIndex:"), segments, 0ul,
+                                                 3ul);
     SEND(void, const void *, unsigned long, unsigned long)(encoder, cw.sel("setFragmentBytes:length:atIndex:"), box,
                                                            4 * sizeof(float), 1ul);
     SEND(void, id, unsigned long)(encoder, cw.sel("setFragmentTexture:atIndex:"), m.atlas, 0ul);
@@ -751,7 +785,7 @@ static id buffer_of(const float *data, uint32_t count, uint32_t floats) {
 /* Encodes a whole frame: each layer in the order it closed, its blur, then the frame into `target`. */
 static void encode(id target, int bgra, const float *frame, uint32_t count, const float *layers,
                    uint32_t layer_instances, const float *records, uint32_t layer_count, const float *clips,
-                   uint32_t clip_count, uint32_t width,
+                   uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width,
                    uint32_t height, float r, float g, float b, id drawable) {
     for (int k = 0; k < CW_POOL; k++) {
         m.pool[k].used = 0;
@@ -760,6 +794,7 @@ static void encode(id target, int bgra, const float *frame, uint32_t count, cons
     id frame_data = buffer_of(frame, count, CW_FLOATS);
     id layer_data = buffer_of(layers, layer_instances, CW_FLOATS);
     id clip_data = buffer_of(clips, clip_count, CW_SHAPE);
+    id segment_data = buffer_of(segments, segment_count, 4);
     id textures[CW_MAX_LAYERS];
     uint32_t n = layer_count < CW_MAX_LAYERS ? layer_count : CW_MAX_LAYERS;
     for (uint32_t l = 0; l < n; l++) {
@@ -776,7 +811,7 @@ static void encode(id target, int bgra, const float *frame, uint32_t count, cons
         }
         float box[4] = {(float)x0, (float)y0, (float)w, (float)h};
         id encoder = begin_pass(buffer, texture, 1, 0, 0, 0, 0);
-        draw_target(encoder, m.shapes_rgba, m.fills_rgba, m.composite_rgba, layer_data, clip_data, layers, (uint32_t)rec[0],
+        draw_target(encoder, m.shapes_rgba, m.fills_rgba, m.composite_rgba, layer_data, clip_data, segment_data, layers, (uint32_t)rec[0],
                     (uint32_t)rec[1], box, textures);
         call(encoder, "endEncoding");
         int k0 = (int)rec[6], k1 = (int)rec[7];
@@ -804,7 +839,7 @@ static void encode(id target, int bgra, const float *frame, uint32_t count, cons
     float whole[4] = {0.0f, 0.0f, (float)width, (float)height};
     id encoder = begin_pass(buffer, target, 1, r, g, b, 1.0f);
     draw_target(encoder, bgra ? m.shapes_bgra : m.shapes_rgba, bgra ? m.fills_bgra : m.fills_rgba,
-                bgra ? m.composite_bgra : m.composite_rgba, frame_data, clip_data, frame, 0, count, whole, textures);
+                bgra ? m.composite_bgra : m.composite_rgba, frame_data, clip_data, segment_data, frame, 0, count, whole, textures);
     call(encoder, "endEncoding");
     if (drawable != NULL) {
         SEND(void, id)(buffer, cw.sel("presentDrawable:"), drawable);
@@ -813,12 +848,13 @@ static void encode(id target, int bgra, const float *frame, uint32_t count, cons
     call(frame_data, "release");
     call(layer_data, "release");
     call(clip_data, "release");
+    call(segment_data, "release");
     m.last = call(buffer, "retain");
 }
 
 /* Draws the frame into the window's next drawable, `width` × `height` pixels, and presents it. */
 int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r, float g,
+                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height, float r, float g,
                          float b) {
     if (m.layer == NULL) {
         return 1;
@@ -834,7 +870,7 @@ int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, 
         cw.pool_pop(pool);
         return 2;
     }
-    encode(call(drawable, "texture"), 1, frame, count, layers, layer_instances, records, layer_count, clips, clip_count, width, height,
+    encode(call(drawable, "texture"), 1, frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count, width, height,
            r, g, b, drawable);
     cw.pool_pop(pool);
     return 0;
@@ -842,7 +878,7 @@ int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, 
 
 /* Draws the frame into an offscreen texture and copies its pixels to `out` (RGBA bytes, Raster's order). */
 int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r,
+                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height, float r,
                            float g, float b, uint32_t *out) {
     if (m.device == NULL) {
         return 1;
@@ -862,7 +898,7 @@ int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers
         m.offscreen_width = width;
         m.offscreen_height = height;
     }
-    encode(m.offscreen, 0, frame, count, layers, layer_instances, records, layer_count, clips, clip_count, width, height, r, g, b, NULL);
+    encode(m.offscreen, 0, frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count, width, height, r, g, b, NULL);
     cw_gpu_finish();
     if (out != NULL) {
         cw_region region = {{0, 0, 0}, {width, height, 1}};
@@ -876,9 +912,9 @@ int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers
 
 /* Draws the frame offscreen and waits for it, reading nothing back: for timing the GPU. */
 int32_t cw_gpu_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                             const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r,
+                             const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height, float r,
                              float g, float b) {
-    return cw_gpu_render_to(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, width, height, r, g, b,
+    return cw_gpu_render_to(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count, width, height, r, g, b,
                               NULL);
 }
 #else

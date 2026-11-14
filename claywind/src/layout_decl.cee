@@ -359,6 +359,8 @@ public struct Decl {
     public ring: Ring;
     public gradient: Gradient;
     public icon: Icon;
+    /// A vector path drawn in the box (`Ui.path`); none while its length is 0.
+    public path: PathLook;
 
     public fn of() -> Decl {
         let clear = Color.hex(TRANSPARENT);
@@ -376,6 +378,7 @@ public struct Decl {
             ring: Ring { color: clear, width: 0.0, offset: 0.0 },
             gradient: Gradient.none(),
             icon: Icon { id: 0, color: clear, stroke: 0.0 },
+            path: PathLook.none(),
         };
     }
 

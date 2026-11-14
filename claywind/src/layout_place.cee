@@ -212,6 +212,9 @@ fn placeElement<M: TextMetrics>(l: borrow mut LayoutTree, index: usize, position
         if (decl.custom != 0) {
             ok = ok && emit(mut l, Command.CustomDraw(area, decl.background, radius, decl.custom));
         }
+        if (decl.path.length != 0) {
+            ok = ok && emit(mut l, Command.Path(area, decl.path));
+        }
         if (decl.clip.any()) {
             ok = ok && emit(mut l, Command.ClipStart(area, radius, decl.clip.horizontal, decl.clip.vertical));
         }

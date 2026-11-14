@@ -120,6 +120,9 @@ public enum Command {
     Text(Rect, TextRun),
     Picture(Rect, Color, Corners, u32),
     CustomDraw(Rect, Color, Corners, u32),
+    /// A vector path drawn in the box (and clipped to it); its bytes are `PathLook.start`..`length` of the frame's
+    /// buffer, which `Backend.draw` receives as its bytes.
+    Path(Rect, PathLook),
     ClipStart(Rect, Corners, bool, bool),
     ClipEnd,
     TransformStart(Rect, TransformData),
@@ -389,6 +392,34 @@ public struct LayoutTree<region r> {
 
     /// The bytes of a `TextRun`.
     public fn textBytes(borrow this, run: TextRun) -> Slice<u8> => this.bytes.items[run.start..run.start + run.length];
+
+    /// The bytes a command carries: a text run's UTF-8, a path's encoding, or none.
+    public fn commandBytes(borrow this, command: Command) -> Slice<u8> => match (command) {
+        Command.Text(_, run) => this.bytes.items[run.start..run.start + run.length],
+        Command.Path(_, look) => this.bytes.items[look.start..look.start + look.length],
+        _ => this.bytes.items[0..0],
+    };
+
+    /// A path in the open element's box (`Ui.path`): `encoded` (a `PathBuilder`'s bytes) is copied into the frame's
+    /// buffer, and the element draws it with `look`.
+    public fn path(borrow mut this, encoded: Slice<u8>, look: PathLook) {
+        if (this.failed || this.openStack.length() == 0) {
+            this.failed = true;
+            return;
+        }
+        let start = this.bytes.length();
+        for (b in encoded) {
+            if (!this.bytes.push(b)) {
+                this.failed = true;
+                return;
+            }
+        }
+        var placed = look;
+        placed.start = start;
+        placed.length = encoded.length;
+        let open = this.openStack.last();
+        this.nodes.items[open].decl.path = placed;
+    }
 
     /// The box of the element with `id` in the last laid-out frame (during a frame's build: the previous frame's),
     /// or null if it was not in that frame (Clay_GetElementData). This is what @container queries read.
@@ -908,25 +939,7 @@ impl<region r> LayoutTree<r> {
     public fn renderInto<B: Backend>(borrow this, backend: borrow mut B) {
         for (i in 0..this.commandCount()) {
             let command = this.command(i);
-            match (command) {
-                Command.Text(_, run) => { backend.draw(command, this.textBytes(run)); }
-                _ => {
-                    backend.draw(
-                        command,
-                        this.textBytes(
-                            TextRun {
-                                start: 0,
-                                length: 0,
-                                color: Color.hex(0),
-                                fontId: 0,
-                                fontSize: 0.0,
-                                letterSpacing: 0.0,
-                                lineHeight: 0.0,
-                            },
-                        ),
-                    );
-                }
-            }
+            backend.draw(command, this.commandBytes(command));
         }
     }
 }

@@ -1,0 +1,142 @@
+// SPDX-License-Identifier: MIT
+// Vector paths: PathBuilder's encoding, Command.Path from an element, and Raster drawing it (fills by both rules,
+// strokes, view boxes, the clip to the element's box).
+
+import claywind;
+
+/// A w × h rectangle at (x, y), as a closed subpath.
+fn square(p: borrow mut PathBuilder, x: f32, y: f32, w: f32, h: f32) {
+    p.rect(x, y, w, h);
+}
+
+/// 100 × 100 pixels, without room for fonts or images.
+fn smallCapacity() -> RasterCapacity {
+    var c = RasterCapacity.of(100, 100);
+    c.fontBytes = 1024;
+    c.imagePixels = 64;
+    return c;
+}
+
+fn isWhite(ras: borrow Raster, x: usize, y: usize) -> bool {
+    let c = ras.pixelAt(x, y);
+    return c.r > 250 && c.g > 250 && c.b > 250;
+}
+
+fn isBlack(ras: borrow Raster, x: usize, y: usize) -> bool {
+    let c = ras.pixelAt(x, y);
+    return c.r < 5 && c.g < 5 && c.b < 5;
+}
+
+@test
+fn pathBuilderEncodesVerbsAndStopsWhenFull() -> Result<void, TestFailure> {
+    var buffer = heap(64);
+    var p = PathBuilder.over(mut buffer.viewMut());
+    p.moveTo(1.0, 2.0);
+    p.lineTo(3.0, 4.0);
+    p.close();
+    Check.isTrue(p.bytes().length == 19, "a move, a line and a close take 9 + 9 + 1 bytes")?;
+    Check.isTrue(p.bytes()[0] == PATH_MOVE && p.bytes()[9] == PATH_LINE && p.bytes()[18] == PATH_CLOSE, "verbs")?;
+    Check.isTrue(!p.overflowed, "it fit")?;
+    var small = heap(12);
+    var q = PathBuilder.over(mut small.viewMut());
+    q.moveTo(0.0, 0.0);
+    q.lineTo(1.0, 1.0);
+    Check.isTrue(q.overflowed, "the line did not fit")?;
+    return Check.isTrue(q.bytes().length == 9, "the path keeps its last whole verb");
+}
+
+@test
+fn pathElementEmitsItsCommandAndBytes() -> Result<void, TestFailure> {
+    var encoded = heap(64);
+    var p = PathBuilder.over(mut encoded.viewMut());
+    square(mut p, 0.0, 0.0, 10.0, 10.0);
+    var storage = [0u8; 262144];
+    let memory = FixedBufferAllocator.over(mut storage);
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    t.begin(1000.0, 1000.0);
+    t.open(hashId("proot"), fixedBox(200.0, 200.0));
+    t.open(hashId("pshape"), fixedBox(80.0, 60.0));
+    t.path(p.bytes(), PathLook.fill(Color.rgb(255, 0, 0)).viewBox(20.0, 20.0));
+    t.close();
+    t.close();
+    finishTree(mut t)?;
+    for (i in 0..t.commandCount()) {
+        let command = t.command(i);
+        match (command) {
+            Command.Path(area, look) => {
+                expect("width", area.w, 80.0)?;
+                expect("height", area.h, 60.0)?;
+                expect("view box", look.viewWidth, 20.0)?;
+                let bytes = t.commandBytes(command);
+                Check.isTrue(bytes.length == p.bytes().length, "the command carries the path's bytes")?;
+                for (k in 0..bytes.length) {
+                    Check.isTrue(bytes[k] == p.bytes()[k], "byte for byte")?;
+                }
+                return Ok();
+            }
+            _ => {}
+        }
+    }
+    return Check.fail("no path command");
+}
+
+@test
+fn rasterFillsAPathClippedToItsBox() -> Result<void, TestFailure> {
+    var storage = heap(4194304);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ras = Raster.create(memory, smallCapacity())!;
+    ras.begin(rgba(0, 0, 0, 255));
+    var encoded = heap(256);
+    var p = PathBuilder.over(mut encoded.viewMut());
+    // A square in its box; then a circle much larger than its box.
+    square(mut p, 0.0, 0.0, 30.0, 30.0);
+    ras.draw(Command.Path(box(10.0, 10.0, 40.0, 40.0), PathLook.fill(rgba(255, 255, 255, 255))), p.bytes());
+    p.clear();
+    p.circle(15.0, 15.0, 60.0);
+    ras.draw(Command.Path(box(60.0, 60.0, 30.0, 30.0), PathLook.fill(rgba(255, 255, 255, 255))), p.bytes());
+    ras.finish();
+    Check.isTrue(isWhite(ras, 20, 20), "inside the square")?;
+    Check.isTrue(isBlack(ras, 45, 45), "inside the box, outside the square")?;
+    Check.isTrue(isWhite(ras, 75, 75), "the circle in its box")?;
+    Check.isTrue(isBlack(ras, 95, 95), "the circle stops at its box")?;
+    return Check.isTrue(isBlack(ras, 55, 75), "and at its box's left side");
+}
+
+@test
+fn evenOddLeavesTheHoleNonzeroFills() -> Result<void, TestFailure> {
+    var storage = heap(4194304);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ras = Raster.create(memory, smallCapacity())!;
+    ras.begin(rgba(0, 0, 0, 255));
+    var encoded = heap(256);
+    var p = PathBuilder.over(mut encoded.viewMut());
+    // Two squares wound the same way: nonzero fills the inner one, even-odd leaves it empty.
+    square(mut p, 0.0, 0.0, 40.0, 40.0);
+    square(mut p, 10.0, 10.0, 20.0, 20.0);
+    let white = rgba(255, 255, 255, 255);
+    ras.draw(Command.Path(box(0.0, 0.0, 40.0, 40.0), PathLook.fill(white)), p.bytes());
+    ras.draw(Command.Path(box(50.0, 0.0, 40.0, 40.0), PathLook.fill(white).withEvenOdd()), p.bytes());
+    ras.finish();
+    Check.isTrue(isWhite(ras, 20, 20), "nonzero: the middle is filled")?;
+    Check.isTrue(isBlack(ras, 70, 20), "even-odd: the middle is a hole")?;
+    return Check.isTrue(isWhite(ras, 55, 20), "even-odd: the ring is filled");
+}
+
+@test
+fn strokesFollowTheOutlineInTheViewBox() -> Result<void, TestFailure> {
+    var storage = heap(4194304);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ras = Raster.create(memory, smallCapacity())!;
+    ras.begin(rgba(0, 0, 0, 255));
+    var encoded = heap(256);
+    var p = PathBuilder.over(mut encoded.viewMut());
+    // A square outline 1 unit wide in a 10 × 10 view box over 80 points: 8 points wide at x 8 to 16.
+    square(mut p, 2.0, 2.0, 6.0, 6.0);
+    let look = PathLook.stroke(rgba(255, 255, 255, 255), 1.0).viewBox(10.0, 10.0);
+    ras.draw(Command.Path(box(0.0, 0.0, 80.0, 80.0), look), p.bytes());
+    ras.finish();
+    Check.isTrue(isWhite(ras, 16, 40), "on the left side")?;
+    Check.isTrue(isWhite(ras, 40, 64), "on the bottom side")?;
+    Check.isTrue(isBlack(ras, 40, 40), "the middle is empty")?;
+    return Check.isTrue(isBlack(ras, 4, 40), "outside is empty");
+}

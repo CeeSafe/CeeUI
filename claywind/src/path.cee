@@ -1,0 +1,198 @@
+// SPDX-License-Identifier: MIT
+// Vector paths: `PathBuilder` encodes one into bytes, `Ui.path` draws it in an element's box with a `PathLook`, and
+// `Command.Path` carries it to a backend, its bytes in the frame's buffer as a text run's are.
+//
+// The encoding is a verb byte followed by its points as little-endian f32s: PATH_MOVE x y, PATH_LINE x y, PATH_QUAD
+// cx cy x y, PATH_CUBIC c1x c1y c2x c2y x y, PATH_CLOSE. Coordinates are in the element's points from its top-left,
+// or in its view box when the look has one.
+
+public const PATH_MOVE: u8 = 1;
+public const PATH_LINE: u8 = 2;
+public const PATH_QUAD: u8 = 3;
+public const PATH_CUBIC: u8 = 4;
+public const PATH_CLOSE: u8 = 5;
+
+/// How a path is drawn: filled (nonzero, or even-odd) or stroked with round joins and caps, in a solid colour.
+public struct PathLook {
+    public color: Color;
+    /// The stroke's width in the path's units; 0 fills.
+    public width: f32;
+    /// Fills by the even-odd rule instead of nonzero (strokes are always nonzero).
+    public evenOdd: bool;
+    /// The view box (SVG's viewBox from 0, 0) stretched over the element's box; 0 by 0 for the element's own points.
+    public viewWidth: f32;
+    public viewHeight: f32;
+    /// Where the path's bytes are in the frame's buffer (`LayoutTree.path` sets them).
+    public start: usize;
+    public length: usize;
+
+    /// No path.
+    public fn none() -> PathLook => PathLook {
+        color: Color.hex(0),
+        width: 0.0,
+        evenOdd: false,
+        viewWidth: 0.0,
+        viewHeight: 0.0,
+        start: 0,
+        length: 0,
+    };
+
+    /// The path filled with `color`, nonzero.
+    public fn fill(color: Color) -> PathLook {
+        var look = PathLook.none();
+        look.color = color;
+        return look;
+    }
+
+    /// The path's outline, `width` wide, in `color`.
+    public fn stroke(color: Color, width: f32) -> PathLook {
+        var look = PathLook.none();
+        look.color = color;
+        look.width = width.max(0.0);
+        return look;
+    }
+
+    /// The same look, filled by the even-odd rule.
+    public fn withEvenOdd(this) -> PathLook {
+        var look = this;
+        look.evenOdd = true;
+        return look;
+    }
+
+    /// The same look with a `w` × `h` view box stretched over the element's box.
+    public fn viewBox(this, w: f32, h: f32) -> PathLook {
+        var look = this;
+        look.viewWidth = w;
+        look.viewHeight = h;
+        return look;
+    }
+
+    /// The map from the path's units to the element's points in `area`.
+    public fn placement(this, area: Rect) -> Affine2 {
+        let sx = if (this.viewWidth > 0.0) area.w / this.viewWidth else 1.0;
+        let sy = if (this.viewHeight > 0.0) area.h / this.viewHeight else 1.0;
+        return Affine2 { a: sx, b: 0.0, c: 0.0, d: sy, e: area.x, f: area.y };
+    }
+}
+
+/// Builds a path's bytes into a buffer the caller owns; `overflowed` once one did not fit (the path is then cut
+/// short at the last whole verb).
+public struct PathBuilder<region r> {
+    buffer: SliceMut<r, u8>;
+    used: usize;
+    public overflowed: bool;
+}
+
+impl<region r> PathBuilder<r> {
+    public fn over(buffer: SliceMut<r, u8>) -> PathBuilder<r> => PathBuilder {
+        buffer: buffer,
+        used: 0,
+        overflowed: false,
+    };
+
+    /// Empties the path, to build another in the same buffer.
+    public fn clear(borrow mut this) {
+        this.used = 0;
+        this.overflowed = false;
+    }
+
+    /// The path so far, for `Ui.path`.
+    public fn bytes(borrow this) -> Slice<u8> => borrow this.buffer[0..this.used];
+
+    /// Starts a subpath at (`x`, `y`).
+    public fn moveTo(borrow mut this, x: f32, y: f32) {
+        if (this.verb(PATH_MOVE, 2)) {
+            this.put(x);
+            this.put(y);
+        }
+    }
+
+    public fn lineTo(borrow mut this, x: f32, y: f32) {
+        if (this.verb(PATH_LINE, 2)) {
+            this.put(x);
+            this.put(y);
+        }
+    }
+
+    /// A quadratic Bézier through control point (`cx`, `cy`) to (`x`, `y`).
+    public fn quadTo(borrow mut this, cx: f32, cy: f32, x: f32, y: f32) {
+        if (this.verb(PATH_QUAD, 4)) {
+            this.put(cx);
+            this.put(cy);
+            this.put(x);
+            this.put(y);
+        }
+    }
+
+    /// A cubic Bézier through control points (`c1x`, `c1y`) and (`c2x`, `c2y`) to (`x`, `y`).
+    public fn cubicTo(borrow mut this, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) {
+        if (this.verb(PATH_CUBIC, 6)) {
+            this.put(c1x);
+            this.put(c1y);
+            this.put(c2x);
+            this.put(c2y);
+            this.put(x);
+            this.put(y);
+        }
+    }
+
+    /// Closes the subpath with a line back to its start.
+    public fn close(borrow mut this) {
+        let ignored = this.verb(PATH_CLOSE, 0);
+    }
+
+    /// A rectangle, as a closed subpath.
+    public fn rect(borrow mut this, x: f32, y: f32, w: f32, h: f32) {
+        this.moveTo(x, y);
+        this.lineTo(x + w, y);
+        this.lineTo(x + w, y + h);
+        this.lineTo(x, y + h);
+        this.close();
+    }
+
+    /// A circle (four cubics), as a closed subpath.
+    public fn circle(borrow mut this, cx: f32, cy: f32, radius: f32) {
+        let k = radius * 0.5522847498;
+        this.moveTo(cx, cy - radius);
+        this.cubicTo(cx + k, cy - radius, cx + radius, cy - k, cx + radius, cy);
+        this.cubicTo(cx + radius, cy + k, cx + k, cy + radius, cx, cy + radius);
+        this.cubicTo(cx - k, cy + radius, cx - radius, cy + k, cx - radius, cy);
+        this.cubicTo(cx - radius, cy - k, cx - k, cy - radius, cx, cy - radius);
+        this.close();
+    }
+
+    /// Room for a verb and its `points` coordinates; writes the verb when there is.
+    fn verb(borrow mut this, v: u8, points: usize) -> bool {
+        if (this.overflowed || this.used + 1 + points * 4 > this.buffer.length) {
+            this.overflowed = true;
+            return false;
+        }
+        this.buffer[this.used] = v;
+        this.used += 1;
+        return true;
+    }
+
+    fn put(borrow mut this, value: f32) {
+        let bits = value.bits();
+        this.buffer[this.used] = truncate<u8>(bits);
+        this.buffer[this.used + 1] = truncate<u8>(bits >> 8);
+        this.buffer[this.used + 2] = truncate<u8>(bits >> 16);
+        this.buffer[this.used + 3] = truncate<u8>(bits >> 24);
+        this.used += 4;
+    }
+}
+
+/// The f32 at `at` in path bytes.
+fn pathNumber(data: Slice<u8>, at: usize) -> f32 => f32.fromBits(
+    (data[at] as u32) | (data[at + 1] as u32) << 8 | (data[at + 2] as u32) << 16 | (data[at + 3] as u32) << 24,
+);
+
+/// How many coordinates follow verb `v`, or null for a byte that is not a verb.
+fn pathArity(v: u8) -> usize? => match (v) {
+    1 => 2,
+    2 => 2,
+    3 => 4,
+    4 => 6,
+    5 => 0,
+    _ => null,
+};

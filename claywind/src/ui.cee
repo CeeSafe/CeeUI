@@ -180,35 +180,16 @@ public struct Ui<region r> {
 
     /// Sends the frame's commands to a backend, in paint order.
     public fn render(borrow this, backend: borrow mut dyn Backend) {
-        let none = [0u8; 1];
         for (i in 0..this.tree.commandCount()) {
             let command = this.tree.command(i);
-            match (command) {
-                Command.Text(_, run) => { backend.draw(command, this.tree.textBytes(run)); }
-                _ => { backend.draw(command, none[0..0]); }
-            }
+            backend.draw(command, this.tree.commandBytes(command));
         }
     }
 
-    /// The command at `i` and its text bytes (empty unless it is a Text command), for `renderInto`.
+    /// The command at `i` and its bytes (a text run's or a path's; empty otherwise), for `renderInto`.
     public fn commandCount(borrow this) -> usize => this.tree.commandCount();
     public fn commandAt(borrow this, i: usize) -> Command => this.tree.command(i);
-    public fn textOf(borrow this, command: Command) -> Slice<u8> {
-        return match (command) {
-            Command.Text(_, run) => this.tree.textBytes(run),
-            _ => this.tree.textBytes(
-                TextRun {
-                    start: 0,
-                    length: 0,
-                    color: Color.hex(0),
-                    fontId: 0,
-                    fontSize: 0.0,
-                    letterSpacing: 0.0,
-                    lineHeight: 0.0,
-                },
-            ),
-        };
-    }
+    public fn textOf(borrow this, command: Command) -> Slice<u8> => this.tree.commandBytes(command);
 
     // ---- elements --------------------------------------------------------------------------------------------------
 
@@ -283,6 +264,14 @@ public struct Ui<region r> {
     /// A text leaf (Label).
     public fn label(borrow mut this, text: StringView, look: Text) {
         this.tree.text(text.bytes(), look.config());
+    }
+
+    /// An element styled by `style` that draws a vector path in its box, clipped to it: `encoded` is a
+    /// `PathBuilder`'s bytes, in the box's points from its top-left (or in `look`'s view box).
+    public fn path(borrow mut this, style: Style, encoded: Slice<u8>, look: PathLook) {
+        this.open(style);
+        this.tree.path(encoded, look);
+        this.close();
     }
 
     /// A text leaf from UTF-8 bytes, such as a `TextWriter`'s output (LabelF with F()).

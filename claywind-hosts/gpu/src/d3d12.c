@@ -33,13 +33,13 @@ int32_t cw_gpu_attach(int32_t kind, uint64_t first, uint64_t second);
 void cw_gpu_atlas(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1);
 void cw_gpu_image(const uint32_t *pixels, uint32_t stride, uint32_t w, uint32_t h, uint32_t u, uint32_t v);
 int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                       const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count,
+                       const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
                        uint32_t width, uint32_t height, float r, float g, float b);
 int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count,
+                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
                          uint32_t width, uint32_t height, float r, float g, float b, uint32_t *out);
 int32_t cw_gpu_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count,
+                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
                            uint32_t width, uint32_t height, float r, float g, float b);
 double cw_gpu_gpu_ms(void);
 void cw_gpu_finish(void);
@@ -50,13 +50,13 @@ int32_t cw_vk_attach(int32_t kind, uint64_t first, uint64_t second);
 void cw_vk_atlas(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1);
 void cw_vk_image(const uint32_t *pixels, uint32_t stride, uint32_t w, uint32_t h, uint32_t u, uint32_t v);
 int32_t cw_vk_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                      const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count,
+                      const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
                       uint32_t width, uint32_t height, float r, float g, float b);
 int32_t cw_vk_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                        const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count,
+                        const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
                         uint32_t width, uint32_t height, float r, float g, float b, uint32_t *out);
 int32_t cw_vk_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                          const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count,
+                          const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
                           uint32_t width, uint32_t height, float r, float g, float b);
 double cw_vk_gpu_ms(void);
 void cw_vk_finish(void);
@@ -83,6 +83,7 @@ static const char *const cw_hlsl_parts[] = {
     "Texture2D<float4> layerTex : register(t3);\n"
     "Texture2D<float4> dstTex : register(t4);\n"
     "Texture2D<float4> images : register(t5);\n"
+    "StructuredBuffer<float4> segs : register(t6);\n"
     "SamplerState lin : register(s0);\n"
     /* target: the target's origin in the frame (xy) and size (zw); box: a blur pass's axis, radius, width, height. */
     /* first: the draw's first instance, as SV_InstanceID counts from 0 whatever the draw's start instance */
@@ -182,6 +183,35 @@ static const char *const cw_hlsl_parts[] = {
     "    }\n"
     "    return c * I.extra.y;\n"
     "}\n"
+    /* A path tile's coverage of frame pixel p: its row's backdrop (the winding of the edges left of the tile) plus
+       each of the tile's edges' share of the pixel (the part of the pixel's row right of it, as Raster's accumulation
+       counts it) times its direction; nonzero (|sum| up to 1) or even-odd. params: where the tile's 16 backdrops are
+       in `segs` (its edges follow them), how many edges, even-odd; top: the tile's top row. */
+    "float rightG(float u) { return u <= 0.0 ? u : (u >= 1.0 ? 0.5 : u - 0.5 * u * u); }\n"
+    "float pathCover(float4 params, float top, float2 p) {\n"
+    "    float px = floor(p.x);\n"
+    "    float py = floor(p.y);\n"
+    "    int first = int(params.x);\n"
+    "    int row = clamp(int(py - top), 0, 15);\n"
+    "    float acc = segs[first + row / 4][row % 4];\n"
+    "    int start = first + 4;\n"
+    "    int end = start + int(params.y);\n"
+    "    [loop] for (int i = start; i < end; i++) {\n"
+    "        float4 s = segs[i];\n"
+    "        float t0 = max(min(s.y, s.w), py);\n"
+    "        float t1 = min(max(s.y, s.w), py + 1.0);\n"
+    "        if (t1 <= t0) { continue; }\n"
+    "        float dxdy = (s.z - s.x) / (s.w - s.y);\n"
+    "        float a = s.x + (t0 - s.y) * dxdy - px;\n"
+    "        float b = s.x + (t1 - s.y) * dxdy - px;\n"
+    "        float share = abs(b - a) < 0.001 ? clamp(1.0 - 0.5 * (a + b), 0.0, 1.0) : (rightG(b) - rightG(a)) / (b - a);\n"
+    "        acc += (s.w > s.y ? 1.0 : -1.0) * (t1 - t0) * share;\n"
+    "    }\n"
+    "    float w = abs(acc);\n"
+    "    float c = min(w, 1.0);\n"
+    "    if (params.z > 0.0) { float m = w - floor(w / 2.0) * 2.0; c = m > 1.0 ? 2.0 - m : m; }\n"
+    "    return c < 0.002 ? 0.0 : c;\n"
+    "}\n"
     "float4 fmain(VOut v) : SV_Target {\n"
     "    Inst I = insts[v.inst];\n"
     "    float2 p = v.position.xy + target.xy;\n"
@@ -212,6 +242,8 @@ static const char *const cw_hlsl_parts[] = {
     "        color = I.c0 * a;\n"
     "    } else if (kind == 7) {\n"
     "        color = imageColor(I, q) * cover(sdRR(q, I.rect, I.radii) * aa);\n"
+    "    } else if (kind == 8) {\n"
+    "        color = I.c0 * pathCover(I.params, I.rect.y, p);\n"
     "    } else {\n"
     "        float t = kind == 3 ? dot(q - I.params.xy, I.params.zw) / I.extra.z : length(q - I.params.xy) / I.params.z;\n"
     "        color = gradColor(I, t) * cover(sdRR(q, I.rect, I.radii) * aa);\n"
@@ -488,6 +520,7 @@ static struct {
     int images_dirty;
     uint32_t ix0, iy0, ix1, iy1;
     cw_buffer image_staging;
+    cw_buffer segments; /* the path edges, x0 y0 x1 y1 */
     D3D12_RESOURCE_STATES atlas_state;
     uint32_t atlas_width, atlas_height;
     int atlas_dirty;
@@ -743,7 +776,7 @@ static int make_root_signature(void) {
         ranges[k].RegisterSpace = 0;
         ranges[k].OffsetInDescriptorsFromTableStart = 0;
     }
-    D3D12_ROOT_PARAMETER params[7];
+    D3D12_ROOT_PARAMETER params[8];
     memset(params, 0, sizeof params);
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     params[0].Constants.ShaderRegister = 0;
@@ -761,6 +794,9 @@ static int make_root_signature(void) {
         params[3 + k].DescriptorTable.pDescriptorRanges = &ranges[k];
         params[3 + k].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     }
+    params[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; /* t6: the path edges */
+    params[7].Descriptor.ShaderRegister = 6;
+    params[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     /* The atlas under a transform: linear, transparent beyond its edge. */
     D3D12_STATIC_SAMPLER_DESC sampler;
     memset(&sampler, 0, sizeof sampler);
@@ -771,7 +807,7 @@ static int make_root_signature(void) {
     sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
     sampler.MaxLOD = 0.0f;
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-    D3D12_ROOT_SIGNATURE_DESC desc = {7, params, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+    D3D12_ROOT_SIGNATURE_DESC desc = {8, params, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_NONE};
     ID3DBlob *blob = NULL, *errors = NULL;
     if (FAILED(fn.serialize_root(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &errors))) {
         fprintf(stderr, "d3d12: the root signature: %s\n",
@@ -1168,7 +1204,8 @@ static void box_pass(cw_texture *from, cw_texture *to, int axis, int dist, uint3
    then the frame into `target`. */
 static int record(cw_texture *target, const float *frame, uint32_t count, const float *layers,
                   uint32_t layer_instances, const float *records, uint32_t layer_count, const float *clips,
-                  uint32_t clip_count, uint32_t width, uint32_t height, float r, float g, float b) {
+                  uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height,
+                  float r, float g, float b) {
     for (int k = 0; k < CW_POOL; k++) {
         d.pool[k].used = 0;
     }
@@ -1178,10 +1215,14 @@ static int record(cw_texture *target, const float *frame, uint32_t count, const 
     size_t total = (size_t)count + layer_instances;
     UINT64 instance_bytes = (total ? total : 1) * CW_FLOATS * sizeof(float);
     UINT64 clip_bytes = (clip_count ? clip_count : 1) * CW_SHAPE * sizeof(float);
+    UINT64 segment_bytes = (segment_count ? segment_count : 1) * 4 * sizeof(float);
     if (!ensure_buffer(&d.instances, instance_bytes, D3D12_HEAP_TYPE_UPLOAD) ||
-        !ensure_buffer(&d.clips, clip_bytes, D3D12_HEAP_TYPE_UPLOAD)) {
+        !ensure_buffer(&d.clips, clip_bytes, D3D12_HEAP_TYPE_UPLOAD) ||
+        !ensure_buffer(&d.segments, segment_bytes, D3D12_HEAP_TYPE_UPLOAD)) {
         return 0;
     }
+    memset(d.segments.mapped, 0, 4 * sizeof(float));
+    memcpy(d.segments.mapped, segments, (size_t)segment_count * 4 * sizeof(float));
     memcpy(d.instances.mapped, frame, (size_t)count * CW_FLOATS * sizeof(float));
     memcpy((float *)d.instances.mapped + (size_t)count * CW_FLOATS, layers,
            (size_t)layer_instances * CW_FLOATS * sizeof(float));
@@ -1245,6 +1286,8 @@ static int record(cw_texture *target, const float *frame, uint32_t count, const 
         d.list, 1, ID3D12Resource_GetGPUVirtualAddress(d.instances.resource));
     ID3D12GraphicsCommandList_SetGraphicsRootShaderResourceView(
         d.list, 2, ID3D12Resource_GetGPUVirtualAddress(d.clips.resource));
+    ID3D12GraphicsCommandList_SetGraphicsRootShaderResourceView(
+        d.list, 7, ID3D12Resource_GetGPUVirtualAddress(d.segments.resource));
     cw_texture *textures[CW_MAX_LAYERS];
     uint32_t n = layer_count < CW_MAX_LAYERS ? layer_count : CW_MAX_LAYERS;
     for (uint32_t l = 0; l < n; l++) {
@@ -1306,7 +1349,7 @@ static void submit(void) {
 }
 
 static int32_t d3d_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count,
+                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
                            uint32_t width, uint32_t height, float r, float g, float b) {
     if (d.swapchain == NULL) {
         return 1;
@@ -1316,7 +1359,7 @@ static int32_t d3d_present(const float *frame, uint32_t count, const float *laye
         return 2;
     }
     cw_texture *target = &d.swap[IDXGISwapChain3_GetCurrentBackBufferIndex(d.swapchain)];
-    if (!record(target, frame, count, layers, layer_instances, records, layer_count, clips, clip_count, width, height,
+    if (!record(target, frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count, width, height,
                 r, g, b)) {
         return 3;
     }
@@ -1331,7 +1374,7 @@ static int32_t d3d_present(const float *frame, uint32_t count, const float *laye
 }
 
 static int32_t d3d_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                             const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count,
+                             const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
                              uint32_t width, uint32_t height, float r, float g, float b, uint32_t *out) {
     if (!d.ready) {
         return 1;
@@ -1356,7 +1399,7 @@ static int32_t d3d_render_to(const float *frame, uint32_t count, const float *la
     if (out != NULL && !ensure_buffer(&d.readback, (UINT64)pitch * height, D3D12_HEAP_TYPE_READBACK)) {
         return 3;
     }
-    if (!record(o, frame, count, layers, layer_instances, records, layer_count, clips, clip_count, width, height, r, g,
+    if (!record(o, frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count, width, height, r, g,
                 b)) {
         return 4;
     }
@@ -1424,27 +1467,27 @@ void cw_gpu_image(const uint32_t *pixels, uint32_t stride, uint32_t w, uint32_t 
 }
 
 int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                       const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count,
+                       const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
                        uint32_t width, uint32_t height, float r, float g, float b) {
-    return use_vulkan ? cw_vk_present(frame, count, layers, layer_instances, records, layer_count, clips, clip_count,
+    return use_vulkan ? cw_vk_present(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count,
                                       width, height, r, g, b)
-                      : d3d_present(frame, count, layers, layer_instances, records, layer_count, clips, clip_count,
+                      : d3d_present(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count,
                                     width, height, r, g, b);
 }
 
 int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count,
+                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
                          uint32_t width, uint32_t height, float r, float g, float b, uint32_t *out) {
     return use_vulkan ? cw_vk_render_to(frame, count, layers, layer_instances, records, layer_count, clips,
-                                        clip_count, width, height, r, g, b, out)
-                      : d3d_render_to(frame, count, layers, layer_instances, records, layer_count, clips, clip_count,
+                                        clip_count, segments, segment_count, width, height, r, g, b, out)
+                      : d3d_render_to(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count,
                                       width, height, r, g, b, out);
 }
 
 int32_t cw_gpu_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count,
+                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
                            uint32_t width, uint32_t height, float r, float g, float b) {
-    return cw_gpu_render_to(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, width,
+    return cw_gpu_render_to(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count, width,
                             height, r, g, b, NULL);
 }
 

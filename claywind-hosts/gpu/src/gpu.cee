@@ -47,6 +47,14 @@ const KIND_RADIAL: f32 = 4.0;
 const KIND_MASK: f32 = 5.0;
 const KIND_LAYER: f32 = 6.0;
 const KIND_IMAGE: f32 = 7.0;
+const KIND_PATH: f32 = 8.0;
+
+/// A path tile's side in pixels: each tile is an instance whose pixels loop over the edges inside it, starting from
+/// its rows' backdrops (the winding of the edges left of it).
+const TILE: f32 = 16.0;
+const TILE_ROWS: usize = 16;
+/// Edges one path may have once flattened (each 4 floats).
+const PATH_EDGES: usize = 65536;
 
 // What a layer does to its group.
 const LAYER_OPACITY: u32 = 0;
@@ -68,6 +76,8 @@ extern "C" {
         layerCount: u32,
         clips: *f32,
         clipCount: u32,
+        segments: *f32,
+        segmentCount: u32,
         width: u32,
         height: u32,
         r: f32,
@@ -84,6 +94,8 @@ extern "C" {
         layerCount: u32,
         clips: *f32,
         clipCount: u32,
+        segments: *f32,
+        segmentCount: u32,
         width: u32,
         height: u32,
         r: f32,
@@ -101,6 +113,8 @@ extern "C" {
         layerCount: u32,
         clips: *f32,
         clipCount: u32,
+        segments: *f32,
+        segmentCount: u32,
         width: u32,
         height: u32,
         r: f32,
@@ -176,6 +190,14 @@ public struct GpuBackend<region r> {
     public raster: Raster<r>;
     stream: Vector<f32>;
     clipShapes: Vector<f32>;
+    /// The frame's path tiles: each tile's 16 row backdrops, then its edges (x0 y0 x1 y1 in frame pixels).
+    segments: Vector<f32>;
+    /// One path's edges from `Raster.flattenPath`.
+    flat: Vector<f32>;
+    /// A band of tiles: the edges crossing it (edge index, first and last tile column), and the tiles' row
+    /// backdrops (TILE_ROWS per column).
+    bandEdges: Vector<u32>;
+    backdrops: Vector<f32>;
     layerData: Vector<f32>;
     records: Vector<f32>;
     previous: Vector<f32>;
@@ -215,6 +237,14 @@ public struct GpuBackend<region r> {
     public approximated: u32;
     /// Whether a mask did not fit the atlas.
     public atlasFull: bool;
+}
+
+fn zeroFloats(count: usize) -> Vector<f32> {
+    var v = Vector<f32>.withCapacity(count)!;
+    for (i in 0..count) {
+        v.push(0.0)!;
+    }
+    return v;
 }
 
 fn zeroBytes(count: usize) -> Vector<u8> {
@@ -300,6 +330,12 @@ fn quantized(x: f32, steps: f32) -> u64 => saturatingTruncate<u64>(Math.round(x 
 
 fn whole(x: f32) -> usize => saturatingTruncate<usize>(x.ceil());
 
+/// The tile column of frame x in a path whose tiles start at `left`.
+fn column(x: f32, left: f32, columns: usize) -> usize {
+    let c = saturatingTruncate<usize>(((x - left) / TILE).floor().max(0.0));
+    return c.min(columns - 1);
+}
+
 impl<region r> GpuBackend<r> {
     /// A backend over `raster`, whose fonts it uses; the raster needs a capacity of `CELL` × `CELL`.
     public fn create(raster: Raster<r>) -> GpuBackend<r> {
@@ -311,6 +347,10 @@ impl<region r> GpuBackend<r> {
             raster: raster,
             stream: Vector<f32>.withCapacity(FLOATS * 8192)!,
             clipShapes: Vector<f32>.withCapacity(SHAPE * 256)!,
+            segments: Vector<f32>.withCapacity(4 * 16384)!,
+            flat: zeroFloats(4 * PATH_EDGES),
+            bandEdges: Vector<u32>.withCapacity(3 * 4096)!,
+            backdrops: Vector<f32>.withCapacity(TILE_ROWS * 256)!,
             layerData: Vector<f32>.withCapacity(FLOATS * 1024)!,
             records: Vector<f32>.withCapacity(RECORD * 64)!,
             previous: Vector<f32>.withCapacity(FLOATS * 8192)!,
@@ -368,6 +408,7 @@ impl<region r> GpuBackend<r> {
             },
         )!;
         this.clipShapes.clear();
+        this.segments.clear();
         this.ratio = ratio;
         this.unsupported = 0;
         this.approximated = 0;
@@ -387,15 +428,17 @@ impl<region r> GpuBackend<r> {
             round<f32>(this.layerData.length),
             round<f32>(this.records.length),
             round<f32>(this.clipShapes.length),
+            round<f32>(this.segments.length),
         ];
-        let total = 4 + this.stream.length + this.layerData.length + this.records.length + this.clipShapes.length;
+        let total = 5 + this.stream.length + this.layerData.length + this.records.length + this.clipShapes.length +
+            this.segments.length;
         var same = total == this.previous.length;
         if (same) {
-            for (k in 0usize..4) {
+            for (k in 0usize..5) {
                 same = same && this.previous[k] == lengths[k];
             }
         }
-        var at: usize = 4;
+        var at: usize = 5;
         if (same) {
             same = sameAs(this.stream.view(), this.previous.view(), at);
             at += this.stream.length;
@@ -410,10 +453,14 @@ impl<region r> GpuBackend<r> {
         }
         if (same) {
             same = sameAs(this.clipShapes.view(), this.previous.view(), at);
+            at += this.clipShapes.length;
+        }
+        if (same) {
+            same = sameAs(this.segments.view(), this.previous.view(), at);
         }
         if (!same) {
             this.previous.clear();
-            for (k in 0usize..4) {
+            for (k in 0usize..5) {
                 this.previous.push(lengths[k])!;
             }
             for (k in 0..this.stream.length) {
@@ -427,6 +474,9 @@ impl<region r> GpuBackend<r> {
             }
             for (k in 0..this.clipShapes.length) {
                 this.previous.push(this.clipShapes[k])!;
+            }
+            for (k in 0..this.segments.length) {
+                this.previous.push(this.segments[k])!;
             }
         }
         return !same;
@@ -465,6 +515,7 @@ impl<region r> GpuBackend<r> {
         let layers = this.layerData.view();
         let records = this.records.view();
         let shapes = this.clipShapes.view();
+        let edges = this.segments.view();
         return unsafe { cw_gpu_present(
             frame.ptr,
             truncate<u32>(frame.length / FLOATS),
@@ -474,6 +525,8 @@ impl<region r> GpuBackend<r> {
             truncate<u32>(records.length / RECORD),
             shapes.ptr,
             truncate<u32>(shapes.length / SHAPE),
+            edges.ptr,
+            truncate<u32>(edges.length / 4),
             width,
             height,
             unit(clear.r),
@@ -496,6 +549,7 @@ impl<region r> GpuBackend<r> {
         let layers = this.layerData.view();
         let records = this.records.view();
         let shapes = this.clipShapes.view();
+        let edges = this.segments.view();
         return unsafe { cw_gpu_render_to(
             frame.ptr,
             truncate<u32>(frame.length / FLOATS),
@@ -505,6 +559,8 @@ impl<region r> GpuBackend<r> {
             truncate<u32>(records.length / RECORD),
             shapes.ptr,
             truncate<u32>(shapes.length / SHAPE),
+            edges.ptr,
+            truncate<u32>(edges.length / 4),
             width,
             height,
             unit(clear.r),
@@ -524,6 +580,7 @@ impl<region r> GpuBackend<r> {
         let layers = this.layerData.view();
         let records = this.records.view();
         let shapes = this.clipShapes.view();
+        let edges = this.segments.view();
         return unsafe { cw_gpu_render_only(
             frame.ptr,
             truncate<u32>(frame.length / FLOATS),
@@ -533,6 +590,8 @@ impl<region r> GpuBackend<r> {
             truncate<u32>(records.length / RECORD),
             shapes.ptr,
             truncate<u32>(shapes.length / SHAPE),
+            edges.ptr,
+            truncate<u32>(edges.length / 4),
             width,
             height,
             unit(clear.r),
@@ -1126,6 +1185,138 @@ impl<region r> GpuBackend<r> {
         return entry;
     }
 
+    /// raster_path.cee's drawPath: Raster's own polygon for the path (Raster.flattenPath), clipped to the box. Its
+    /// bounds are cut into TILE × TILE tiles. A tile is an instance with its rows' backdrops (each row's winding from
+    /// the edges wholly left of the tile, as Raster's running sum has it there) and the edges that reach into it; the
+    /// shader adds each edge's exact share of a pixel to the backdrop, as Raster's accumulation does.
+    fn path(borrow mut this, area: Rect, look: PathLook, data: Slice<u8>) {
+        if (data.length == 0 || look.color.a == 0 || area.w <= 0.0 || area.h <= 0.0) {
+            return;
+        }
+        let s = this.ratio;
+        let device = this.transforms[this.transforms.length - 1].after(Affine2.scaling(s, s));
+        let count = match (this.raster.flattenPath(data, area, look, device, mut this.flat.viewMut())) {
+            Some(n) => n,
+            null => {
+                this.unsupported += 1;
+                return;
+            }
+        };
+        if (count == 0) {
+            return;
+        }
+        var minX = this.flat[0];
+        var maxX = minX;
+        var minY = this.flat[1];
+        var maxY = minY;
+        for (e in 0..count) {
+            let k = e * 4;
+            minX = minX.min(this.flat[k]).min(this.flat[k + 2]);
+            maxX = maxX.max(this.flat[k]).max(this.flat[k + 2]);
+            minY = minY.min(this.flat[k + 1]).min(this.flat[k + 3]);
+            maxY = maxY.max(this.flat[k + 1]).max(this.flat[k + 3]);
+        }
+        this.clipStart(area, Corners.all(0.0));
+        let left = minX.floor();
+        let right = maxX.ceil();
+        let columns = whole((right - left) / TILE).max(1);
+        let evenOdd: f32 = if (look.evenOdd && look.width <= 0.0) 1.0 else 0.0;
+        var y0 = minY.floor();
+        let bottom = maxY.ceil();
+        while (y0 < bottom) {
+            let y1 = (y0 + TILE).min(bottom);
+            this.bandEdges.clear();
+            this.backdrops.clear();
+            for (k in 0..(columns + 1) * TILE_ROWS) {
+                this.backdrops.push(0.0)!;
+            }
+            // Each edge crossing the band: the tile columns it reaches, and its winding, row by row, for every
+            // column wholly right of it (added at the next column, then summed across).
+            for (e in 0..count) {
+                let k = e * 4;
+                let ax = this.flat[k];
+                let ay = this.flat[k + 1];
+                let bx = this.flat[k + 2];
+                let by = this.flat[k + 3];
+                let t0 = ay.min(by).max(y0);
+                let t1 = ay.max(by).min(y1);
+                if (t1 <= t0) {
+                    continue;
+                }
+                let dxdy = (bx - ax) / (by - ay);
+                let xa = ax + (t0 - ay) * dxdy;
+                let xb = ax + (t1 - ay) * dxdy;
+                let first = column(xa.min(xb), left, columns);
+                let last = column(xa.max(xb), left, columns);
+                this.bandEdges.push(truncate<u32>(e))!;
+                this.bandEdges.push(truncate<u32>(first))!;
+                this.bandEdges.push(truncate<u32>(last))!;
+                let dir: f32 = if (by > ay) 1.0 else -1.0;
+                for (r in 0..TILE_ROWS) {
+                    let top = y0 + round<f32>(r);
+                    let share = t1.min(top + 1.0) - t0.max(top);
+                    if (share > 0.0) {
+                        this.backdrops[(last + 1) * TILE_ROWS + r] += dir * share;
+                    }
+                }
+            }
+            for (c in 1..columns) {
+                for (r in 0..TILE_ROWS) {
+                    this.backdrops[c * TILE_ROWS + r] += this.backdrops[(c - 1) * TILE_ROWS + r];
+                }
+            }
+            for (c in 0..columns) {
+                var reaching: usize = 0;
+                var b: usize = 0;
+                while (b < this.bandEdges.length) {
+                    if ((this.bandEdges[b + 1] as usize) <= c && (this.bandEdges[b + 2] as usize) >= c) {
+                        reaching += 1;
+                    }
+                    b += 3;
+                }
+                var covered = false;
+                for (r in 0..TILE_ROWS) {
+                    covered = covered || this.backdrops[c * TILE_ROWS + r].abs() > 0.0001;
+                }
+                if (reaching == 0 && !covered) {
+                    continue;
+                }
+                let first = this.segments.length / 4;
+                for (r in 0..TILE_ROWS) {
+                    this.segments.push(this.backdrops[c * TILE_ROWS + r])!;
+                }
+                b = 0;
+                while (b < this.bandEdges.length) {
+                    if ((this.bandEdges[b + 1] as usize) <= c && (this.bandEdges[b + 2] as usize) >= c) {
+                        let k = (this.bandEdges[b] as usize) * 4;
+                        for (j in 0usize..4) {
+                            this.segments.push(this.flat[k + j])!;
+                        }
+                    }
+                    b += 3;
+                }
+                let x = left + round<f32>(c) * TILE;
+                var v = this.start(KIND_PATH);
+                // The edges are in frame pixels already: the instance is not transformed.
+                for (j in 0usize..4) {
+                    v[XF0 + j] = 0.0;
+                    v[XF1 + j] = 0.0;
+                }
+                putRect(mut v, RECT, Rect { x: x, y: y0, w: TILE.min(right - x), h: y1 - y0 });
+                v[PARAMS] = round<f32>(first);
+                v[PARAMS + 1] = round<f32>(reaching);
+                v[PARAMS + 2] = evenOdd;
+                v[MISC + 3] = -1.0; // exactly the tile's pixels: no anti-aliasing margin
+                putPremultiplied(mut v, C0, look.color);
+                this.emit(v);
+            }
+            y0 = y1;
+        }
+        if (this.clips.length > 1) {
+            let gone = this.clips.pop();
+        }
+    }
+
     /// raster_backend.cee's drawImage: image `handle` stretched over the box (bilinear, edges clamped), tinted and
     /// at the tint's opacity, cut to the rounded box. Nothing when no image is registered under the handle.
     fn picture(borrow mut this, area: Rect, tint: Color, radius: Corners, handle: u32) {
@@ -1563,6 +1754,7 @@ impl<region r> Backend for GpuBackend<r> {
             }
             Command.Picture(area, tint, radius, handle) => { this.picture(area, tint, radius, handle); }
             Command.CustomDraw(_, _, _, _) => { this.unsupported += 1; }
+            Command.Path(area, look) => { this.path(area, look, text); }
         }
     }
 }

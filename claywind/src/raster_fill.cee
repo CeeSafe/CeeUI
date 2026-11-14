@@ -46,6 +46,8 @@ struct Paint {
     tint: Color;
     tinted: bool;
     opacity: f32;
+    /// Coverage by the even-odd rule (Command.Path), instead of the nonzero winding's.
+    evenOdd: bool;
 }
 
 fn solidPaint(c: Color) -> Paint {
@@ -74,6 +76,7 @@ fn solidPaint(c: Color) -> Paint {
         tint: c,
         tinted: false,
         opacity: 1.0,
+        evenOdd: false,
     };
 }
 
@@ -456,7 +459,7 @@ fn fillPath(r: borrow mut Raster, paint: Paint, target: FillTarget) {
         for (x in 0..bw) {
             sum += r.acc[row + x];
             r.acc[row + x] = 0.0;
-            let coverage = sum.abs().min(1.0);
+            let coverage = if (paint.evenOdd) evenOddCoverage(sum) else sum.abs().min(1.0);
             if (coverage < 0.002) {
                 continue;
             }
@@ -487,6 +490,13 @@ fn fillPath(r: borrow mut Raster, paint: Paint, target: FillTarget) {
         r.acc[row + bw] = 0.0;
         r.acc[row + bw + 1] = 0.0;
     }
+}
+
+/// The even-odd rule's coverage of an accumulated winding `sum`: a triangle wave of period 2.
+fn evenOddCoverage(sum: f32) -> f32 {
+    let w = sum.abs();
+    let m = w - (w / 2.0).floor() * 2.0;
+    return if (m > 1.0) 2.0 - m else m;
 }
 
 // ---- paints ----------------------------------------------------------------------------------------------------

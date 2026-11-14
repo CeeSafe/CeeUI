@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// metal.c's fmain: every kind of shape (fills, frames, shadows, gradients, masks, images), clipped.
+// metal.c's fmain: every kind of shape (fills, frames, shadows, gradients, masks, images, path tiles), clipped.
 
 layout(location = 0) flat in uint vInst;
 layout(location = 1) in vec2 vLocal;
@@ -7,6 +7,11 @@ layout(location = 0) out vec4 outColor;
 
 layout(set = 0, binding = 1) uniform sampler2D atlas; // unnormalized coordinates, linear
 layout(set = 0, binding = 3) uniform sampler2D images; // RGBA8, straight alpha; fetched, never sampled
+
+// The frame's path tiles: each tile's 16 row backdrops (4 vec4s), then its edges, x0 y0 x1 y1 in frame pixels.
+layout(std430, set = 0, binding = 4) readonly buffer Segments {
+    vec4 segs[];
+};
 
 float erfApprox(float x) {
     float x2 = x * x;
@@ -92,6 +97,44 @@ vec4 imageColor(Inst I, vec2 q) {
     return c * I.extra.y;
 }
 
+// A path tile's coverage of frame pixel p: its row's backdrop (the winding of the edges left of the tile) plus each
+// of the tile's edges' share of the pixel (the part of the pixel's row right of it, as Raster's accumulation counts
+// it) times its direction; nonzero (|sum| up to 1) or even-odd. params: where the tile's 16 backdrops are in segs
+// (its edges follow them), how many edges, even-odd; top: the tile's top row.
+float rightG(float u) {
+    return u <= 0.0 ? u : (u >= 1.0 ? 0.5 : u - 0.5 * u * u);
+}
+
+float pathCover(vec4 params, float top, vec2 p) {
+    float px = floor(p.x);
+    float py = floor(p.y);
+    int first = int(params.x);
+    int row = clamp(int(py - top), 0, 15);
+    float acc = segs[first + row / 4][row % 4];
+    int start = first + 4;
+    int end = start + int(params.y);
+    for (int i = start; i < end; i++) {
+        vec4 s = segs[i];
+        float t0 = max(min(s.y, s.w), py);
+        float t1 = min(max(s.y, s.w), py + 1.0);
+        if (t1 <= t0) {
+            continue;
+        }
+        float dxdy = (s.z - s.x) / (s.w - s.y);
+        float a = s.x + (t0 - s.y) * dxdy - px;
+        float b = s.x + (t1 - s.y) * dxdy - px;
+        float share = abs(b - a) < 0.001 ? clamp(1.0 - 0.5 * (a + b), 0.0, 1.0) : (rightG(b) - rightG(a)) / (b - a);
+        acc += (s.w > s.y ? 1.0 : -1.0) * (t1 - t0) * share;
+    }
+    float w = abs(acc);
+    float c = min(w, 1.0);
+    if (params.z > 0.0) {
+        float m = w - floor(w / 2.0) * 2.0;
+        c = m > 1.0 ? 2.0 - m : m;
+    }
+    return c < 0.002 ? 0.0 : c;
+}
+
 void main() {
     Inst I = insts[vInst];
     vec2 p = gl_FragCoord.xy + pc.target.xy;
@@ -121,6 +164,8 @@ void main() {
         color = I.c0 * a;
     } else if (kind == 7) {
         color = imageColor(I, q) * cover(sdRR(q, I.rect, I.radii) * aa);
+    } else if (kind == 8) {
+        color = I.c0 * pathCover(I.params, I.rect.y, p);
     } else {
         float t = kind == 3 ? dot(q - I.params.xy, I.params.zw) / I.extra.z : length(q - I.params.xy) / I.params.z;
         color = gradColor(I, t) * cover(sdRR(q, I.rect, I.radii) * aa);

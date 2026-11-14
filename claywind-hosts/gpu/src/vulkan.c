@@ -57,13 +57,13 @@ int32_t CW_VK(attach)(int32_t kind, uint64_t first, uint64_t second);
 void CW_VK(atlas)(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1);
 void CW_VK(image)(const uint32_t *pixels, uint32_t stride, uint32_t w, uint32_t h, uint32_t u, uint32_t v);
 int32_t CW_VK(present)(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                       const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r, float g,
+                       const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height, float r, float g,
                        float b);
 int32_t CW_VK(render_to)(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r, float g,
+                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height, float r, float g,
                          float b, uint32_t *out);
 int32_t CW_VK(render_only)(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r,
+                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height, float r,
                            float g, float b);
 double CW_VK(gpu_ms)(void);
 void CW_VK(finish)(void);
@@ -231,7 +231,7 @@ static struct {
     uint32_t images_side;
     int images_ready, images_dirty;
     uint32_t ix0, iy0, ix1, iy1;
-    cw_buffer staging, image_staging, instances, clips, readback;
+    cw_buffer staging, image_staging, instances, clips, segments, readback;
     cw_texture pool[CW_POOL];
     cw_texture offscreen;
     VkSurfaceKHR surface;
@@ -688,17 +688,18 @@ int32_t CW_VK(init)(uint32_t atlas_width, uint32_t atlas_height, uint32_t images
         vkCreateQueryPool(g.device, &qinfo, NULL, &g.queries);
     }
     /* Set 0: the instances and the atlas; set 1: a layer (or a blur's source); set 2: the target, as input. */
-    VkDescriptorSetLayoutBinding set0[4] = {
+    VkDescriptorSetLayoutBinding set0[5] = {
         {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
         {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
         {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
+        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
     };
     VkDescriptorSetLayoutBinding set1 = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
                                          NULL};
     VkDescriptorSetLayoutBinding set2 = {0, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL};
     VkDescriptorSetLayoutCreateInfo l0 = {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 4, .pBindings = set0};
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 5, .pBindings = set0};
     VkDescriptorSetLayoutCreateInfo l1 = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 1, .pBindings = &set1};
     VkDescriptorSetLayoutCreateInfo l2 = {
@@ -1133,7 +1134,7 @@ static void box_pass(cw_texture *from, cw_texture *to, int axis, int d, uint32_t
    `target` through `pass`. */
 static int record(VkRenderPass pass, VkFramebuffer target, VkImageView target_view, int present, const float *frame,
                   uint32_t count, const float *layers, uint32_t layer_instances, const float *records,
-                  uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height,
+                  uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height,
                   float r, float gr, float b) {
     for (int k = 0; k < CW_POOL; k++) {
         g.pool[k].used = 0;
@@ -1155,6 +1156,13 @@ static int record(VkRenderPass pass, VkFramebuffer target, VkImageView target_vi
     }
     memset(g.clips.mapped, 0, CW_SHAPE * sizeof(float));
     memcpy(g.clips.mapped, clips, (size_t)clip_count * CW_SHAPE * sizeof(float));
+    /* The path edges (one zeroed one when there are none). */
+    if (!ensure_buffer(&g.segments, (segment_count ? segment_count : 1) * 4 * sizeof(float),
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)) {
+        return 0;
+    }
+    memset(g.segments.mapped, 0, 4 * sizeof(float));
+    memcpy(g.segments.mapped, segments, (size_t)segment_count * 4 * sizeof(float));
     VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                                       .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
     vkResetCommandBuffer(g.cmd, 0);
@@ -1206,9 +1214,10 @@ static int record(VkRenderPass pass, VkFramebuffer target, VkImageView target_vi
     VkDescriptorSet set0 = allocate_set(0);
     VkDescriptorBufferInfo buffer = {g.instances.buffer, 0, VK_WHOLE_SIZE};
     VkDescriptorBufferInfo shapes = {g.clips.buffer, 0, VK_WHOLE_SIZE};
+    VkDescriptorBufferInfo edges = {g.segments.buffer, 0, VK_WHOLE_SIZE};
     VkDescriptorImageInfo atlas = {g.linear, g.atlas_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorImageInfo images = {g.nearest, g.images_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet writes[4] = {
+    VkWriteDescriptorSet writes[5] = {
         {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
          .dstSet = set0,
          .dstBinding = 0,
@@ -1233,8 +1242,14 @@ static int record(VkRenderPass pass, VkFramebuffer target, VkImageView target_vi
          .descriptorCount = 1,
          .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
          .pImageInfo = &images},
+        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         .dstSet = set0,
+         .dstBinding = 4,
+         .descriptorCount = 1,
+         .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         .pBufferInfo = &edges},
     };
-    vkUpdateDescriptorSets(g.device, 4, writes, 0, NULL);
+    vkUpdateDescriptorSets(g.device, 5, writes, 0, NULL);
     cw_texture *textures[CW_MAX_LAYERS];
     uint32_t n = layer_count < CW_MAX_LAYERS ? layer_count : CW_MAX_LAYERS;
     for (uint32_t l = 0; l < n; l++) {
@@ -1305,7 +1320,7 @@ static void end_and_submit(int present) {
 
 /* Draws the frame into the window's next swapchain image, `width` × `height` pixels, and presents it. */
 int32_t CW_VK(present)(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                       const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r, float g_,
+                       const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height, float r, float g_,
                        float b) {
     if (g.surface == VK_NULL_HANDLE) {
         return 1;
@@ -1336,7 +1351,7 @@ int32_t CW_VK(present)(const float *frame, uint32_t count, const float *layers, 
     uint32_t w = g.swap_width < width ? g.swap_width : width;
     uint32_t h = g.swap_height < height ? g.swap_height : height;
     if (!record(g.rp_present, g.swap_framebuffers[index], g.swap_views[index], 1, frame, count, layers,
-                layer_instances, records, layer_count, clips, clip_count, w, h, r, g_, b)) {
+                layer_instances, records, layer_count, clips, clip_count, segments, segment_count, w, h, r, g_, b)) {
         return 3;
     }
     end_and_submit(1);
@@ -1358,7 +1373,7 @@ int32_t CW_VK(present)(const float *frame, uint32_t count, const float *layers, 
 
 /* Draws the frame into an offscreen image and copies its pixels to `out` (RGBA bytes, Raster's order). */
 int32_t CW_VK(render_to)(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r,
+                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height, float r,
                          float g_, float b, uint32_t *out) {
     if (!g.ready) {
         return 1;
@@ -1384,7 +1399,7 @@ int32_t CW_VK(render_to)(const float *frame, uint32_t count, const float *layers
         return 3;
     }
     if (!record(g.rp_clear, o->framebuffer, o->view, 0, frame, count, layers, layer_instances, records, layer_count,
-                clips, clip_count, width, height, r, g_, b)) {
+                clips, clip_count, segments, segment_count, width, height, r, g_, b)) {
         return 4;
     }
     if (out != NULL) {
@@ -1406,9 +1421,9 @@ int32_t CW_VK(render_to)(const float *frame, uint32_t count, const float *layers
 
 /* Draws the frame offscreen and waits for it, reading nothing back: for timing the GPU. */
 int32_t CW_VK(render_only)(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r,
+                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height, float r,
                            float g_, float b) {
-    return CW_VK(render_to)(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, width, height, r, g_, b,
+    return CW_VK(render_to)(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count, width, height, r, g_, b,
                             NULL);
 }
 #else

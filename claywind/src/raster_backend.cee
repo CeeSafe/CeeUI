@@ -42,6 +42,7 @@ impl<region r> Backend for Raster<r> {
             Command.Text(area, run) => { drawText(mut this, area, run, text); }
             Command.Picture(area, tint, radius, handle) => { drawImage(mut this, area, tint, radius, handle); }
             Command.CustomDraw(_, _, _, _) => {}
+            Command.Path(area, look) => { drawPath(mut this, area, look, text); }
             Command.ClipStart(area, radius, _, _) => { pushClipShape(mut this, area, radius); }
             Command.ClipEnd => { this.popClip(); }
             Command.TransformStart(_, t) => { this.pushTransform(transformMatrix(t)); }

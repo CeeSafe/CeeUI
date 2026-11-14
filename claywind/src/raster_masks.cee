@@ -23,6 +23,61 @@ public struct ImageSize {
 }
 
 impl<region r> Raster<r> {
+    /// The polygon Raster fills to draw `Command.Path(area, look)` with `data`, built under `m` (the frame's
+    /// pixels from the element's points) as `drawPath` builds it: its edges as x0, y0, x1, y1 (frame pixels) into
+    /// `out`, each subpath closed, horizontal edges left out. The number of edges, or null when the path did not fit
+    /// `out` or Raster's points. The fill rule is the look's (even-odd only for an even-odd fill; strokes are
+    /// nonzero), and the result is drawn clipped to `area`.
+    public fn flattenPath(
+        borrow mut this,
+        data: Slice<u8>,
+        area: Rect,
+        look: PathLook,
+        m: Affine2,
+        out: SliceMut<f32>,
+    ) -> usize? {
+        if (!this.transforms.push(m.after(look.placement(area)))) {
+            return null;
+        }
+        let before = this.overflowed;
+        this.overflowed = false;
+        beginPath(mut this);
+        buildPath(mut this, data, look);
+        let failed = this.overflowed;
+        this.overflowed = before;
+        this.transforms.pop();
+        if (failed) {
+            return null;
+        }
+        if (this.pointCount < 3) {
+            return 0;
+        }
+        var n: usize = 0;
+        for (c in 0..this.contourCount) {
+            let start = this.contourStarts[c];
+            let end = if (c + 1 < this.contourCount) this.contourStarts[c + 1] else this.pointCount;
+            if (end <= start + 1) {
+                continue;
+            }
+            for (i in start..end) {
+                let a = this.points[i];
+                let b = if (i + 1 < end) this.points[i + 1] else this.points[start];
+                if (a.y == b.y) {
+                    continue;
+                }
+                if (n * 4 + 4 > out.length) {
+                    return null;
+                }
+                out[n * 4] = a.x;
+                out[n * 4 + 1] = a.y;
+                out[n * 4 + 2] = b.x;
+                out[n * 4 + 3] = b.y;
+                n += 1;
+            }
+        }
+        return n;
+    }
+
     /// The size of image `handle`, or null when no image is registered under it.
     public fn imageSize(borrow this, handle: u32) -> ImageSize? {
         match (this.imageIndex(handle)) {

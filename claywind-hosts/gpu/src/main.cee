@@ -322,7 +322,7 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
     }
     Console.writeLine("tab        instances  skipped  raster ms  gpu ms  mean diff  >8 %     >32 %    max");
     var worst: f64 = 0.0;
-    for (tab in 0usize..NAV_COUNT + 2) {
+    for (tab in 0usize..NAV_COUNT + 3) {
         var clear = Color.rgb(2, 6, 23);
         var r0 = nanos();
         var r1 = r0;
@@ -583,8 +583,10 @@ fn drawScene<B: Backend>(b: borrow mut B) {
 fn drawSynthetic<B: Backend>(b: borrow mut B, scene: usize) {
     if (scene == 0) {
         drawScene(mut b);
-    } else {
+    } else if (scene == 1) {
         drawImages(mut b);
+    } else {
+        drawPaths(mut b);
     }
 }
 
@@ -673,6 +675,106 @@ fn drawImages<B: Backend>(b: borrow mut B) {
     label(mut b, 780.0, 480.0, "images");
 }
 
+/// A five-pointed star (a pentagram: its middle is wound twice) of radius `r` about (`cx`, `cy`).
+fn star(p: borrow mut PathBuilder, cx: f32, cy: f32, r: f32) {
+    for (k in 0..5) {
+        let a = Math.radians(-90.0 + round<f32>(k) * 144.0);
+        let x = cx + r * Math.cos(a);
+        let y = cy + r * Math.sin(a);
+        if (k == 0) {
+            p.moveTo(x, y);
+        } else {
+            p.lineTo(x, y);
+        }
+    }
+    p.close();
+}
+
+fn heart(p: borrow mut PathBuilder) {
+    p.moveTo(80.0, 140.0);
+    p.cubicTo(10.0, 90.0, 20.0, 20.0, 80.0, 50.0);
+    p.cubicTo(140.0, 20.0, 150.0, 90.0, 80.0, 140.0);
+    p.close();
+}
+
+fn pathAt<B: Backend>(b: borrow mut B, x: f32, y: f32, w: f32, h: f32, look: PathLook, p: borrow PathBuilder) {
+    b.draw(Command.Path(Rect { x: x, y: y, w: w, h: h }, look), p.bytes());
+}
+
+/// Paths, which the demo never draws: nonzero and even-odd fills of a self-crossing star and of a ring, cubic and
+/// quadratic curves, strokes (a wave, a chart's line over its area, a check mark scaled from a 24 × 24 view box),
+/// a rotated path, a path larger than its box (clipped to it), one in a rounded clip and one in a group at 60 %.
+/// In points, 1024 × 640.
+fn drawPaths<B: Backend>(b: borrow mut B) {
+    let none = [0u8; 1];
+    let empty = none[0..0];
+    var storage = zeros(8192);
+    var p = PathBuilder.over(mut storage.viewMut());
+    star(mut p, 80.0, 80.0, 75.0);
+    pathAt(mut b, 40.0, 40.0, 160.0, 160.0, PathLook.fill(Color.hex(0xfacc15ff)), p);
+    pathAt(mut b, 220.0, 40.0, 160.0, 160.0, PathLook.fill(Color.hex(0xfacc15ff)).withEvenOdd(), p);
+    p.clear();
+    heart(mut p);
+    pathAt(mut b, 400.0, 40.0, 160.0, 150.0, PathLook.fill(Color.hex(0xef4444ff)), p);
+    p.clear();
+    p.moveTo(0.0, 60.0);
+    for (k in 0..8) {
+        let x = round<f32>(k) * 50.0;
+        p.quadTo(x + 25.0, if (k % 2 == 0) 0.0 else 120.0, x + 50.0, 60.0);
+    }
+    pathAt(mut b, 580.0, 40.0, 400.0, 120.0, PathLook.stroke(Color.hex(0x22d3eeff), 4.0), p);
+    // A chart: its area (closed to the baseline), then its line.
+    let values = [40.0f32, 70.0, 55.0, 110.0, 90.0, 130.0, 95.0, 120.0, 60.0, 85.0, 140.0, 125.0];
+    p.clear();
+    p.moveTo(0.0, 160.0);
+    for (k in 0usize..12) {
+        p.lineTo(round<f32>(k) * 41.8, 160.0 - values[k]);
+    }
+    p.lineTo(460.0, 160.0);
+    p.close();
+    pathAt(mut b, 40.0, 240.0, 460.0, 160.0, PathLook.fill(Color.hex(0x3b82f655)), p);
+    p.clear();
+    for (k in 0usize..12) {
+        if (k == 0) {
+            p.moveTo(0.0, 160.0 - values[k]);
+        } else {
+            p.lineTo(round<f32>(k) * 41.8, 160.0 - values[k]);
+        }
+    }
+    pathAt(mut b, 40.0, 240.0, 460.0, 160.0, PathLook.stroke(Color.hex(0x3b82f6ff), 3.0), p);
+    // A ring: two circles wound the same way, the inner a hole by even-odd.
+    p.clear();
+    p.circle(80.0, 80.0, 70.0);
+    p.circle(80.0, 80.0, 35.0);
+    pathAt(mut b, 540.0, 240.0, 160.0, 160.0, PathLook.fill(Color.hex(0xec4899ff)).withEvenOdd(), p);
+    // A check mark drawn in a 24 × 24 view box, scaled to 120 points, in a group at 60 %.
+    p.clear();
+    p.moveTo(5.0, 12.5);
+    p.lineTo(10.0, 17.5);
+    p.lineTo(19.0, 7.0);
+    b.draw(Command.OpacityStart(Rect { x: 740.0, y: 240.0, w: 120.0, h: 120.0 }, 0.6), empty);
+    pathAt(mut b, 740.0, 240.0, 120.0, 120.0, PathLook.stroke(Color.hex(0x10b981ff), 2.0).viewBox(24.0, 24.0), p);
+    b.draw(Command.OpacityEnd(0.6), empty);
+    // The heart, rotated, filled and outlined.
+    p.clear();
+    heart(mut p);
+    b.draw(Command.TransformStart(Rect.zero(), transform(15.0, 1.0, 0.0, 180.0, 515.0)), empty);
+    pathAt(mut b, 100.0, 440.0, 160.0, 150.0, PathLook.fill(Color.hex(0xf97316ff)), p);
+    pathAt(mut b, 100.0, 440.0, 160.0, 150.0, PathLook.stroke(Color.hex(0xffffffff), 2.5), p);
+    b.draw(Command.TransformEnd, empty);
+    // A circle larger than its box, clipped to the box.
+    p.clear();
+    p.circle(80.0, 70.0, 100.0);
+    pathAt(mut b, 320.0, 440.0, 160.0, 140.0, PathLook.fill(Color.hex(0xa855f7ff)), p);
+    // A star in a rounded clip.
+    p.clear();
+    star(mut p, 100.0, 80.0, 120.0);
+    b.draw(Command.ClipStart(Rect { x: 540.0, y: 440.0, w: 200.0, h: 150.0 }, Corners.all(40.0), true, true), empty);
+    pathAt(mut b, 540.0, 440.0, 200.0, 150.0, PathLook.fill(Color.hex(0x84cc16ff)), p);
+    b.draw(Command.ClipEnd, empty);
+    label(mut b, 800.0, 480.0, "paths");
+}
+
 fn tabName(tab: usize) -> StringView => match (tab) {
     0 => "dashboard",
     1 => "controls ",
@@ -681,7 +783,8 @@ fn tabName(tab: usize) -> StringView => match (tab) {
     4 => "activity ",
     5 => "settings ",
     6 => "clips    ",
-    _ => "images   ",
+    7 => "images   ",
+    _ => "paths    ",
 };
 
 /// The largest difference between two pixels' channels.

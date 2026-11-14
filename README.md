@@ -33,6 +33,8 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   boxes. The result is byte-identical to a full redraw.
 - **Controls:** buttons, checkboxes, text input with a caret, spin input, slider, radio, tabs, dropdown, single- and
   multi-select lists, context menu and tooltip.
+- **Vector paths.** `PathBuilder` makes a path of lines and quadratic and cubic curves; `Ui.path` draws it in an
+  element's box, filled (nonzero or even-odd) or stroked with round joins, optionally from a view box.
 - **Also:** focus cycling with Tab, vector icons, eased transitions, and dark and light themes.
 
 ## Repository layout

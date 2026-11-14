@@ -280,6 +280,18 @@ public struct Damage<region r> {
                     h = mix(mixCorners(mixColor(mixRect(h, rect), color), corners), id as u64);
                     area = rect;
                 }
+                Command.Path(rect, look) => {
+                    h = mixF(
+                        mixF(mixF(mixColor(mixRect(h, rect), look.color), look.width), look.viewWidth),
+                        look.viewHeight,
+                    );
+                    h = mix(h, bit(look.evenOdd));
+                    for (b in ui.textOf(command)) {
+                        h = mix(h, b as u64);
+                    }
+                    // Drawn clipped to its box.
+                    area = rect;
+                }
                 Command.DropShadow(rect, s, corners) => {
                     h = mixCorners(mixColor(mixRect(h, rect), s.color), corners);
                     h = mixF(mixF(mixF(mixF(h, s.offsetX), s.offsetY), s.blur), s.spread);
@@ -469,6 +481,7 @@ fn kindOf(c: Command) -> u64 => match (c) {
     Command.Text(_, _) => 3,
     Command.Picture(_, _, _, _) => 4,
     Command.CustomDraw(_, _, _, _) => 5,
+    Command.Path(_, _) => 20,
     Command.ClipStart(_, _, _, _) => 6,
     Command.ClipEnd => 7,
     Command.TransformStart(_, _) => 8,

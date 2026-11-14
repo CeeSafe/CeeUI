@@ -1,0 +1,198 @@
+// SPDX-License-Identifier: MIT
+// Command.Path in Raster: a path's bytes (path.cee's encoding) into the current path, filled, or stroked as one
+// round-capped capsule per flattened segment (round joins and caps, as icons are stroked), and the whole clipped to
+// the element's box.
+
+/// Draws `data` with `look` in `area`, clipped to it.
+fn drawPath(r: borrow mut Raster, area: Rect, look: PathLook, data: Slice<u8>) {
+    if (data.length == 0 || look.color.a == 0 || area.w <= 0.0 || area.h <= 0.0) {
+        return;
+    }
+    pushClipShape(mut r, area, Corners.all(0.0));
+    r.pushTransform(look.placement(area));
+    beginPath(mut r);
+    buildPath(mut r, data, look);
+    r.popTransform();
+    var paint = solidPaint(look.color);
+    paint.evenOdd = look.evenOdd && look.width <= 0.0;
+    fillPath(mut r, paint, FillTarget.Layer);
+    r.popClip();
+}
+
+/// The polygon `look` makes of `data` into the current path, through the current transform.
+fn buildPath(r: borrow mut Raster, data: Slice<u8>, look: PathLook) {
+    if (look.width > 0.0) {
+        strokePathData(mut r, data, look.width);
+    } else {
+        addPathData(mut r, data);
+    }
+}
+
+/// Adds every subpath of `data` to the current path (a fill closes each one), curves flattened as `cubicTo`
+/// flattens them; a quadratic is the cubic with the same curve. A verb after a close starts at the closed subpath's
+/// start, as in SVG.
+fn addPathData(r: borrow mut Raster, data: Slice<u8>) {
+    var at: usize = 0;
+    var sx: f32 = 0.0;
+    var sy: f32 = 0.0;
+    var px: f32 = 0.0;
+    var py: f32 = 0.0;
+    var open = false;
+    while (at < data.length) {
+        let v = data[at];
+        let n = match (pathArity(v)) {
+            Some(k) => k,
+            null => { return; }
+        };
+        if (at + 1 + n * 4 > data.length) {
+            return;
+        }
+        let base = at + 1;
+        at = base + n * 4;
+        if (v == PATH_MOVE) {
+            px = pathNumber(data, base);
+            py = pathNumber(data, base + 4);
+            sx = px;
+            sy = py;
+            moveTo(mut r, px, py);
+            open = true;
+            continue;
+        }
+        if (v == PATH_CLOSE) {
+            px = sx;
+            py = sy;
+            open = false;
+            continue;
+        }
+        if (!open) {
+            sx = px;
+            sy = py;
+            moveTo(mut r, px, py);
+            open = true;
+        }
+        if (v == PATH_LINE) {
+            px = pathNumber(data, base);
+            py = pathNumber(data, base + 4);
+            lineTo(mut r, px, py);
+        } else if (v == PATH_QUAD) {
+            let cx = pathNumber(data, base);
+            let cy = pathNumber(data, base + 4);
+            let x = pathNumber(data, base + 8);
+            let y = pathNumber(data, base + 12);
+            cubicTo(
+                mut r,
+                px + (cx - px) * 2.0 / 3.0,
+                py + (cy - py) * 2.0 / 3.0,
+                x + (cx - x) * 2.0 / 3.0,
+                y + (cy - y) * 2.0 / 3.0,
+                x,
+                y,
+            );
+            px = x;
+            py = y;
+        } else {
+            let x = pathNumber(data, base + 16);
+            let y = pathNumber(data, base + 20);
+            cubicTo(
+                mut r,
+                pathNumber(data, base),
+                pathNumber(data, base + 4),
+                pathNumber(data, base + 8),
+                pathNumber(data, base + 12),
+                x,
+                y,
+            );
+            px = x;
+            py = y;
+        }
+    }
+}
+
+/// Adds the outline of every subpath of `data`, `width` wide, to the current path: a capsule for each line and for
+/// each step of a flattened curve (the steps `cubicTo` would take), so joins and caps are round.
+fn strokePathData(r: borrow mut Raster, data: Slice<u8>, width: f32) {
+    var at: usize = 0;
+    var sx: f32 = 0.0;
+    var sy: f32 = 0.0;
+    var px: f32 = 0.0;
+    var py: f32 = 0.0;
+    while (at < data.length) {
+        let v = data[at];
+        let n = match (pathArity(v)) {
+            Some(k) => k,
+            null => { return; }
+        };
+        if (at + 1 + n * 4 > data.length) {
+            return;
+        }
+        let base = at + 1;
+        at = base + n * 4;
+        if (v == PATH_MOVE) {
+            px = pathNumber(data, base);
+            py = pathNumber(data, base + 4);
+            sx = px;
+            sy = py;
+        } else if (v == PATH_CLOSE) {
+            if (px != sx || py != sy) {
+                capsule(mut r, px, py, sx, sy, width);
+            }
+            px = sx;
+            py = sy;
+        } else if (v == PATH_LINE) {
+            let x = pathNumber(data, base);
+            let y = pathNumber(data, base + 4);
+            capsule(mut r, px, py, x, y, width);
+            px = x;
+            py = y;
+        } else {
+            var c1x: f32 = 0.0;
+            var c1y: f32 = 0.0;
+            var c2x: f32 = 0.0;
+            var c2y: f32 = 0.0;
+            var x: f32 = 0.0;
+            var y: f32 = 0.0;
+            if (v == PATH_QUAD) {
+                let cx = pathNumber(data, base);
+                let cy = pathNumber(data, base + 4);
+                x = pathNumber(data, base + 8);
+                y = pathNumber(data, base + 12);
+                c1x = px + (cx - px) * 2.0 / 3.0;
+                c1y = py + (cy - py) * 2.0 / 3.0;
+                c2x = x + (cx - x) * 2.0 / 3.0;
+                c2y = y + (cy - y) * 2.0 / 3.0;
+            } else {
+                c1x = pathNumber(data, base);
+                c1y = pathNumber(data, base + 4);
+                c2x = pathNumber(data, base + 8);
+                c2y = pathNumber(data, base + 12);
+                x = pathNumber(data, base + 16);
+                y = pathNumber(data, base + 20);
+            }
+            let m = r.currentTransform();
+            let p0 = m.apply(Vec2 { x: px, y: py });
+            let a = m.apply(Vec2 { x: c1x, y: c1y });
+            let b = m.apply(Vec2 { x: c2x, y: c2y });
+            let e = m.apply(Vec2 { x: x, y: y });
+            let length = Math.hypot(a.x - p0.x, a.y - p0.y) + Math.hypot(b.x - a.x, b.y - a.y) +
+                Math.hypot(e.x - b.x, e.y - b.y);
+            let steps = truncate<u32>(Math.clamp((length * 1.5).sqrt() * 2.0, 2.0, 64.0));
+            var qx = px;
+            var qy = py;
+            for (s in 1..steps + 1) {
+                let t = round<f32>(s) / round<f32>(steps);
+                let u = 1.0 - t;
+                let w0 = u * u * u;
+                let w1 = 3.0 * u * u * t;
+                let w2 = 3.0 * u * t * t;
+                let w3 = t * t * t;
+                let nx = w0 * px + w1 * c1x + w2 * c2x + w3 * x;
+                let ny = w0 * py + w1 * c1y + w2 * c2y + w3 * y;
+                capsule(mut r, qx, qy, nx, ny, width);
+                qx = nx;
+                qy = ny;
+            }
+            px = x;
+            py = y;
+        }
+    }
+}
