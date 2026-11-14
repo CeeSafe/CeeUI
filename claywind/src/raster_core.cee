@@ -112,7 +112,7 @@ public struct Raster<region r> {
     fontTop: usize;
     fonts: FixedList<r, FontSlot>;
     /// The fallback chain (raster_text.cee): font ids tried for a character a run's font lacks.
-    fallbacks: [u32; 8];
+    fallbacks: [u32; 24];
     fallbackCount: usize;
     width: i32;
     height: i32;
@@ -161,7 +161,7 @@ public struct Raster<region r> {
             kern: 0,
             maxp: 0,
         };
-        let fonts = memory.allocArray(16, FontSlot { id: 0, offset: 0, size: 0, info: noFont })?;
+        let fonts = memory.allocArray(32, FontSlot { id: 0, offset: 0, size: 0, info: noFont })?;
         return Ok(Raster {
             pool: pool,
             poolTop: frame,
@@ -183,7 +183,7 @@ public struct Raster<region r> {
             fontPool: fontPool,
             fontTop: 0,
             fonts: FixedList<FontSlot>.over(fonts),
-            fallbacks: [0u32; 8],
+            fallbacks: [0u32; 24],
             fallbackCount: 0,
             width: truncate<i32>(capacity.width),
             height: truncate<i32>(capacity.height),

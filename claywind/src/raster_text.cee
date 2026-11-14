@@ -60,16 +60,40 @@ fn combining(cp: u32) -> bool =>
         (cp >= 0x20D0 && cp <= 0x20FF) || (cp >= 0xFE20 && cp <= 0xFE2F);
 
 impl<region r> Raster<r> {
-    /// The fonts tried, in order, for a character a run's font lacks (font ids, as `loadFont` took them); up to 8.
+    /// The fonts tried, in order, for a character a run's font lacks (font ids, as `loadFont` took them); up to 24.
     /// A character no font has is drawn as the run's font's missing-glyph box.
     public fn setFallbacks(borrow mut this, ids: Slice<u32>) {
         this.fallbackCount = 0;
         for (id in ids) {
-            if (this.fallbackCount < 8) {
-                this.fallbacks[this.fallbackCount] = id;
-                this.fallbackCount += 1;
-            }
+            let added = this.addFallback(id);
         }
+    }
+
+    /// Adds font `id` to the end of the fallback chain; false when the chain is full.
+    public fn addFallback(borrow mut this, id: u32) -> bool {
+        if (this.fallbackCount >= 24) {
+            return false;
+        }
+        this.fallbacks[this.fallbackCount] = id;
+        this.fallbackCount += 1;
+        return true;
+    }
+
+    /// How many fonts are loaded (at most 32).
+    public fn fontCount(borrow this) -> usize => this.fonts.length();
+
+    /// Whether a run in font `fontId` has a glyph for `cp`, from its font or the fallback chain; characters that take
+    /// no glyph count as covered.
+    public fn covers(borrow this, fontId: u32, cp: u32) -> bool {
+        if (ignorable(cp)) {
+            return true;
+        }
+        let primary = match (this.slotIndex(fontId)) {
+            Some(k) => k,
+            null => { return false; }
+        };
+        let cur = ShapeCursor { at: 0, pen: 0.0, previousSlot: 0, previousGlyph: 0, hasPrevious: false };
+        return this.fontFor(primary, cur, cp)[1] != 0;
     }
 
     /// The index of the loaded font `id`, falling back to font 0's (thorvg_backend.c's cw_fontFor).

@@ -14,6 +14,7 @@
 
 import claywind;
 import claywind_demo;
+import claywind_fonts;
 
 const START_WIDTH: u32 = 1024;
 const START_HEIGHT: u32 = 640;
@@ -142,7 +143,7 @@ fn main() -> i32 {
         }
     };
     var uiStorage = zeros(16777216);
-    var rasterStorage = zeros(201326592);
+    var rasterStorage = zeros(301989888);
     let uiMemory = FixedBufferAllocator.over(mut uiStorage.viewMut());
     let rasterMemory = FixedBufferAllocator.over(mut rasterStorage.viewMut());
     var ui = match (Ui.create(uiMemory, UiCapacity.of(4096))) {
@@ -152,7 +153,9 @@ fn main() -> i32 {
             return 1;
         }
     };
-    var raster = match (Raster.create(rasterMemory, RasterCapacity.of(MAX_PIXELS_WIDTH, MAX_PIXELS_HEIGHT))) {
+    var capacity = RasterCapacity.of(MAX_PIXELS_WIDTH, MAX_PIXELS_HEIGHT);
+    capacity.fontBytes = 100663296; // room for fallback fonts from the system: a CJK font is tens of megabytes
+    var raster = match (Raster.create(rasterMemory, capacity)) {
         Ok(r) => r,
         Err(_) => {
             Console.writeErrorLine("desktop: not enough memory for the renderer");
@@ -178,6 +181,8 @@ fn main() -> i32 {
     var app = DemoApp.create();
     ui.setDarkMode(Environment.variable("CLAYWIND_LIGHT") == null);
     var last = Timer.now();
+    // Fonts from the system for characters the loaded ones lack, found as the frames need them.
+    var systemFonts = SystemFonts.create();
     loop {
         loop {
             match (window.nextEvent()) {
@@ -203,6 +208,9 @@ fn main() -> i32 {
             }
         }
         window.setCursor(windowCursor(platform.cursor));
+        if (systemFonts.supplyFrame(mut raster, ui) > 0) {
+            damage.invalidate(); // the same commands draw other glyphs now (the next frame lays them out)
+        }
         if (damage.render(mut raster, ui, Color.hex(pageBg(ui)))) {
             let width = truncate<u32>(raster.frameWidth());
             let height = truncate<u32>(raster.frameHeight());

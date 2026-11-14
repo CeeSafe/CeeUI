@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: MIT
+// claywind-fonts: fallback fonts found among the system's own. Skipped where Arial is missing.
+
+import claywind;
+import claywind_fonts;
+
+@test
+fn systemFontsSupplyWhatTheLoadedOnesLack() -> Result<void, TestFailure> {
+    let arial = readFile(arialPath());
+    if (arial.length == 0) {
+        Console.writeLine("  (Arial not found: skipped)");
+        return Ok();
+    }
+    var storage = heap(134217728);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(100, 40);
+    c.imagePixels = 4;
+    c.fontBytes = 100663296;
+    var ras = Raster.create(memory, c)!;
+    Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
+    Check.isTrue(!ras.covers(0, 0x4E2D), "Arial alone has no 中")?;
+    var fonts = SystemFonts.create();
+    // Latin needs nothing, and nothing is scanned for it.
+    Check.equalU64(0, fonts.supply(mut ras, "Hello".bytes(), 0) as u64)?;
+    Check.equalU64(0, fonts.faceCount() as u64)?;
+    let added = fonts.supply(mut ras, "中文".bytes(), 0);
+    Check.isTrue(fonts.faceCount() > 0, "the catalog is built once a character is missing")?;
+    Check.equalU64(1, added as u64)?;
+    Check.isTrue(ras.covers(0, 0x4E2D) && ras.covers(0, 0x6587), "中 and 文 now come from a system font")?;
+    // Asked again, nothing more is loaded; a private-use character is never looked for.
+    Check.equalU64(0, fonts.supply(mut ras, "中文\u{E000}".bytes(), 0) as u64)?;
+    return Check.isTrue(!ras.covers(0, 0xE000), "private use stays the missing-glyph box");
+}

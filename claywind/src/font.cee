@@ -219,13 +219,23 @@ fn cmap12(d: Slice<u8>, table: usize, codepoint: u32) -> u32 {
         return INVALID_GLYPH;
     }
     let count = u32at(d, table + 12) as usize;
-    for (i in 0..count) {
-        let first = u32at(d, table + i * 12 + 16);
-        let last = u32at(d, table + i * 12 + 20);
-        if (codepoint < first || codepoint > last) {
-            continue;
+    if (!valid(d, table + 16, count * 12)) {
+        return INVALID_GLYPH;
+    }
+    // The groups are sorted by their first code point: a binary search.
+    var lo: usize = 0;
+    var hi = count;
+    while (lo < hi) {
+        let mid = lo + (hi - lo) / 2;
+        let first = u32at(d, table + mid * 12 + 16);
+        let last = u32at(d, table + mid * 12 + 20);
+        if (codepoint < first) {
+            hi = mid;
+        } else if (codepoint > last) {
+            lo = mid + 1;
+        } else {
+            return (codepoint - first) + u32at(d, table + mid * 12 + 24);
         }
-        return (codepoint - first) + u32at(d, table + i * 12 + 24);
     }
     return INVALID_GLYPH;
 }
@@ -288,16 +298,26 @@ fn cmap6(d: Slice<u8>, table: usize, codepoint: u32) -> u32 {
 }
 
 /// SfntReader::glyph: full-repertoire maps first, then BMP maps.
-public fn glyphIndex(d: Slice<u8>, f: FontInfo, codepoint: u32) -> u32 {
-    let count = u16at(d, f.cmap + 2) as usize;
-    if (!valid(d, f.cmap, 4 + count * 8)) {
+public fn glyphIndex(d: Slice<u8>, f: FontInfo, codepoint: u32) -> u32 => cmapLookup(d, f.cmap, codepoint);
+
+/// The glyph of `codepoint` in a cmap table on its own (`cmap` starts at the table, as a font catalog reads it), or
+/// 0 when it maps none.
+public fn cmapGlyph(cmap: Slice<u8>, codepoint: u32) -> u32 {
+    let g = cmapLookup(cmap, 0, codepoint);
+    return if (g == INVALID_GLYPH) 0 else g;
+}
+
+/// glyphIndex for the cmap table at `base` of `d`.
+fn cmapLookup(d: Slice<u8>, base: usize, codepoint: u32) -> u32 {
+    let count = u16at(d, base + 2) as usize;
+    if (!valid(d, base, 4 + count * 8)) {
         return INVALID_GLYPH;
     }
     for (i in 0..count) {
-        let entry = f.cmap + 4 + i * 8;
+        let entry = base + 4 + i * 8;
         let kind = u16at(d, entry) * 64 + u16at(d, entry + 2);
         if (kind == 4 || kind == 202) {
-            let table = f.cmap + (u32at(d, entry + 4) as usize);
+            let table = base + (u32at(d, entry + 4) as usize);
             if (!valid(d, table, 8)) {
                 return INVALID_GLYPH;
             }
@@ -305,10 +325,10 @@ public fn glyphIndex(d: Slice<u8>, f: FontInfo, codepoint: u32) -> u32 {
         }
     }
     for (i in 0..count) {
-        let entry = f.cmap + 4 + i * 8;
+        let entry = base + 4 + i * 8;
         let kind = u16at(d, entry) * 64 + u16at(d, entry + 2);
         if (kind == 3 || kind == 193) {
-            let table = f.cmap + (u32at(d, entry + 4) as usize);
+            let table = base + (u32at(d, entry + 4) as usize);
             if (!valid(d, table, 6)) {
                 return INVALID_GLYPH;
             }
@@ -323,6 +343,139 @@ public fn glyphIndex(d: Slice<u8>, f: FontInfo, codepoint: u32) -> u32 {
         }
     }
     return INVALID_GLYPH;
+}
+
+/// The subtable glyphIndex reads in the cmap table at `base` of `d`: its offset and format, or null.
+fn cmapSubtable(d: Slice<u8>, base: usize) -> [usize; 2]? {
+    if (!valid(d, base, 4)) {
+        return null;
+    }
+    let count = u16at(d, base + 2) as usize;
+    if (!valid(d, base, 4 + count * 8)) {
+        return null;
+    }
+    for (pass in 0usize..2) {
+        for (i in 0..count) {
+            let entry = base + 4 + i * 8;
+            let kind = u16at(d, entry) * 64 + u16at(d, entry + 2);
+            let wanted = if (pass == 0) kind == 4 || kind == 202 else kind == 3 || kind == 193;
+            if (wanted) {
+                let table = base + (u32at(d, entry + 4) as usize);
+                if (!valid(d, table, 2)) {
+                    return null;
+                }
+                return [table, u16at(d, table) as usize];
+            }
+        }
+    }
+    return null;
+}
+
+/// How many code points a cmap table on its own maps in each block of 256 (`counts[b]` for code points b × 256 to
+/// b × 256 + 255, as far as `counts` reaches; saturating), for choosing a fallback font by what it covers. Format 4
+/// segments count whole, so a segment with unmapped code points in it counts them too.
+public fn cmapCoverage(cmap: Slice<u8>, counts: SliceMut<u16>) {
+    for (k in 0..counts.length) {
+        counts[k] = 0;
+    }
+    let sub = match (cmapSubtable(cmap, 0)) {
+        Some(s) => s,
+        null => { return; }
+    };
+    let table = sub[0];
+    if (sub[1] == 12) {
+        if (!valid(cmap, table, 16)) {
+            return;
+        }
+        let count = u32at(cmap, table + 12) as usize;
+        if (!valid(cmap, table + 16, count * 12)) {
+            return;
+        }
+        for (i in 0..count) {
+            addCoverage(counts, u32at(cmap, table + 16 + i * 12), u32at(cmap, table + 20 + i * 12));
+        }
+    } else if (sub[1] == 4) {
+        if (!valid(cmap, table, 14)) {
+            return;
+        }
+        let segX2 = u16at(cmap, table + 6) as usize;
+        let ends = table + 14;
+        let starts = ends + segX2 + 2;
+        if (!valid(cmap, starts, segX2)) {
+            return;
+        }
+        for (k in 0..segX2 / 2) {
+            let first = u16at(cmap, starts + k * 2);
+            let last = u16at(cmap, ends + k * 2);
+            if (first <= last && last != 0xFFFF) {
+                addCoverage(counts, first, last);
+            }
+        }
+    }
+}
+
+fn addCoverage(counts: SliceMut<u16>, first: u32, last: u32) {
+    var cp = first;
+    while (cp <= last) {
+        let block = (cp >> 8) as usize;
+        if (block >= counts.length) {
+            return;
+        }
+        let blockEnd = (cp | 0xFF).min(last);
+        let added = blockEnd - cp + 1;
+        counts[block] = truncate<u16>(((counts[block] as u32) + added).min(0xFFFF));
+        cp = blockEnd + 1;
+    }
+}
+
+/// Where face `face` of a font file keeps its table directory: 0 for a single font, a collection's face offset,
+/// or null when there is no such face. `d` holds the file's start (12 bytes, and a collection's 4 per face).
+public fn faceDirectory(d: Slice<u8>, face: u32) -> usize? {
+    if (!valid(d, 0, 12)) {
+        return null;
+    }
+    if (u32at(d, 0) == 0x74746366) {
+        let faces = u32at(d, 8);
+        if (face >= faces || !valid(d, 12 + (face as usize) * 4, 4)) {
+            return null;
+        }
+        return u32at(d, 12 + (face as usize) * 4) as usize;
+    }
+    return if (face == 0) 0 else null;
+}
+
+/// A table's place in a font file.
+public struct FontTable {
+    public offset: usize;
+    public length: usize;
+}
+
+/// Table `tag` in a face's table directory, read on its own (`dir` starts at it): where it is in the file, or null.
+public fn findTable(dir: Slice<u8>, tag: [u8; 4]) -> FontTable? {
+    if (!valid(dir, 0, 12)) {
+        return null;
+    }
+    let count = u16at(dir, 4) as usize;
+    let key = tagValue(tag);
+    for (i in 0..count) {
+        let record = 12 + i * 16;
+        if (!valid(dir, record, 16)) {
+            return null;
+        }
+        if (u32at(dir, record) == key) {
+            return FontTable { offset: u32at(dir, record + 8) as usize, length: u32at(dir, record + 12) as usize };
+        }
+    }
+    return null;
+}
+
+/// Whether a face's table directory (read on its own) is a TrueType face, the outlines this reader draws (not CFF).
+public fn trueTypeFace(dir: Slice<u8>) -> bool {
+    if (!valid(dir, 0, 4)) {
+        return false;
+    }
+    let kind = u32at(dir, 0);
+    return kind == 0x00010000 || kind == 0x74727565;
 }
 
 // ---- metrics ---------------------------------------------------------------------------------------------------

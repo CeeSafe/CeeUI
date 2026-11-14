@@ -7,3 +7,7 @@ source = "path+../claywind"
 [[package]]
 name = "claywind_demo"
 source = "path+../claywind-demo"
+
+[[package]]
+name = "claywind_fonts"
+source = "path+../claywind-fonts"

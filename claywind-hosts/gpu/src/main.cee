@@ -13,6 +13,7 @@
 
 import claywind;
 import claywind_demo;
+import claywind_fonts;
 
 const START_WIDTH: u32 = 1024;
 const START_HEIGHT: u32 = 640;
@@ -78,40 +79,50 @@ fn loadFont(raster: borrow mut Raster, id: u32, dir: StringView, file: StringVie
     return bytes.length > 0 && raster.loadFont(id, bytes.view());
 }
 
-/// Room for the fallback fonts too: a CJK font is tens of megabytes.
-fn withFonts(capacity: RasterCapacity) -> RasterCapacity {
-    var c = capacity;
-    c.fontBytes = 67108864;
-    return c;
+/// A Backend that keeps each text run's bytes and font: to find the fonts a scene needs before it is drawn.
+struct TextRuns {
+    bytes: Vector<u8>;
+    ends: Vector<usize>;
+    fonts: Vector<u32>;
 }
 
-/// The first font id of the fallback chain.
-const FALLBACK: u32 = 16;
+impl TextRuns {
+    fn create() -> TextRuns => TextRuns {
+        bytes: Vector<u8>.create(),
+        ends: Vector<usize>.create(),
+        fonts: Vector<u32>.create(),
+    };
 
-/// Fonts for the characters the regular ones lack (CJK, Hangul, Greek, Cyrillic and more), tried in order: Arial
-/// Unicode on macOS, Microsoft YaHei then Malgun Gothic (Hangul) on Windows, Droid Sans Fallback on Linux, whichever
-/// are there. (Until the system's fonts are searched by what they cover.)
-fn loadFallbacks(raster: borrow mut Raster) {
-    let candidates: [StringView; 8] = [
-        "/System/Library/Fonts/Supplemental",
-        "Arial Unicode.ttf",
-        "C:/Windows/Fonts",
-        "msyh.ttc",
-        "C:/Windows/Fonts",
-        "malgun.ttf",
-        "/usr/share/fonts/truetype/droid",
-        "DroidSansFallbackFull.ttf",
-    ];
-    var ids = [0u32; 4];
-    var n: usize = 0;
-    for (k in 0usize..4) {
-        let id = FALLBACK + truncate<u32>(n);
-        if (loadFont(mut raster, id, candidates[k * 2], candidates[k * 2 + 1])) {
-            ids[n] = id;
-            n += 1;
+    /// Loads into `raster` the system fonts these runs need.
+    fn supplyTo(borrow this, fonts: borrow mut SystemFonts, raster: borrow mut Raster) {
+        var start: usize = 0;
+        for (k in 0..this.ends.length) {
+            let ignored = fonts.supply(raster, this.bytes.view()[start..this.ends[k]], this.fonts[k]);
+            start = this.ends[k];
         }
     }
-    raster.setFallbacks(ids[0..n]);
+}
+
+impl Backend for TextRuns {
+    fn draw(borrow mut this, command: Command, text: Slice<u8>) {
+        match (command) {
+            Command.Text(_, run) => {
+                for (b in text) {
+                    this.bytes.push(b)!;
+                }
+                this.ends.push(this.bytes.length)!;
+                this.fonts.push(run.fontId)!;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Room for fallback fonts from the system too: a CJK font is tens of megabytes.
+fn withFonts(capacity: RasterCapacity) -> RasterCapacity {
+    var c = capacity;
+    c.fontBytes = 100663296;
+    return c;
 }
 
 /// The regular, bold and monospaced faces, from CLAYWIND_FONT_DIR or the system's fonts: Arial and Courier New
@@ -164,7 +175,7 @@ fn ms(from: u64, to: u64) -> f64 => round<f64>(to - from) / 1000000.0;
 /// Safety: metal.c's init only reads its two sizes.
 fn main() -> i32 {
     var uiStorage = zeros(16777216);
-    var gpuStorage = zeros(134217728);
+    var gpuStorage = zeros(167772160);
     let uiMemory = FixedBufferAllocator.over(mut uiStorage.viewMut());
     let gpuMemory = FixedBufferAllocator.over(mut gpuStorage.viewMut());
     var ui = match (Ui.create(uiMemory, UiCapacity.of(4096))) {
@@ -184,7 +195,6 @@ fn main() -> i32 {
     if (!loadFonts(mut masks)) {
         return 1;
     }
-    loadFallbacks(mut masks);
     var gpu = GpuBackend.create(masks);
     let started = unsafe { cw_gpu_init(truncate<u32>(ATLAS), truncate<u32>(ATLAS), truncate<u32>(IMAGES)) };
     if (started != 0) {
@@ -258,6 +268,8 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
         }
     };
     var redrawn: f64 = 0.0;
+    // Fonts from the system for characters the loaded ones lack, found as the frames need them.
+    var systemFonts = SystemFonts.create();
     loop {
         loop {
             match (window.nextEvent()) {
@@ -284,6 +296,9 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
             }
         }
         window.setCursor(windowCursor(platform.cursor));
+        if (systemFonts.supplyFrame(mut gpu.raster, ui) > 0) {
+            damage.invalidate(); // the same commands draw other glyphs now (the next frame lays them out)
+        }
         let clear = Color.hex(pageBg(ui));
         let boxes = damage.plan(ui, clear, width as usize, height as usize, scale);
         if (boxes > 0) {
@@ -361,7 +376,7 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
     };
     let width: u32 = 2048;
     let height: u32 = points * 2;
-    var storage = zeros(335544320);
+    var storage = zeros(469762048);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
     var reference = match (Raster.create(memory, withFonts(RasterCapacity.of(width as usize, height as usize)))) {
         Ok(r) => r,
@@ -373,7 +388,8 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
     if (!loadFonts(mut reference) || !makeImages(mut reference) || !makeImages(mut gpu.raster)) {
         return 1;
     }
-    loadFallbacks(mut reference);
+    // Fonts from the system for what the regular ones lack, loaded into both renderers alike as text needs them.
+    var systemFonts = SystemFonts.create();
     reference.setPixelRatio(ratio);
     var pixels = Vector<u32>.withCapacity((width * height) as usize)!;
     for (i in 0..width * height) {
@@ -393,6 +409,9 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
             let none = [0u8; 1];
             var platform = ScriptPlatform.create(none[0..0], Dims { w: 1024.0, h: round<f32>(points) });
             settle(mut ui, mut app, gpu, mut platform, 28);
+            if (systemFonts.supplyFrame(mut reference, ui) + systemFonts.supplyFrame(mut gpu.raster, ui) > 0) {
+                settle(mut ui, mut app, gpu, mut platform, 1); // laid out again with the fonts it lacked
+            }
             clear = Color.hex(pageBg(ui));
             r0 = nanos();
             reference.begin(clear);
@@ -424,6 +443,10 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
                 recolor(mut gpu.raster);
                 gpu.imageChanged(2);
             }
+            var runs = TextRuns.create();
+            drawSynthetic(mut runs, scene);
+            runs.supplyTo(mut systemFonts, mut reference);
+            runs.supplyTo(mut systemFonts, mut gpu.raster);
             r0 = nanos();
             reference.begin(clear);
             drawSynthetic(mut reference, scene);
@@ -527,6 +550,16 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
     if (mismatched) {
         Console.writeLine("a partial frame differs from its whole frame");
     }
+    Console.write("system fonts: ");
+    Console.write(systemFonts.faceCount());
+    Console.write(" faces in the catalog (built in ");
+    Console.write(systemFonts.scanMs);
+    Console.write(" ms); loaded");
+    for (k in 0..systemFonts.loadedFileCount()) {
+        Console.write(" ");
+        Console.write(systemFonts.loadedFile(k));
+    }
+    Console.writeLine("");
     if (gpu.atlasFull) {
         Console.writeLine("the atlas filled up");
     }

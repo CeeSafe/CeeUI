@@ -7,3 +7,4 @@ tests = ["tests"]
 [dependencies]
 claywind = { path = "../claywind" }
 claywind_demo = { path = "../claywind-demo" }
+claywind_fonts = { path = "../claywind-fonts" }

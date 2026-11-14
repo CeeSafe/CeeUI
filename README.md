@@ -30,6 +30,9 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 - **TrueType fonts:** glyphs read and rendered by the toolkit itself, from single fonts and collections (.ttc). Text
   is shaped into glyphs that measuring and drawing share, and a character the run's font lacks comes from a
   fallback chain (`Raster.setFallbacks`), so CJK, Hangul, Greek and Cyrillic draw in a Latin run.
+- **System fonts as fallbacks:** `claywind-fonts` (hosted; `SystemFonts.supply`) finds, among the OS's own fonts, a
+  face for each character the loaded ones lack, and loads it into the fallback chain. Its catalog (each face's
+  coverage, weight and style, read from its cmap and OS/2 tables) is built the first time a character is missing.
 - **Unicode text segmentation:** lines break at UAX #14's opportunities (so CJK wraps between ideographs and a
   line breaks after a hyphen), and the caret, Backspace and line clamping work in UAX #29 grapheme clusters. Both
   pass Unicode 16's own test files.
@@ -47,6 +50,7 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 | Path | What it is |
 |---|---|
 | `claywind/` | The library: `layout_*`, `raster_*`, `font`, `image`, `controls`, `ui`, `style`, `transition`, `damage` and the rest, under `src/` |
+| `claywind-fonts/` | System font discovery for hosts (it reads files, as `claywind` cannot): fallback fonts for the characters a frame's fonts lack |
 | `claywind-demo/` | The demo app (the C version's `main.c`) and `ScriptPlatform`, a scripted input source for tests |
 | `claywind-hosts/desktop/` | The demo in a native window: AppKit, Win32 or X11, through CeeSafe's `Window` |
 | `claywind-hosts/headless/` | The demo rendered to files: screenshots, golden tests and benchmarks |
