@@ -134,3 +134,47 @@ to before. The browser page is byte-identical, and `test_client.py` passes.
 - **Released as ceesafec 0.12.0** (CeeSafe 8ba88b6, 046d24f, 7bed6e9, c23764e). ClayWind's tables are `static`
   now, and the `let x = TABLE;` lines are gone.
 
+## I. Gaps that block a GPUI-class ClayWind (2026-11-14, ceesafec 0.45.1)
+
+Found while planning ClayWind as a competitor to GPUI (the "ClayWind vs GPUI Roadmap" doc). These are missing
+features, not bugs. ClayWind keeps no C of its own, so each one has to land in CeeSafe's std and hosted runtime
+first. They are ranked by the roadmap phase they block.
+
+| # | Gap | Evidence | Blocks |
+|---|---|---|---|
+| I1 | **No GPU surface.** `Window` only presents CPU RGBA8 buffers (`present`, `presentChanged`). It cannot give out a Metal layer, a Vulkan surface, a D3D12 swap chain or the native window handle. | `lib/std/window.cee:2`, `:187`, `:200`; no Metal, Vulkan or Direct3D code under `lib/` or `runtime/` | P1 GPU renderer |
+| I2 | **No IME composition.** Typed text arrives one code point at a time (`WindowEvent.Text(u32)`). There is no preedit or marked-text event and no way to place the candidate window, so Chinese and Japanese input cannot work. | `lib/std/window.cee:128`; no `ime`, `composition` or `preedit` in `window.cee` or `ceesafe_rt_window.c` | P2 Text |
+| I3 | **One window only.** The std window is "one window that shows premultiplied RGBA8 frames". | `lib/std/window.cee:2` | P3 App runtime |
+| I4 | **No clipboard, menus, drag and drop or file dialogs** in `Window` or the hosted runtime. | `lib/std/window.cee`, the whole API (`open`, `nextEvent`, `present`, `presentChanged`, `size`, `scale`, `setCursor`, `setTitle`, `waitFrame`) | P3 App runtime |
+| I5 | **No system font access.** Nothing in std finds installed fonts or their files. ClayWind's hosts hard-code font directories per OS (`claywind-hosts/desktop/src/main.cee`). | no font API under `lib/`; the only font hit in `runtime/` is X11's cursor font | P2 Text (fallback chains) |
+| I6 | **No mobile or web target found.** I found no iOS, Android or wasm target in the docs or spec. The Rust-port blog says Windows and WebAssembly were not tried. | `docs/blog/porting-rust-to-ceesafe.md:151` | P4 Mobile, P5 web |
+| I7 | **No accessibility bridge** (NSAccessibility, UI Automation, AT-SPI and the mobile equivalents). | no accessibility code in `lib/` or `runtime/` | P5 Platform completeness |
+| I8 | **No Wayland.** The Linux window is X11 only. | `lib/std/window.cee:2` (ADR 0069) | P5 Platform completeness |
+
+**Already there (no gap):** a C ABI for embedding CeeSafe in a host program (ADR 0088: `ceesafe_exports.h`,
+`--emit obj`, `--emit rust`). The roadmap's Swift, Kotlin and Rust bindings can build on it. There are also
+threads with `Arc` and `Mutex` (`lib/std/sync.cee`) and async I/O (`lib/std/async.cee`, ADR 0031) for P3's runtime.
+
+**Decided (2026-11-14): the faster way.** CeeSafe does not grow a GPU API. ClayWind is allowed a small `extern "C"`
+GPU layer (Metal, then Vulkan and Direct3D 12), and this ends its "no C" rule. So I1 shrinks to what that layer needs
+from `Window`:
+- **Native handles:** the `NSView` on macOS (one that can host a `CAMetalLayer`), the `HWND` on Windows, and the X11
+  `Display*` and `Window` on Linux. Later, the `UIView` on iOS and the `ANativeWindow` on Android.
+- **A GPU-owned mode:** a way to open a window that the GPU layer draws into, so that `present` and `presentChanged`
+  do not fight it for the surface.
+- **Resize and scale events that arrive before the next frame,** so the swap chain can be resized in step.
+
+The other gaps (I2–I8) still need CeeSafe's runtime.
+
+**I1 done: ADR 0137, released as ceesafec 0.46.0** (CeeSafe `main` cbf54947, tag `v0.46.0`):
+- `Window.openWith(title, width, height, WindowSurface.External)` opens a window the runtime never paints. `present`
+  and `presentChanged` on it are `WindowError.Unsupported`.
+- `window.nativeHandle()` is a `WindowHandle`: `AppKit(nswindow, nsview)`, `Win32(hwnd, hinstance)`,
+  `Xlib(display, window)` or `Scripted`. The handles are `u64`s, which only `unsafe` code can turn back into pointers.
+- `WindowEvent.Resized` also arrives when only the scale changes, so a swap chain can be resized before the next
+  frame.
+- **Checked on macOS:** a Metal spike set a `CAMetalLayer` on the `NSView` and cleared it for 180 frames at scale 2.
+  The X11 path compiles under gcc 12. The Win32 path is compiled only by the release workflow so far.
+- **Still open:** live resizing on macOS. While the user drags the window's edge, AppKit's own loop holds the
+  program's loop, so no frames are drawn (ADR 0137 §4).
+
