@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// What a GPU backend needs from the software renderer: where a text run's characters go, and coverage masks of
-// glyphs and icons drawn exactly as `Raster` draws them, to keep in a texture atlas.
+// What a GPU backend needs from the software renderer: where a text run's characters go, coverage masks of glyphs
+// and icons drawn exactly as `Raster` draws them, to keep in a texture atlas, and the registered images' pixels.
 
 /// What `Raster.placeRun` placed: the ascent in pixels (the baseline's distance below the run's top) and how many
 /// characters it wrote.
@@ -16,7 +16,36 @@ public struct PlacedChar {
     public x: f32;
 }
 
+/// A registered image's size, from `Raster.imageSize`.
+public struct ImageSize {
+    public w: usize;
+    public h: usize;
+}
+
 impl<region r> Raster<r> {
+    /// The size of image `handle`, or null when no image is registered under it.
+    public fn imageSize(borrow this, handle: u32) -> ImageSize? {
+        match (this.imageIndex(handle)) {
+            Some(k) => {
+                let rec = this.images.get(k);
+                return ImageSize { w: rec.w, h: rec.h };
+            }
+            null => { return null; }
+        }
+    }
+
+    /// The pixels of image `handle`, to copy into a texture: row-major, `imageSize(handle).w` to a row, 0xAABBGGRR
+    /// with straight alpha (bytes R, G, B, A). Null when no image is registered under it.
+    public fn imagePixels(borrow this, handle: u32) -> Slice<u32>? {
+        match (this.imageIndex(handle)) {
+            Some(k) => {
+                let rec = this.images.get(k);
+                return borrow this.imagePool[rec.offset..rec.offset + rec.w * rec.h];
+            }
+            null => { return null; }
+        }
+    }
+
     /// Places the characters of `utf8` as `Command.Text` draws them at `fontSize` pixels per em: kerning, and
     /// `letterSpacing` spread over the run as `drawText` spreads it. Newlines and characters the font lacks are left
     /// out, and so are characters past `out`'s length. Null without a font.

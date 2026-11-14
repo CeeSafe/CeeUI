@@ -19,7 +19,7 @@ const START_HEIGHT: u32 = 640;
 
 extern "C" {
     @effects(sleep, alloc)
-    fn cw_gpu_init(atlasWidth: u32, atlasHeight: u32) -> i32;
+    fn cw_gpu_init(atlasWidth: u32, atlasHeight: u32, images: u32) -> i32;
     @effects(sleep, alloc)
     fn cw_gpu_attach(kind: i32, first: u64, second: u64) -> i32;
     @effects()
@@ -149,7 +149,7 @@ fn main() -> i32 {
         return 1;
     }
     var gpu = GpuBackend.create(masks);
-    let started = unsafe { cw_gpu_init(truncate<u32>(ATLAS), truncate<u32>(ATLAS)) };
+    let started = unsafe { cw_gpu_init(truncate<u32>(ATLAS), truncate<u32>(ATLAS), truncate<u32>(IMAGES)) };
     if (started != 0) {
         Console.write("gpu: no GPU device or pipeline (");
         Console.write(started);
@@ -312,7 +312,7 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
             return 1;
         }
     };
-    if (!loadFonts(mut reference)) {
+    if (!loadFonts(mut reference) || !makeImages(mut reference) || !makeImages(mut gpu.raster)) {
         return 1;
     }
     reference.setPixelRatio(ratio);
@@ -322,7 +322,7 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
     }
     Console.writeLine("tab        instances  skipped  raster ms  gpu ms  mean diff  >8 %     >32 %    max");
     var worst: f64 = 0.0;
-    for (tab in 0usize..NAV_COUNT + 1) {
+    for (tab in 0usize..NAV_COUNT + 2) {
         var clear = Color.rgb(2, 6, 23);
         var r0 = nanos();
         var r1 = r0;
@@ -353,21 +353,32 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
             let ignored = gpu.renderTo(width, height, clear, mut pixels.viewMut());
             r3 = nanos();
         } else {
-            // Clips under transforms, which the demo does not draw (drawScene).
+            // What the demo does not draw: clips under transforms (drawScene), images (drawImages).
+            let scene = tab - NAV_COUNT;
+            if (scene == 1) {
+                // The images once, so the GPU holds them; then image 2 changes in both renderers, and the frame
+                // compared must show its new pixels (GpuBackend.imageChanged).
+                gpu.begin(width, height, ratio);
+                drawSynthetic(mut gpu, scene);
+                let ignored = gpu.renderTo(width, height, clear, mut pixels.viewMut());
+                recolor(mut reference);
+                recolor(mut gpu.raster);
+                gpu.imageChanged(2);
+            }
             r0 = nanos();
             reference.begin(clear);
-            drawScene(mut reference);
+            drawSynthetic(mut reference, scene);
             reference.finish();
             r1 = nanos();
             gpu.begin(width, height, ratio);
-            drawScene(mut gpu);
+            drawSynthetic(mut gpu, scene);
             if (gpu.renderTo(width, height, clear, mut pixels.viewMut()) != 0) {
                 Console.writeErrorLine("gpu: the offscreen frame failed");
                 return 1;
             }
             r2 = nanos();
             gpu.begin(width, height, ratio);
-            drawScene(mut gpu);
+            drawSynthetic(mut gpu, scene);
             let ignored = gpu.renderTo(width, height, clear, mut pixels.viewMut());
             r3 = nanos();
         }
@@ -375,6 +386,9 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
     }
     if (gpu.atlasFull) {
         Console.writeLine("the atlas filled up");
+    }
+    if (gpu.imagesFull) {
+        Console.writeLine("the image atlas filled up");
     }
     return 0;
 }
@@ -566,6 +580,99 @@ fn drawScene<B: Backend>(b: borrow mut B) {
     b.draw(Command.TransformEnd, empty);
 }
 
+fn drawSynthetic<B: Backend>(b: borrow mut B, scene: usize) {
+    if (scene == 0) {
+        drawScene(mut b);
+    } else {
+        drawImages(mut b);
+    }
+}
+
+/// A straight-alpha colour as Raster stores an image's pixel: 0xAABBGGRR.
+fn rgba(r: u32, g: u32, b: u32, a: u32) -> u32 => r | (g << 8) | (b << 16) | (a << 24);
+
+/// The images drawImages draws, made rather than decoded: 1, 48 × 32 and opaque (two ramps and a disc, sharp-edged
+/// so magnification shows); 2, a 4 × 4 checker of opaque red and half-transparent blue; 3, 160 × 160, stripes in a
+/// disc whose alpha falls to 0 at its edge.
+fn makeImages(raster: borrow mut Raster) -> bool {
+    if (!raster.addImage(1, 48, 32) || !raster.addImage(2, 4, 4) || !raster.addImage(3, 160, 160)) {
+        Console.writeErrorLine("gpu: the test images do not fit");
+        return false;
+    }
+    for (y in 0u32..32) {
+        for (x in 0u32..48) {
+            let dx = round<f32>(x) - 24.0;
+            let dy = round<f32>(y) - 16.0;
+            let p = if (dx * dx + dy * dy < 100.0) rgba(240, 240, 240, 255) else rgba(
+                x * 255 / 47,
+                y * 255 / 31,
+                128,
+                255,
+            );
+            raster.setImagePixel(1, x as usize, y as usize, p);
+        }
+    }
+    for (y in 0u32..4) {
+        for (x in 0u32..4) {
+            let p = if ((x + y) % 2 == 0) rgba(239, 68, 68, 255) else rgba(59, 130, 246, 128);
+            raster.setImagePixel(2, x as usize, y as usize, p);
+        }
+    }
+    for (y in 0u32..160) {
+        for (x in 0u32..160) {
+            let dx = round<f32>(x) - 80.0;
+            let dy = round<f32>(y) - 80.0;
+            let fade = (1.0 - (dx * dx + dy * dy).sqrt() / 80.0).max(0.0);
+            let a = truncate<u32>(fade * 255.0);
+            let p = if ((x / 10) % 2 == 0) rgba(16, 185, 129, a) else rgba(250, 204, 21, a);
+            raster.setImagePixel(3, x as usize, y as usize, p);
+        }
+    }
+    return true;
+}
+
+/// Image 2's checker in new colours: opaque yellow and half-transparent green.
+fn recolor(raster: borrow mut Raster) {
+    for (y in 0u32..4) {
+        for (x in 0u32..4) {
+            let p = if ((x + y) % 2 == 0) rgba(250, 204, 21, 255) else rgba(16, 185, 129, 128);
+            raster.setImagePixel(2, x as usize, y as usize, p);
+        }
+    }
+}
+
+fn picture<B: Backend>(b: borrow mut B, x: f32, y: f32, w: f32, h: f32, tint: u32, radius: f32, handle: u32) {
+    let none = [0u8; 1];
+    b.draw(
+        Command.Picture(Rect { x: x, y: y, w: w, h: h }, Color.hex(tint), Corners.all(radius), handle),
+        none[0..0],
+    );
+}
+
+/// Images, which the demo never draws: stretched, magnified, minified, rounded, tinted, at half opacity, rotated,
+/// skewed and clipped to a rounded box. In points, 1024 × 640.
+fn drawImages<B: Backend>(b: borrow mut B) {
+    let none = [0u8; 1];
+    let empty = none[0..0];
+    picture(mut b, 40.0, 40.0, 240.0, 160.0, 0x00000000, 0.0, 1);
+    picture(mut b, 300.0, 40.0, 240.0, 160.0, 0x00000000, 24.0, 1);
+    picture(mut b, 560.0, 40.0, 160.0, 160.0, 0x00000000, 0.0, 2);
+    picture(mut b, 740.0, 40.0, 240.0, 160.0, 0x38bdf8ff, 12.0, 1);
+    picture(mut b, 40.0, 240.0, 200.0, 200.0, 0xffffff80, 0.0, 3);
+    picture(mut b, 260.0, 240.0, 60.0, 60.0, 0x00000000, 0.0, 3);
+    picture(mut b, 340.0, 240.0, 200.0, 130.0, 0xf472b680, 30.0, 1);
+    b.draw(Command.TransformStart(Rect.zero(), transform(20.0, 1.0, 0.0, 680.0, 330.0)), empty);
+    picture(mut b, 580.0, 260.0, 200.0, 140.0, 0x00000000, 20.0, 1);
+    b.draw(Command.TransformEnd, empty);
+    b.draw(Command.ClipStart(Rect { x: 40.0, y: 470.0, w: 300.0, h: 140.0 }, Corners.all(40.0), true, true), empty);
+    picture(mut b, 20.0, 440.0, 340.0, 200.0, 0x00000000, 0.0, 3);
+    b.draw(Command.ClipEnd, empty);
+    b.draw(Command.TransformStart(Rect.zero(), transform(0.0, 0.7, 10.0, 510.0, 535.0)), empty);
+    picture(mut b, 420.0, 460.0, 180.0, 150.0, 0x00000000, 16.0, 2);
+    b.draw(Command.TransformEnd, empty);
+    label(mut b, 780.0, 480.0, "images");
+}
+
 fn tabName(tab: usize) -> StringView => match (tab) {
     0 => "dashboard",
     1 => "controls ",
@@ -573,7 +680,8 @@ fn tabName(tab: usize) -> StringView => match (tab) {
     3 => "projects ",
     4 => "activity ",
     5 => "settings ",
-    _ => "clips    ",
+    6 => "clips    ",
+    _ => "images   ",
 };
 
 /// The largest difference between two pixels' channels.

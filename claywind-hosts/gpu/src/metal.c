@@ -42,9 +42,10 @@ typedef struct {
 } cw_clear;
 
 /* The calls gpu.cee makes. */
-int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height);
+int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height, uint32_t images);
 int32_t cw_gpu_attach(int32_t kind, uint64_t nswindow, uint64_t nsview);
 void cw_gpu_atlas(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1);
+void cw_gpu_image(const uint32_t *pixels, uint32_t stride, uint32_t w, uint32_t h, uint32_t u, uint32_t v);
 int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
                          const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r, float g,
                          float b);
@@ -144,9 +145,38 @@ static const char *const cw_shader_parts[] = {
     "    float4 c = mix(a, b, f);\n"
     "    return float4(c.rgb * c.a, c.a);\n"
     "}\n"
+    /* raster_fill.cee's sampleImage: four texels, premultiplied, mixed bilinearly with the edges clamped, then
+       ThorVG's tint (raster_effects.cee's tintPixel) and the opacity. params: the image's place in the image atlas
+       (u, v) and its size; c0: the tint; extra.x: tinted; extra.y: the opacity. */
+    "static float4 imageTexel(texture2d<float> images, float4 place, float2 c) {\n"
+    "    float4 p = images.read(uint2(clamp(c, float2(0.0), place.zw - 1.0) + place.xy));\n"
+    "    return float4(p.rgb * p.a, p.a);\n"
+    "}\n"
+    "static uint lerp8(uint s, uint d, uint a) {\n"
+    "    int delta = (int(s) - int(d)) * int(a);\n"
+    "    int st = delta >= 0 ? delta / 256 : -((-delta + 255) / 256);\n"
+    "    return uint(clamp(int(d) + st, 0, 255));\n"
+    "}\n"
+    "static float4 imageColor(const device Inst &I, texture2d<float> images, float2 q) {\n"
+    "    float2 uv = (q - I.rect.xy) / I.rect.zw * I.params.zw - 0.5;\n"
+    "    float2 f0 = floor(uv);\n"
+    "    float2 f = uv - f0;\n"
+    "    float4 top = mix(imageTexel(images, I.params, f0), imageTexel(images, I.params, f0 + float2(1.0, 0.0)), f.x);\n"
+    "    float4 bottom = mix(imageTexel(images, I.params, f0 + float2(0.0, 1.0)), imageTexel(images, I.params, f0 + 1.0), f.x);\n"
+    "    float4 c = mix(top, bottom, f.y);\n"
+    "    if (I.extra.x > 0.0 && c.a > 0.0) {\n"
+    "        uint4 p = uint4(clamp(c * 255.0 + 0.5, 0.0, 255.0));\n"
+    "        uint luma = (p.r * 54u + p.g * 182u + p.b * 19u) >> 8;\n"
+    "        uint3 w = uint3(rint(I.c0.rgb * 255.0));\n"
+    "        uint3 t = uint3(lerp8(w.r, 0u, luma), lerp8(w.g, 0u, luma), lerp8(w.b, 0u, luma));\n"
+    "        uint4 m = uint4(lerp8(t.r, p.r, 254u), lerp8(t.g, p.g, 254u), lerp8(t.b, p.b, 254u), lerp8(255u, p.a, 254u));\n"
+    "        c = float4((m * (p.a + 1u)) >> 8) / 255.0;\n"
+    "    }\n"
+    "    return c * I.extra.y;\n"
+    "}\n"
     "fragment float4 fmain(VOut in [[stage_in]], const device Inst *insts [[buffer(0)]],\n"
     "                      constant float4 &target [[buffer(1)]], const device ClipShape *clips [[buffer(2)]],\n"
-    "                      texture2d<float> atlas [[texture(0)]]) {\n"
+    "                      texture2d<float> atlas [[texture(0)]], texture2d<float> images [[texture(2)]]) {\n"
     "    const device Inst &I = insts[in.inst];\n"
     "    float2 p = in.position.xy + target.xy;\n"
     "    if (p.x < I.clip.x || p.y < I.clip.y || p.x >= I.clip.z || p.y >= I.clip.w) { discard_fragment(); }\n"
@@ -177,6 +207,8 @@ static const char *const cw_shader_parts[] = {
     "        float s = I.params.x;\n"
     "        float a = s > 0.0 ? 0.5 * (1.0 - erfApprox(d / (s * 1.41421356))) : cover(d * aa);\n"
     "        color = I.c0 * a;\n"
+    "    } else if (kind == 7) {\n"
+    "        color = imageColor(I, images, q) * cover(sdRR(q, I.rect, I.radii) * aa);\n"
     "    } else {\n"
     "        float t = kind == 3 ? dot(q - I.params.xy, I.params.zw) / I.extra.z\n"
     "                            : length(q - I.params.xy) / I.params.z;\n"
@@ -375,6 +407,7 @@ static struct {
     id composite_bgra, composite_rgba; /* layer composites, framebuffer fetch */
     id box;                            /* blur passes, RGBA8 */
     id atlas;
+    id images; /* the image atlas: RGBA8, straight alpha */
     id layer, view, window;
     id offscreen;
     uint32_t offscreen_width, offscreen_height;
@@ -477,7 +510,7 @@ static id compile(const char *source, int fast) {
     return library;
 }
 
-int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height) {
+int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height, uint32_t images) {
     if (!load()) {
         return 1;
     }
@@ -512,10 +545,16 @@ int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height) {
         (unsigned long)atlas_width, (unsigned long)atlas_height, 0);
     SEND(void, unsigned long)(descriptor, cw.sel("setUsage:"), 1ul); /* ShaderRead */
     m.atlas = SEND(id, id)(m.device, cw.sel("newTextureWithDescriptor:"), descriptor);
+    /* The image atlas: RGBA8Unorm (70), read by the fragment shader. */
+    descriptor = SEND(id, unsigned long, unsigned long, unsigned long, signed char)(
+        cw.cls("MTLTextureDescriptor"), cw.sel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:"), 70ul,
+        (unsigned long)images, (unsigned long)images, 0);
+    SEND(void, unsigned long)(descriptor, cw.sel("setUsage:"), 1ul); /* ShaderRead */
+    m.images = SEND(id, id)(m.device, cw.sel("newTextureWithDescriptor:"), descriptor);
     cw.pool_pop(pool);
     return m.shapes_bgra != NULL && m.shapes_rgba != NULL && m.fills_bgra != NULL && m.fills_rgba != NULL &&
                    m.composite_bgra != NULL && m.composite_rgba != NULL &&
-                   m.box != NULL && m.atlas != NULL
+                   m.box != NULL && m.atlas != NULL && m.images != NULL
                ? 0
                : 4;
 }
@@ -568,6 +607,18 @@ void cw_gpu_atlas(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t 
     SEND(void, cw_region, unsigned long, const void *, unsigned long)(
         m.atlas, cw.sel("replaceRegion:mipmapLevel:withBytes:bytesPerRow:"), region, 0ul,
         pixels + (size_t)y0 * stride + x0, (unsigned long)stride);
+}
+
+/* Copies a `w` × `h` image (rows `stride` pixels apart, RGBA8) to (u, v) in the image atlas. */
+void cw_gpu_image(const uint32_t *pixels, uint32_t stride, uint32_t w, uint32_t h, uint32_t u, uint32_t v) {
+    if (m.images == NULL || w == 0 || h == 0) {
+        return;
+    }
+    cw_gpu_finish(); /* the last frame may still read the texture */
+    cw_region region = {{u, v, 0}, {w, h, 1}};
+    SEND(void, cw_region, unsigned long, const void *, unsigned long)(
+        m.images, cw.sel("replaceRegion:mipmapLevel:withBytes:bytesPerRow:"), region, 0ul, pixels,
+        (unsigned long)stride * 4ul);
 }
 
 /* An RGBA8 texture of this size from the pool, for a layer or a blur pass. */
@@ -650,6 +701,7 @@ static void draw_target(id encoder, id shapes, id fills, id composite, id buffer
     SEND(void, const void *, unsigned long, unsigned long)(encoder, cw.sel("setFragmentBytes:length:atIndex:"), box,
                                                            4 * sizeof(float), 1ul);
     SEND(void, id, unsigned long)(encoder, cw.sel("setFragmentTexture:atIndex:"), m.atlas, 0ul);
+    SEND(void, id, unsigned long)(encoder, cw.sel("setFragmentTexture:atIndex:"), m.images, 2ul);
     uint32_t k = first, end = first + count;
     while (k < end) {
         int kind = pipeline_class(data + (size_t)k * CW_FLOATS);

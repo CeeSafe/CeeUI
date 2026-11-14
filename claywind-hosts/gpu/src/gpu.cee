@@ -21,6 +21,8 @@ const RECORD: usize = 8;
 public const ATLAS: usize = 2048;
 /// The largest mask cell `Raster` draws (its capacity).
 public const CELL: usize = 512;
+/// The image atlas's side in pixels (RGBA8): every image a frame draws must fit in it together.
+public const IMAGES: usize = 2048;
 
 // Offsets of the instance's float4s (metal.c's `struct Inst`).
 const RECT: usize = 0;
@@ -44,6 +46,7 @@ const KIND_LINEAR: f32 = 3.0;
 const KIND_RADIAL: f32 = 4.0;
 const KIND_MASK: f32 = 5.0;
 const KIND_LAYER: f32 = 6.0;
+const KIND_IMAGE: f32 = 7.0;
 
 // What a layer does to its group.
 const LAYER_OPACITY: u32 = 0;
@@ -53,6 +56,8 @@ const LAYER_FILTER: u32 = 2;
 extern "C" {
     @effects(sleep)
     fn cw_gpu_atlas(pixels: *u8, stride: u32, x0: u32, y0: u32, x1: u32, y1: u32);
+    @effects(sleep)
+    fn cw_gpu_image(pixels: *u32, stride: u32, w: u32, h: u32, u: u32, v: u32);
     @effects(sleep)
     fn cw_gpu_present(
         frame: *f32,
@@ -158,6 +163,14 @@ struct MaskEntry {
     oy: i32;
 }
 
+/// An image in the image atlas: its place (u, v) and size.
+struct ImageEntry {
+    u: u32;
+    v: u32;
+    w: u32;
+    h: u32;
+}
+
 /// ClayWind's commands as Metal instances, with the `Raster` that gives text metrics and rasterizes masks.
 public struct GpuBackend<region r> {
     public raster: Raster<r>;
@@ -189,7 +202,14 @@ public struct GpuBackend<region r> {
     dirtyY1: usize;
     placed: Vector<PlacedChar>;
     scratch: Vector<u8>;
-    /// Commands this spike does not draw (pictures, custom draws), last frame.
+    /// The images in the image atlas, by handle, packed on shelves as masks are.
+    images: HashMap<u32, ImageEntry>;
+    imageX: usize;
+    imageY: usize;
+    imageH: usize;
+    /// Whether an image did not fit the image atlas.
+    public imagesFull: bool;
+    /// Commands this backend does not draw (custom draws, images that did not fit), last frame.
     public unsupported: u32;
     /// What this backend draws approximately, last frame (nothing at present).
     public approximated: u32;
@@ -316,6 +336,11 @@ impl<region r> GpuBackend<r> {
             dirtyY1: 0,
             placed: placed,
             scratch: zeroBytes(CELL * CELL),
+            images: HashMap<u32, ImageEntry>.create(),
+            imageX: 0,
+            imageY: 0,
+            imageH: 0,
+            imagesFull: false,
             unsupported: 0,
             approximated: 0,
             atlasFull: false,
@@ -1101,6 +1126,108 @@ impl<region r> GpuBackend<r> {
         return entry;
     }
 
+    /// raster_backend.cee's drawImage: image `handle` stretched over the box (bilinear, edges clamped), tinted and
+    /// at the tint's opacity, cut to the rounded box. Nothing when no image is registered under the handle.
+    fn picture(borrow mut this, area: Rect, tint: Color, radius: Corners, handle: u32) {
+        if (area.w <= 0.0 || area.h <= 0.0) {
+            return;
+        }
+        let e = match (this.imageEntry(handle)) {
+            Some(e) => e,
+            null => { return; }
+        };
+        var v = this.start(KIND_IMAGE);
+        putRect(mut v, RECT, this.px(area));
+        putCorners(mut v, RADII, scaled(fit(area.w, area.h, radius), this.ratio));
+        v[PARAMS] = round<f32>(e.u);
+        v[PARAMS + 1] = round<f32>(e.v);
+        v[PARAMS + 2] = round<f32>(e.w);
+        v[PARAMS + 3] = round<f32>(e.h);
+        putStraight(mut v, C0, tint);
+        // drawImage's paint: tinted unless the tint is transparent black or white; its alpha is an opacity.
+        let tinted = (tint.r != 0 || tint.g != 0 || tint.b != 0 || tint.a != 0) &&
+            !(tint.r == 255 && tint.g == 255 && tint.b == 255);
+        v[EXTRA] = if (tinted) 1.0 else 0.0;
+        v[EXTRA + 1] = if (tint.a > 0 && tint.a < 255) round<f32>(tint.a as u32) / 255.0 else 1.0;
+        this.emit(v);
+    }
+
+    /// Image `handle`'s place in the image atlas, packing and sending its pixels the first time it is drawn.
+    fn imageEntry(borrow mut this, handle: u32) -> ImageEntry? {
+        match (this.images.get(handle)) {
+            Some(e) => { return ImageEntry { u: e.u, v: e.v, w: e.w, h: e.h }; }
+            null => {}
+        }
+        let size = match (this.raster.imageSize(handle)) {
+            Some(s) => s,
+            null => { return null; }
+        };
+        if (size.w == 0 || size.h == 0) {
+            return null;
+        }
+        if (this.imageX + size.w > IMAGES) {
+            this.imageX = 0;
+            this.imageY += this.imageH;
+            this.imageH = 0;
+        }
+        if (size.w > IMAGES || this.imageY + size.h > IMAGES) {
+            this.imagesFull = true;
+            this.unsupported += 1;
+            return null;
+        }
+        let entry = ImageEntry {
+            u: truncate<u32>(this.imageX),
+            v: truncate<u32>(this.imageY),
+            w: truncate<u32>(size.w),
+            h: truncate<u32>(size.h),
+        };
+        this.imageX += size.w;
+        this.imageH = this.imageH.max(size.h);
+        let stored = this.images.put(handle, entry)!;
+        this.sendImage(handle, entry);
+        return entry;
+    }
+
+    /// Copies image `handle`'s pixels to its place in the GPU's image atlas.
+    /// Safety: cw_gpu_image reads `h` rows of `w` pixels, `w` apart, from the image's pixels during the call only.
+    fn sendImage(borrow this, handle: u32, e: ImageEntry) {
+        match (this.raster.imagePixels(handle)) {
+            Some(pixels) => {
+                if (pixels.length >= (e.w as usize) * (e.h as usize)) {
+                    unsafe {
+                        cw_gpu_image(pixels.ptr, e.w, e.w, e.h, e.u, e.v);
+                    }
+                }
+            }
+            null => {}
+        }
+    }
+
+    /// Image `handle`'s pixels changed (through `raster.imagePixelsMut` or `setImagePixel`): the GPU's copy is
+    /// replaced. An image of a new size is placed again when next drawn; its old place is not reused.
+    public fn imageChanged(borrow mut this, handle: u32) {
+        var entry: ImageEntry? = null;
+        match (this.images.get(handle)) {
+            Some(e) => { entry = ImageEntry { u: e.u, v: e.v, w: e.w, h: e.h }; }
+            null => {}
+        }
+        match (entry) {
+            Some(e) => {
+                match (this.raster.imageSize(handle)) {
+                    Some(size) => {
+                        if (size.w == (e.w as usize) && size.h == (e.h as usize)) {
+                            this.sendImage(handle, e);
+                            return;
+                        }
+                    }
+                    null => {}
+                }
+                let gone = this.images.remove(handle);
+            }
+            null => {}
+        }
+    }
+
     /// tvgb_scissorStart: a plain box clips to its rounded pixel edges; a rounded one keeps its shape.
     fn clipStart(borrow mut this, area: Rect, radius: Corners) {
         let parent = this.clips[this.clips.length - 1];
@@ -1434,7 +1561,7 @@ impl<region r> Backend for GpuBackend<r> {
                     let gone = this.transforms.pop();
                 }
             }
-            Command.Picture(_, _, _, _) => { this.unsupported += 1; }
+            Command.Picture(area, tint, radius, handle) => { this.picture(area, tint, radius, handle); }
             Command.CustomDraw(_, _, _, _) => { this.unsupported += 1; }
         }
     }

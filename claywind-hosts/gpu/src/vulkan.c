@@ -52,9 +52,10 @@ static void trace(const char *what, long long value) {
 #endif
 
 /* The calls gpu.cee and main.cee make (metal.c's). */
-int32_t CW_VK(init)(uint32_t atlas_width, uint32_t atlas_height);
+int32_t CW_VK(init)(uint32_t atlas_width, uint32_t atlas_height, uint32_t images);
 int32_t CW_VK(attach)(int32_t kind, uint64_t first, uint64_t second);
 void CW_VK(atlas)(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1);
+void CW_VK(image)(const uint32_t *pixels, uint32_t stride, uint32_t w, uint32_t h, uint32_t u, uint32_t v);
 int32_t CW_VK(present)(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
                        const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r, float g,
                        float b);
@@ -223,7 +224,14 @@ static struct {
     int atlas_ready; /* in SHADER_READ_ONLY_OPTIMAL */
     int atlas_dirty;
     uint32_t ax0, ay0, ax1, ay1;
-    cw_buffer staging, instances, clips, readback;
+    /* The image atlas (RGBA8, straight alpha), uploaded from its own staging buffer as the coverage atlas is. */
+    VkImage images;
+    VkDeviceMemory images_memory;
+    VkImageView images_view;
+    uint32_t images_side;
+    int images_ready, images_dirty;
+    uint32_t ix0, iy0, ix1, iy1;
+    cw_buffer staging, image_staging, instances, clips, readback;
     cw_texture pool[CW_POOL];
     cw_texture offscreen;
     VkSurfaceKHR surface;
@@ -653,7 +661,7 @@ static int create_device(void) {
     return 1;
 }
 
-int32_t CW_VK(init)(uint32_t atlas_width, uint32_t atlas_height) {
+int32_t CW_VK(init)(uint32_t atlas_width, uint32_t atlas_height, uint32_t images) {
     if (g.ready) {
         return 0;
     }
@@ -680,16 +688,17 @@ int32_t CW_VK(init)(uint32_t atlas_width, uint32_t atlas_height) {
         vkCreateQueryPool(g.device, &qinfo, NULL, &g.queries);
     }
     /* Set 0: the instances and the atlas; set 1: a layer (or a blur's source); set 2: the target, as input. */
-    VkDescriptorSetLayoutBinding set0[3] = {
+    VkDescriptorSetLayoutBinding set0[4] = {
         {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
         {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
+        {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
     };
     VkDescriptorSetLayoutBinding set1 = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
                                          NULL};
     VkDescriptorSetLayoutBinding set2 = {0, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL};
     VkDescriptorSetLayoutCreateInfo l0 = {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 3, .pBindings = set0};
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 4, .pBindings = set0};
     VkDescriptorSetLayoutCreateInfo l1 = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 1, .pBindings = &set1};
     VkDescriptorSetLayoutCreateInfo l2 = {
@@ -755,6 +764,12 @@ int32_t CW_VK(init)(uint32_t atlas_width, uint32_t atlas_height) {
     }
     memset(g.staging.mapped, 0, (size_t)atlas_width * atlas_height);
     g.atlas_dirty = 1; /* the first frame clears it to zero and makes it readable */
+    g.images_side = images;
+    if (!make_image(images, images, VK_FORMAT_R8G8B8A8_UNORM,
+                    VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, &g.images, &g.images_memory,
+                    &g.images_view)) {
+        return 4;
+    }
     g.ax0 = 0;
     g.ay0 = 0;
     g.ax1 = atlas_width;
@@ -943,6 +958,36 @@ void CW_VK(atlas)(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t 
         g.ay1 = g.ay1 > y1 ? g.ay1 : y1;
     }
     g.atlas_dirty = 1;
+}
+
+/* Copies a `w` × `h` image (rows `stride` pixels apart, RGBA8) to the image staging buffer at (u, v); the next frame
+   uploads it. */
+void CW_VK(image)(const uint32_t *pixels, uint32_t stride, uint32_t w, uint32_t h, uint32_t u, uint32_t v) {
+    if (!g.ready || w == 0 || h == 0 || u + w > g.images_side || v + h > g.images_side) {
+        return;
+    }
+    CW_VK(finish)(); /* the last frame may still copy from the staging buffer */
+    if (g.image_staging.buffer == VK_NULL_HANDLE &&
+        !ensure_buffer(&g.image_staging, (VkDeviceSize)g.images_side * g.images_side * 4,
+                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT)) {
+        return;
+    }
+    uint32_t *staging = (uint32_t *)g.image_staging.mapped;
+    for (uint32_t y = 0; y < h; y++) {
+        memcpy(staging + (size_t)(v + y) * g.images_side + u, pixels + (size_t)y * stride, (size_t)w * 4);
+    }
+    if (!g.images_dirty) {
+        g.ix0 = u;
+        g.iy0 = v;
+        g.ix1 = u + w;
+        g.iy1 = v + h;
+    } else {
+        g.ix0 = g.ix0 < u ? g.ix0 : u;
+        g.iy0 = g.iy0 < v ? g.iy0 : v;
+        g.ix1 = g.ix1 > u + w ? g.ix1 : u + w;
+        g.iy1 = g.iy1 > v + h ? g.iy1 : v + h;
+    }
+    g.images_dirty = 1;
 }
 
 static void image_barrier(VkImage image, VkImageLayout from, VkImageLayout to, VkAccessFlags src_access,
@@ -1135,11 +1180,35 @@ static int record(VkRenderPass pass, VkFramebuffer target, VkImageView target_vi
         g.atlas_ready = 1;
         g.atlas_dirty = 0;
     }
+    if (g.images_dirty) {
+        image_barrier(g.images, g.images_ready ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
+                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkBufferImageCopy copy = {.bufferOffset = ((VkDeviceSize)g.iy0 * g.images_side + g.ix0) * 4,
+                                  .bufferRowLength = g.images_side,
+                                  .bufferImageHeight = 0,
+                                  .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                                  .imageOffset = {(int32_t)g.ix0, (int32_t)g.iy0, 0},
+                                  .imageExtent = {g.ix1 - g.ix0, g.iy1 - g.iy0, 1}};
+        vkCmdCopyBufferToImage(g.cmd, g.image_staging.buffer, g.images, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                               &copy);
+        image_barrier(g.images, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        g.images_ready = 1;
+        g.images_dirty = 0;
+    } else if (!g.images_ready) { /* no image yet: readable, its contents undefined and never read */
+        image_barrier(g.images, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0,
+                      VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        g.images_ready = 1;
+    }
     VkDescriptorSet set0 = allocate_set(0);
     VkDescriptorBufferInfo buffer = {g.instances.buffer, 0, VK_WHOLE_SIZE};
     VkDescriptorBufferInfo shapes = {g.clips.buffer, 0, VK_WHOLE_SIZE};
     VkDescriptorImageInfo atlas = {g.linear, g.atlas_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet writes[3] = {
+    VkDescriptorImageInfo images = {g.nearest, g.images_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet writes[4] = {
         {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
          .dstSet = set0,
          .dstBinding = 0,
@@ -1158,8 +1227,14 @@ static int record(VkRenderPass pass, VkFramebuffer target, VkImageView target_vi
          .descriptorCount = 1,
          .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
          .pBufferInfo = &shapes},
+        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         .dstSet = set0,
+         .dstBinding = 3,
+         .descriptorCount = 1,
+         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+         .pImageInfo = &images},
     };
-    vkUpdateDescriptorSets(g.device, 3, writes, 0, NULL);
+    vkUpdateDescriptorSets(g.device, 4, writes, 0, NULL);
     cw_texture *textures[CW_MAX_LAYERS];
     uint32_t n = layer_count < CW_MAX_LAYERS ? layer_count : CW_MAX_LAYERS;
     for (uint32_t l = 0; l < n; l++) {

@@ -28,9 +28,10 @@
 #include <windows.h>
 
 /* The calls gpu.cee and main.cee make. */
-int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height);
+int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height, uint32_t images);
 int32_t cw_gpu_attach(int32_t kind, uint64_t first, uint64_t second);
 void cw_gpu_atlas(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1);
+void cw_gpu_image(const uint32_t *pixels, uint32_t stride, uint32_t w, uint32_t h, uint32_t u, uint32_t v);
 int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
                        const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count,
                        uint32_t width, uint32_t height, float r, float g, float b);
@@ -44,9 +45,10 @@ double cw_gpu_gpu_ms(void);
 void cw_gpu_finish(void);
 
 /* vulkan.c's, under their Windows names. */
-int32_t cw_vk_init(uint32_t atlas_width, uint32_t atlas_height);
+int32_t cw_vk_init(uint32_t atlas_width, uint32_t atlas_height, uint32_t images);
 int32_t cw_vk_attach(int32_t kind, uint64_t first, uint64_t second);
 void cw_vk_atlas(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1);
+void cw_vk_image(const uint32_t *pixels, uint32_t stride, uint32_t w, uint32_t h, uint32_t u, uint32_t v);
 int32_t cw_vk_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
                       const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count,
                       uint32_t width, uint32_t height, float r, float g, float b);
@@ -80,6 +82,7 @@ static const char *const cw_hlsl_parts[] = {
     "Texture2D<float> atlas : register(t2);\n"
     "Texture2D<float4> layerTex : register(t3);\n"
     "Texture2D<float4> dstTex : register(t4);\n"
+    "Texture2D<float4> images : register(t5);\n"
     "SamplerState lin : register(s0);\n"
     /* target: the target's origin in the frame (xy) and size (zw); box: a blur pass's axis, radius, width, height. */
     /* first: the draw's first instance, as SV_InstanceID counts from 0 whatever the draw's start instance */
@@ -150,6 +153,35 @@ static const char *const cw_hlsl_parts[] = {
     "    float4 c = lerp(a, b, f);\n"
     "    return float4(c.rgb * c.a, c.a);\n"
     "}\n"
+    /* raster_fill.cee's sampleImage: four texels, premultiplied, mixed bilinearly with the edges clamped, then
+       ThorVG's tint (raster_effects.cee's tintPixel) and the opacity. params: the image's place in the image atlas
+       (u, v) and its size; c0: the tint; extra.x: tinted; extra.y: the opacity. */
+    "float4 imageTexel(float4 place, float2 c) {\n"
+    "    float4 p = images.Load(int3(int2(clamp(c, float2(0.0, 0.0), place.zw - 1.0) + place.xy), 0));\n"
+    "    return float4(p.rgb * p.a, p.a);\n"
+    "}\n"
+    "uint lerp8(uint s, uint d, uint a) {\n"
+    "    int delta = (int(s) - int(d)) * int(a);\n"
+    "    int st = delta >= 0 ? delta / 256 : -((-delta + 255) / 256);\n"
+    "    return uint(clamp(int(d) + st, 0, 255));\n"
+    "}\n"
+    "float4 imageColor(Inst I, float2 q) {\n"
+    "    float2 uv = (q - I.rect.xy) / I.rect.zw * I.params.zw - 0.5;\n"
+    "    float2 f0 = floor(uv);\n"
+    "    float2 f = uv - f0;\n"
+    "    float4 top = lerp(imageTexel(I.params, f0), imageTexel(I.params, f0 + float2(1.0, 0.0)), f.x);\n"
+    "    float4 bottom = lerp(imageTexel(I.params, f0 + float2(0.0, 1.0)), imageTexel(I.params, f0 + 1.0), f.x);\n"
+    "    float4 c = lerp(top, bottom, f.y);\n"
+    "    if (I.extra.x > 0.0 && c.a > 0.0) {\n"
+    "        uint4 p = (uint4)clamp(c * 255.0 + 0.5, 0.0, 255.0);\n"
+    "        uint luma = (p.r * 54u + p.g * 182u + p.b * 19u) >> 8;\n"
+    "        uint3 w = (uint3)round(I.c0.rgb * 255.0);\n"
+    "        uint3 t = uint3(lerp8(w.r, 0u, luma), lerp8(w.g, 0u, luma), lerp8(w.b, 0u, luma));\n"
+    "        uint4 m = uint4(lerp8(t.r, p.r, 254u), lerp8(t.g, p.g, 254u), lerp8(t.b, p.b, 254u), lerp8(255u, p.a, 254u));\n"
+    "        c = float4((m * (p.a + 1u)) >> 8) / 255.0;\n"
+    "    }\n"
+    "    return c * I.extra.y;\n"
+    "}\n"
     "float4 fmain(VOut v) : SV_Target {\n"
     "    Inst I = insts[v.inst];\n"
     "    float2 p = v.position.xy + target.xy;\n"
@@ -178,6 +210,8 @@ static const char *const cw_hlsl_parts[] = {
     "        float s = I.params.x;\n"
     "        float a = s > 0.0 ? 0.5 * (1.0 - erfApprox(d / (s * 1.41421356))) : cover(d * aa);\n"
     "        color = I.c0 * a;\n"
+    "    } else if (kind == 7) {\n"
+    "        color = imageColor(I, q) * cover(sdRR(q, I.rect, I.radii) * aa);\n"
     "    } else {\n"
     "        float t = kind == 3 ? dot(q - I.params.xy, I.params.zw) / I.extra.z : length(q - I.params.xy) / I.params.z;\n"
     "        color = gradColor(I, t) * cover(sdRR(q, I.rect, I.radii) * aa);\n"
@@ -447,6 +481,13 @@ static struct {
     ID3D12DescriptorHeap *rtv_heap, *srv_heap;
     UINT rtv_size, srv_size, rtv_next, srv_next;
     ID3D12Resource *atlas;
+    /* The image atlas (RGBA8, straight alpha), uploaded from its own staging buffer as the coverage atlas is. */
+    ID3D12Resource *images;
+    D3D12_RESOURCE_STATES images_state;
+    uint32_t images_side;
+    int images_dirty;
+    uint32_t ix0, iy0, ix1, iy1;
+    cw_buffer image_staging;
     D3D12_RESOURCE_STATES atlas_state;
     uint32_t atlas_width, atlas_height;
     int atlas_dirty;
@@ -627,7 +668,7 @@ static cw_texture *pooled(uint32_t width, uint32_t height) {
 
 /* A shader-visible SRV of `r` for this frame. */
 static D3D12_GPU_DESCRIPTOR_HANDLE srv_of(ID3D12Resource *r, DXGI_FORMAT format) {
-    UINT slot = 1 + (d.srv_next++ - 1) % (CW_SRVS - 1); /* slot 0 is the atlas */
+    UINT slot = 2 + (d.srv_next++ - 2) % (CW_SRVS - 2); /* slots 0 and 1 are the atlases */
     D3D12_SHADER_RESOURCE_VIEW_DESC v;
     memset(&v, 0, sizeof v);
     v.Format = format;
@@ -694,15 +735,15 @@ static ID3D12PipelineState *make_pipeline(ID3DBlob *vs, ID3DBlob *ps, int blendi
 }
 
 static int make_root_signature(void) {
-    D3D12_DESCRIPTOR_RANGE ranges[3];
-    for (int k = 0; k < 3; k++) {
+    D3D12_DESCRIPTOR_RANGE ranges[4];
+    for (int k = 0; k < 4; k++) {
         ranges[k].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         ranges[k].NumDescriptors = 1;
-        ranges[k].BaseShaderRegister = 2 + (UINT)k; /* t2 atlas, t3 layer, t4 scratch */
+        ranges[k].BaseShaderRegister = 2 + (UINT)k; /* t2 atlas, t3 layer, t4 scratch, t5 images */
         ranges[k].RegisterSpace = 0;
         ranges[k].OffsetInDescriptorsFromTableStart = 0;
     }
-    D3D12_ROOT_PARAMETER params[6];
+    D3D12_ROOT_PARAMETER params[7];
     memset(params, 0, sizeof params);
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     params[0].Constants.ShaderRegister = 0;
@@ -714,7 +755,7 @@ static int make_root_signature(void) {
     params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV; /* t1: the clip shapes */
     params[2].Descriptor.ShaderRegister = 1;
     params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    for (int k = 0; k < 3; k++) {
+    for (int k = 0; k < 4; k++) {
         params[3 + k].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         params[3 + k].DescriptorTable.NumDescriptorRanges = 1;
         params[3 + k].DescriptorTable.pDescriptorRanges = &ranges[k];
@@ -730,7 +771,7 @@ static int make_root_signature(void) {
     sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
     sampler.MaxLOD = 0.0f;
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-    D3D12_ROOT_SIGNATURE_DESC desc = {6, params, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+    D3D12_ROOT_SIGNATURE_DESC desc = {7, params, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_NONE};
     ID3DBlob *blob = NULL, *errors = NULL;
     if (FAILED(fn.serialize_root(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &errors))) {
         fprintf(stderr, "d3d12: the root signature: %s\n",
@@ -781,7 +822,7 @@ static int create_device(void) {
     return SUCCEEDED(hr);
 }
 
-static int32_t d3d_init(uint32_t atlas_width, uint32_t atlas_height) {
+static int32_t d3d_init(uint32_t atlas_width, uint32_t atlas_height, uint32_t images) {
     d.trace = getenv("CW_TRACE") != NULL;
     if (!load()) {
         return 1;
@@ -862,6 +903,12 @@ static int32_t d3d_init(uint32_t atlas_width, uint32_t atlas_height) {
     d.ay0 = 0;
     d.ax1 = atlas_width;
     d.ay1 = atlas_height;
+    d.images_side = images;
+    d.images = make_texture(images, images, CW_FORMAT, 0, D3D12_RESOURCE_STATE_COPY_DEST);
+    if (d.images == NULL) {
+        return 7;
+    }
+    d.images_state = D3D12_RESOURCE_STATE_COPY_DEST;
     d.ready = 1;
     return 0;
 }
@@ -947,6 +994,34 @@ static void d3d_finish(void) {
         const UINT64 *ticks = (const UINT64 *)d.timestamps.mapped;
         d.gpu_ms = (double)(ticks[1] - ticks[0]) * 1000.0 / (double)d.timestamp_frequency;
     }
+}
+
+/* Copies a `w` × `h` image (rows `stride` pixels apart, RGBA8) to the image staging buffer at (u, v); the next frame
+   uploads it. */
+static void d3d_image(const uint32_t *pixels, uint32_t stride, uint32_t w, uint32_t h, uint32_t u, uint32_t v) {
+    if (!d.ready || w == 0 || h == 0 || u + w > d.images_side || v + h > d.images_side) {
+        return;
+    }
+    d3d_finish(); /* the last frame may still copy from the staging buffer */
+    if (!ensure_buffer(&d.image_staging, (UINT64)d.images_side * d.images_side * 4, D3D12_HEAP_TYPE_UPLOAD)) {
+        return;
+    }
+    uint32_t *staging = (uint32_t *)d.image_staging.mapped;
+    for (uint32_t y = 0; y < h; y++) {
+        memcpy(staging + (size_t)(v + y) * d.images_side + u, pixels + (size_t)y * stride, (size_t)w * 4);
+    }
+    if (!d.images_dirty) {
+        d.ix0 = u;
+        d.iy0 = v;
+        d.ix1 = u + w;
+        d.iy1 = v + h;
+    } else {
+        d.ix0 = d.ix0 < u ? d.ix0 : u;
+        d.iy0 = d.iy0 < v ? d.iy0 : v;
+        d.ix1 = d.ix1 > u + w ? d.ix1 : u + w;
+        d.iy1 = d.iy1 > v + h ? d.iy1 : v + h;
+    }
+    d.images_dirty = 1;
 }
 
 static void d3d_atlas(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {
@@ -1097,7 +1172,7 @@ static int record(cw_texture *target, const float *frame, uint32_t count, const 
     for (int k = 0; k < CW_POOL; k++) {
         d.pool[k].used = 0;
     }
-    d.srv_next = 1; /* slot 0: the atlas */
+    d.srv_next = 2; /* slot 0: the atlas; 1: the images */
     d.frame_clips = clips;
     d.frame_clip_count = clip_count;
     size_t total = (size_t)count + layer_instances;
@@ -1135,6 +1210,23 @@ static int record(cw_texture *target, const float *frame, uint32_t count, const 
         d.atlas_dirty = 0;
     }
     transition(d.atlas, &d.atlas_state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    if (d.images_dirty) {
+        transition(d.images, &d.images_state, D3D12_RESOURCE_STATE_COPY_DEST);
+        D3D12_TEXTURE_COPY_LOCATION to = subresource(d.images);
+        D3D12_TEXTURE_COPY_LOCATION from;
+        memset(&from, 0, sizeof from);
+        from.pResource = d.image_staging.resource;
+        from.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        from.PlacedFootprint.Footprint.Format = CW_FORMAT;
+        from.PlacedFootprint.Footprint.Width = d.images_side;
+        from.PlacedFootprint.Footprint.Height = d.images_side;
+        from.PlacedFootprint.Footprint.Depth = 1;
+        from.PlacedFootprint.Footprint.RowPitch = d.images_side * 4; /* 8192: a multiple of 256 */
+        D3D12_BOX region = {d.ix0, d.iy0, 0, d.ix1, d.iy1, 1};
+        ID3D12GraphicsCommandList_CopyTextureRegion(d.list, &to, d.ix0, d.iy0, 0, &from, &region);
+        d.images_dirty = 0;
+    }
+    transition(d.images, &d.images_state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     ID3D12DescriptorHeap *heaps[1] = {d.srv_heap};
     ID3D12GraphicsCommandList_SetDescriptorHeaps(d.list, 1, heaps);
     ID3D12GraphicsCommandList_SetGraphicsRootSignature(d.list, d.root);
@@ -1147,6 +1239,8 @@ static int record(cw_texture *target, const float *frame, uint32_t count, const 
     av.Texture2D.MipLevels = 1;
     ID3D12Device_CreateShaderResourceView(d.device, d.atlas, &av, srv_cpu(0));
     D3D12_GPU_DESCRIPTOR_HANDLE atlas = srv_gpu(0);
+    ID3D12Device_CreateShaderResourceView(d.device, d.images, NULL, srv_cpu(1));
+    ID3D12GraphicsCommandList_SetGraphicsRootDescriptorTable(d.list, 6, srv_gpu(1));
     ID3D12GraphicsCommandList_SetGraphicsRootShaderResourceView(
         d.list, 1, ID3D12Resource_GetGPUVirtualAddress(d.instances.resource));
     ID3D12GraphicsCommandList_SetGraphicsRootShaderResourceView(
@@ -1294,10 +1388,10 @@ static int32_t d3d_render_to(const float *frame, uint32_t count, const float *la
 
 static int use_vulkan;
 
-int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height) {
+int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height, uint32_t images) {
     const char *want = getenv("CLAYWIND_GPU");
     if (want == NULL || strcmp(want, "vulkan") != 0) {
-        int32_t r = d3d_init(atlas_width, atlas_height);
+        int32_t r = d3d_init(atlas_width, atlas_height, images);
         if (r == 0) {
             use_vulkan = 0;
             trace("using Direct3D 12", 0);
@@ -1306,7 +1400,7 @@ int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height) {
         trace("Direct3D 12 did not start", r);
     }
     use_vulkan = 1;
-    return cw_vk_init(atlas_width, atlas_height);
+    return cw_vk_init(atlas_width, atlas_height, images);
 }
 
 int32_t cw_gpu_attach(int32_t kind, uint64_t first, uint64_t second) {
@@ -1318,6 +1412,14 @@ void cw_gpu_atlas(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t 
         cw_vk_atlas(pixels, stride, x0, y0, x1, y1);
     } else {
         d3d_atlas(pixels, stride, x0, y0, x1, y1);
+    }
+}
+
+void cw_gpu_image(const uint32_t *pixels, uint32_t stride, uint32_t w, uint32_t h, uint32_t u, uint32_t v) {
+    if (use_vulkan) {
+        cw_vk_image(pixels, stride, w, h, u, v);
+    } else {
+        d3d_image(pixels, stride, w, h, u, v);
     }
 }
 

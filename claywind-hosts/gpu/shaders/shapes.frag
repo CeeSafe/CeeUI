@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
-// metal.c's fmain: every kind of shape (fills, frames, shadows, gradients, masks), clipped.
+// metal.c's fmain: every kind of shape (fills, frames, shadows, gradients, masks, images), clipped.
 
 layout(location = 0) flat in uint vInst;
 layout(location = 1) in vec2 vLocal;
 layout(location = 0) out vec4 outColor;
 
 layout(set = 0, binding = 1) uniform sampler2D atlas; // unnormalized coordinates, linear
+layout(set = 0, binding = 3) uniform sampler2D images; // RGBA8, straight alpha; fetched, never sampled
 
 float erfApprox(float x) {
     float x2 = x * x;
@@ -59,6 +60,38 @@ vec4 gradColor(Inst I, float t) {
     return vec4(c.rgb * c.a, c.a);
 }
 
+// raster_fill.cee's sampleImage: four texels, premultiplied, mixed bilinearly with the edges clamped, then ThorVG's
+// tint (raster_effects.cee's tintPixel) and the opacity. params: the image's place in the image atlas (u, v) and its
+// size; c0: the tint; extra.x: tinted; extra.y: the opacity.
+vec4 imageTexel(vec4 place, vec2 c) {
+    vec4 p = texelFetch(images, ivec2(clamp(c, vec2(0.0), place.zw - 1.0) + place.xy), 0);
+    return vec4(p.rgb * p.a, p.a);
+}
+
+uint lerp8(uint s, uint d, uint a) {
+    int delta = (int(s) - int(d)) * int(a);
+    int st = delta >= 0 ? delta / 256 : -((-delta + 255) / 256);
+    return uint(clamp(int(d) + st, 0, 255));
+}
+
+vec4 imageColor(Inst I, vec2 q) {
+    vec2 uv = (q - I.rect.xy) / I.rect.zw * I.params.zw - 0.5;
+    vec2 f0 = floor(uv);
+    vec2 f = uv - f0;
+    vec4 top = mix(imageTexel(I.params, f0), imageTexel(I.params, f0 + vec2(1.0, 0.0)), f.x);
+    vec4 bottom = mix(imageTexel(I.params, f0 + vec2(0.0, 1.0)), imageTexel(I.params, f0 + 1.0), f.x);
+    vec4 c = mix(top, bottom, f.y);
+    if (I.extra.x > 0.0 && c.a > 0.0) {
+        uvec4 p = uvec4(clamp(c * 255.0 + 0.5, 0.0, 255.0));
+        uint luma = (p.r * 54u + p.g * 182u + p.b * 19u) >> 8;
+        uvec3 w = uvec3(round(I.c0.rgb * 255.0));
+        uvec3 t = uvec3(lerp8(w.r, 0u, luma), lerp8(w.g, 0u, luma), lerp8(w.b, 0u, luma));
+        uvec4 m = uvec4(lerp8(t.r, p.r, 254u), lerp8(t.g, p.g, 254u), lerp8(t.b, p.b, 254u), lerp8(255u, p.a, 254u));
+        c = vec4((m * (p.a + 1u)) >> 8) / 255.0;
+    }
+    return c * I.extra.y;
+}
+
 void main() {
     Inst I = insts[vInst];
     vec2 p = gl_FragCoord.xy + pc.target.xy;
@@ -86,6 +119,8 @@ void main() {
         float s = I.params.x;
         float a = s > 0.0 ? 0.5 * (1.0 - erfApprox(d / (s * 1.41421356))) : cover(d * aa);
         color = I.c0 * a;
+    } else if (kind == 7) {
+        color = imageColor(I, q) * cover(sdRR(q, I.rect, I.radii) * aa);
     } else {
         float t = kind == 3 ? dot(q - I.params.xy, I.params.zw) / I.extra.z : length(q - I.params.xy) / I.params.z;
         color = gradColor(I, t) * cover(sdRR(q, I.rect, I.radii) * aa);
