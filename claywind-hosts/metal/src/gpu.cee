@@ -90,6 +90,9 @@ extern "C" {
         layerCount: u32,
         width: u32,
         height: u32,
+        r: f32,
+        g: f32,
+        b: f32,
     ) -> i32;
 }
 
@@ -103,6 +106,18 @@ struct Clip {
     radii: Corners;
     rounded: bool;
 }
+
+/// A box of pixels: [x0, x1) × [y0, y1).
+struct Bounds {
+    x0: f32;
+    y0: f32;
+    x1: f32;
+    y1: f32;
+}
+
+fn inside(a: Bounds, b: Bounds) -> bool => a.x0 >= b.x0 && a.y0 >= b.y0 && a.x1 <= b.x1 && a.y1 <= b.y1;
+
+fn overlaps(a: Bounds, b: Bounds) -> bool => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
 
 /// A layer that is open: where its instances start in the stream, what it does, and its box in pixels.
 struct OpenLayer {
@@ -142,6 +157,12 @@ public struct GpuBackend<region r> {
     layerData: Vector<f32>;
     records: Vector<f32>;
     previous: Vector<f32>;
+    culled: Vector<f32>;
+    keep: Vector<bool>;
+    occluders: Vector<Bounds>;
+    survivors: Vector<Bounds>;
+    /// Frame instances the occlusion pass dropped, last frame.
+    public dropped: u32;
     clips: Vector<Clip>;
     layers: Vector<OpenLayer>;
     transforms: Vector<Affine2>;
@@ -263,6 +284,11 @@ impl<region r> GpuBackend<r> {
             layerData: Vector<f32>.withCapacity(FLOATS * 1024)!,
             records: Vector<f32>.withCapacity(RECORD * 64)!,
             previous: Vector<f32>.withCapacity(FLOATS * 8192)!,
+            culled: Vector<f32>.withCapacity(FLOATS * 8192)!,
+            keep: Vector<bool>.withCapacity(8192)!,
+            occluders: Vector<Bounds>.withCapacity(64)!,
+            survivors: Vector<Bounds>.withCapacity(8192)!,
+            dropped: 0,
             clips: Vector<Clip>.withCapacity(64)!,
             layers: Vector<OpenLayer>.withCapacity(32)!,
             transforms: Vector<Affine2>.withCapacity(32)!,
@@ -399,6 +425,7 @@ impl<region r> GpuBackend<r> {
     /// Safety: metal.c copies the instances and the records, each vector's length, during the call only.
     public fn present(borrow mut this, width: u32, height: u32, clear: Color) -> i32 {
         this.closeAll();
+        this.cull(clear);
         this.upload();
         let frame = this.stream.view();
         let layers = this.layerData.view();
@@ -426,6 +453,7 @@ impl<region r> GpuBackend<r> {
             return -1;
         }
         this.closeAll();
+        this.cull(clear);
         this.upload();
         let frame = this.stream.view();
         let layers = this.layerData.view();
@@ -448,8 +476,9 @@ impl<region r> GpuBackend<r> {
 
     /// Draws the frame offscreen and waits for the GPU, for timing.
     /// Safety: metal.c copies the instances and the records during the call only.
-    public fn renderOnly(borrow mut this, width: u32, height: u32) -> i32 {
+    public fn renderOnly(borrow mut this, width: u32, height: u32, clear: Color) -> i32 {
         this.closeAll();
+        this.cull(clear);
         this.upload();
         let frame = this.stream.view();
         let layers = this.layerData.view();
@@ -463,7 +492,148 @@ impl<region r> GpuBackend<r> {
             truncate<u32>(records.length / RECORD),
             width,
             height,
+            unit(clear.r),
+            unit(clear.g),
+            unit(clear.b),
         ) };
+    }
+
+    /// The pixels frame instance `i` may change: for a plain fill, the pixels its edges reach; otherwise its quad
+    /// as metal.c's vertex shader makes it. Within its clip.
+    fn touches(borrow this, i: usize) -> Bounds {
+        let v = i * FLOATS;
+        let s = this.stream.view();
+        let transformed = s[v + XF1 + 3] != 0.0;
+        let plain = s[v + MISC] == KIND_FILL && !transformed && s[v + RADII] == 0.0 && s[v + RADII + 1] == 0.0 &&
+            s[v + RADII + 2] == 0.0 && s[v + RADII + 3] == 0.0;
+        let outset = if (plain) 0.0 else s[v + MISC + 3] + 1.0;
+        var b = Rect {
+            x: s[v + RECT] - outset,
+            y: s[v + RECT + 1] - outset,
+            w: s[v + RECT + 2] + 2.0 * outset,
+            h: s[v + RECT + 3] + 2.0 * outset,
+        };
+        if (transformed) {
+            let m = Affine2 {
+                a: s[v + XF0],
+                b: s[v + XF0 + 1],
+                c: s[v + XF0 + 2],
+                d: s[v + XF0 + 3],
+                e: s[v + XF1],
+                f: s[v + XF1 + 1],
+            };
+            b = m.bounds(b);
+        }
+        return Bounds {
+            x0: b.x.floor().max(s[v + CLIP]),
+            y0: b.y.floor().max(s[v + CLIP + 1]),
+            x1: (b.x + b.w).ceil().min(s[v + CLIP + 2]),
+            y1: (b.y + b.h).ceil().min(s[v + CLIP + 3]),
+        };
+    }
+
+    /// The pixels frame instance `i` covers completely, if it is an opaque fill that is not transformed or clipped
+    /// to a rounded shape: its box inset by its largest radius, to whole pixels, within its clip.
+    fn covers(borrow this, i: usize) -> Bounds? {
+        let v = i * FLOATS;
+        let s = this.stream.view();
+        if (s[v + MISC] != KIND_FILL || s[v + XF1 + 3] != 0.0 || s[v + C0 + 3] < 1.0) {
+            return null;
+        }
+        if (s[v + CLIP_RADII] > 0.0 || s[v + CLIP_RADII + 1] > 0.0 || s[v + CLIP_RADII + 2] > 0.0 ||
+            s[v + CLIP_RADII + 3] > 0.0) {
+            return null;
+        }
+        let r = s[v + RADII].max(s[v + RADII + 1]).max(s[v + RADII + 2]).max(s[v + RADII + 3]);
+        let b = Bounds {
+            x0: (s[v + RECT] + r).ceil().max(s[v + CLIP]),
+            y0: (s[v + RECT + 1] + r).ceil().max(s[v + CLIP + 1]),
+            x1: (s[v + RECT] + s[v + RECT + 2] - r).floor().min(s[v + CLIP + 2]),
+            y1: (s[v + RECT + 1] + s[v + RECT + 3] - r).floor().min(s[v + CLIP + 3]),
+        };
+        return if (b.x1 > b.x0 && b.y1 > b.y0) b else null;
+    }
+
+    /// Drops frame instances that cannot change a pixel, which gives the same frame with fewer fragments:
+    /// - one whose pixels all lie inside what a later opaque fill covers completely (source-over at alpha 1 replaces
+    ///   the pixel, as Raster's `over` does);
+    /// - an opaque fill in the clear colour with nothing kept under it (the clear already holds that colour).
+    fn cull(borrow mut this, clear: Color) {
+        let n = this.stream.length / FLOATS;
+        this.keep.clear();
+        for (i in 0..n) {
+            this.keep.push(true)!;
+        }
+        this.occluders.clear();
+        var i = n;
+        while (i > 0) {
+            i -= 1;
+            let t = this.touches(i);
+            var hidden = t.x1 <= t.x0 || t.y1 <= t.y0;
+            for (k in 0..this.occluders.length) {
+                if (hidden) {
+                    break;
+                }
+                hidden = inside(t, this.occluders[k]);
+            }
+            if (hidden) {
+                this.keep[i] = false;
+                continue;
+            }
+            match (this.covers(i)) {
+                Some(c) => {
+                    // The largest are the ones worth testing against.
+                    if (this.occluders.length < 64 && (c.x1 - c.x0) * (c.y1 - c.y0) >= 4096.0) {
+                        this.occluders.push(c)!;
+                    }
+                }
+                null => {}
+            }
+        }
+        let cr = unit(clear.r);
+        let cg = unit(clear.g);
+        let cb = unit(clear.b);
+        this.survivors.clear();
+        for (j in 0..n) {
+            if (!this.keep[j]) {
+                continue;
+            }
+            let t = this.touches(j);
+            let v = j * FLOATS;
+            let s = this.stream.view();
+            let clearFill = s[v + MISC] == KIND_FILL && s[v + XF1 + 3] == 0.0 && s[v + C0 + 3] == 1.0 &&
+                s[v + C0] == cr && s[v + C0 + 1] == cg && s[v + C0 + 2] == cb;
+            if (clearFill) {
+                var under = false;
+                for (k in 0..this.survivors.length) {
+                    if (overlaps(t, this.survivors[k])) {
+                        under = true;
+                        break;
+                    }
+                }
+                if (!under) {
+                    this.keep[j] = false;
+                    continue;
+                }
+            }
+            this.survivors.push(t)!;
+        }
+        this.culled.clear();
+        var dropped: u32 = 0;
+        for (j in 0..n) {
+            if (!this.keep[j]) {
+                dropped += 1;
+                continue;
+            }
+            for (k in j * FLOATS..(j + 1) * FLOATS) {
+                this.culled.push(this.stream[k])!;
+            }
+        }
+        this.stream.clear();
+        for (k in 0..this.culled.length) {
+            this.stream.push(this.culled[k])!;
+        }
+        this.dropped = dropped;
     }
 
     /// A new instance of `kind` with the current clip and transform.

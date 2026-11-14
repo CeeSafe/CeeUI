@@ -50,7 +50,8 @@ int32_t cw_metal_render_to(const float *frame, uint32_t count, const float *laye
                            const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r,
                            float g, float b, uint32_t *out);
 int32_t cw_metal_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                             const float *records, uint32_t layer_count, uint32_t width, uint32_t height);
+                             const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r,
+                             float g, float b);
 double cw_metal_gpu_ms(void);
 void cw_metal_finish(void);
 
@@ -162,6 +163,16 @@ static const char *const cw_shader_parts[] = {
     "        color = gradColor(I, t) * cover(sdRR(q, I.rect, I.radii) * aa);\n"
     "    }\n"
     "    return color * k;\n"
+    "}\n"
+    /* A plain fill, the most common instance: fmain's kind 0 without a transform, in a smaller shader. */
+    "fragment float4 ffill(VOut in [[stage_in]], const device Inst *insts [[buffer(0)]],\n"
+    "                      constant float4 &target [[buffer(1)]]) {\n"
+    "    const device Inst &I = insts[in.inst];\n"
+    "    float2 p = in.position.xy + target.xy;\n"
+    "    if (p.x < I.clip.x || p.y < I.clip.y || p.x >= I.clip.z || p.y >= I.clip.w) { discard_fragment(); }\n"
+    "    float k = 1.0;\n"
+    "    if (any(I.clipRadii > 0.0)) { k = cover(sdRR(p, I.clipShape, I.clipRadii)); }\n"
+    "    return I.c0 * (cover(sdRR(p, I.rect, I.radii)) * k);\n"
     "}\n"
     /* ---- layers: raster_effects.cee's 8-bit formulas, ThorVG's ---- */
     "static uint4 toU(float4 c) { return uint4(rint(clamp(c, 0.0, 1.0) * 255.0)); }\n"
@@ -341,6 +352,7 @@ static struct {
     id fast;    /* the shaders with fast math: shapes */
     id precise; /* without: the layer formulas must give Raster's bytes exactly */
     id shapes_bgra, shapes_rgba;       /* shapes, hardware blending */
+    id fills_bgra, fills_rgba;         /* plain fills, hardware blending */
     id composite_bgra, composite_rgba; /* layer composites, framebuffer fetch */
     id box;                            /* blur passes, RGBA8 */
     id atlas;
@@ -470,6 +482,8 @@ int32_t cw_metal_init(uint32_t atlas_width, uint32_t atlas_height) {
     }
     m.shapes_bgra = make_pipeline(m.fast, "vmain", "fmain", 80ul, 1); /* MTLPixelFormatBGRA8Unorm */
     m.shapes_rgba = make_pipeline(m.fast, "vmain", "fmain", 70ul, 1); /* MTLPixelFormatRGBA8Unorm */
+    m.fills_bgra = make_pipeline(m.fast, "vmain", "ffill", 80ul, 1);
+    m.fills_rgba = make_pipeline(m.fast, "vmain", "ffill", 70ul, 1);
     m.composite_bgra = make_pipeline(m.precise, "vmain", "fcomposite", 80ul, 0);
     m.composite_rgba = make_pipeline(m.precise, "vmain", "fcomposite", 70ul, 0);
     m.box = make_pipeline(m.precise, "vfull", "fbox", 70ul, 0);
@@ -480,7 +494,8 @@ int32_t cw_metal_init(uint32_t atlas_width, uint32_t atlas_height) {
     SEND(void, unsigned long)(descriptor, cw.sel("setUsage:"), 1ul); /* ShaderRead */
     m.atlas = SEND(id, id)(m.device, cw.sel("newTextureWithDescriptor:"), descriptor);
     cw.pool_pop(pool);
-    return m.shapes_bgra != NULL && m.shapes_rgba != NULL && m.composite_bgra != NULL && m.composite_rgba != NULL &&
+    return m.shapes_bgra != NULL && m.shapes_rgba != NULL && m.fills_bgra != NULL && m.fills_rgba != NULL &&
+                   m.composite_bgra != NULL && m.composite_rgba != NULL &&
                    m.box != NULL && m.atlas != NULL
                ? 0
                : 4;
@@ -594,9 +609,17 @@ static void draw_range(id encoder, id pipeline, uint32_t base, uint32_t count) {
         (unsigned long)count, (unsigned long)base);
 }
 
+/* How an instance is drawn: 0 by fmain, 1 by ffill (a plain fill), 2 as a layer composite. */
+static int pipeline_class(const float *instance) {
+    if (instance[CW_KIND] == CW_KIND_LAYER) {
+        return 2;
+    }
+    return instance[CW_KIND] == 0.0f && instance[59] == 0.0f ? 1 : 0; /* kind 0, xf1.w 0 */
+}
+
 /* Draws instances [first, first + count) of `data` into the target of `encoder`, whose box in the frame is `box`:
-   shapes in runs, and each layer composite on its own with its layer's texture. */
-static void draw_target(id encoder, id shapes, id composite, id buffer, const float *data, uint32_t first,
+   shapes and plain fills in runs, each with its pipeline, and each layer composite on its own with its texture. */
+static void draw_target(id encoder, id shapes, id fills, id composite, id buffer, const float *data, uint32_t first,
                         uint32_t count, const float box[4], id *textures) {
     SEND(void, id, unsigned long, unsigned long)(encoder, cw.sel("setVertexBuffer:offset:atIndex:"), buffer, 0ul, 0ul);
     SEND(void, const void *, unsigned long, unsigned long)(encoder, cw.sel("setVertexBytes:length:atIndex:"), box,
@@ -606,20 +629,25 @@ static void draw_target(id encoder, id shapes, id composite, id buffer, const fl
     SEND(void, const void *, unsigned long, unsigned long)(encoder, cw.sel("setFragmentBytes:length:atIndex:"), box,
                                                            4 * sizeof(float), 1ul);
     SEND(void, id, unsigned long)(encoder, cw.sel("setFragmentTexture:atIndex:"), m.atlas, 0ul);
-    uint32_t start = first;
-    for (uint32_t k = first; k < first + count; k++) {
-        if (data[(size_t)k * CW_FLOATS + CW_KIND] != CW_KIND_LAYER) {
+    uint32_t k = first, end = first + count;
+    while (k < end) {
+        int kind = pipeline_class(data + (size_t)k * CW_FLOATS);
+        if (kind == 2) {
+            int layer = (int)data[(size_t)k * CW_FLOATS + 28]; /* params.x */
+            if (layer >= 0 && layer < CW_MAX_LAYERS && textures[layer] != NULL) {
+                SEND(void, id, unsigned long)(encoder, cw.sel("setFragmentTexture:atIndex:"), textures[layer], 1ul);
+                draw_range(encoder, composite, k, 1);
+            }
+            k++;
             continue;
         }
-        draw_range(encoder, shapes, start, k - start);
-        int layer = (int)data[(size_t)k * CW_FLOATS + 28]; /* params.x */
-        if (layer >= 0 && layer < CW_MAX_LAYERS && textures[layer] != NULL) {
-            SEND(void, id, unsigned long)(encoder, cw.sel("setFragmentTexture:atIndex:"), textures[layer], 1ul);
-            draw_range(encoder, composite, k, 1);
+        uint32_t run = k + 1;
+        while (run < end && pipeline_class(data + (size_t)run * CW_FLOATS) == kind) {
+            run++;
         }
-        start = k + 1;
+        draw_range(encoder, kind == 1 ? fills : shapes, k, run - k);
+        k = run;
     }
-    draw_range(encoder, shapes, start, first + count - start);
 }
 
 /* One box pass of radius d along `axis` (0 rows, 1 columns) from `source` into `target`, both w × h. */
@@ -672,8 +700,8 @@ static void encode(id target, int bgra, const float *frame, uint32_t count, cons
         }
         float box[4] = {(float)x0, (float)y0, (float)w, (float)h};
         id encoder = begin_pass(buffer, texture, 1, 0, 0, 0, 0);
-        draw_target(encoder, m.shapes_rgba, m.composite_rgba, layer_data, layers, (uint32_t)rec[0], (uint32_t)rec[1],
-                    box, textures);
+        draw_target(encoder, m.shapes_rgba, m.fills_rgba, m.composite_rgba, layer_data, layers, (uint32_t)rec[0],
+                    (uint32_t)rec[1], box, textures);
         call(encoder, "endEncoding");
         int k0 = (int)rec[6], k1 = (int)rec[7];
         if (k0 > 0 || k1 > 0) {
@@ -699,8 +727,8 @@ static void encode(id target, int bgra, const float *frame, uint32_t count, cons
     }
     float whole[4] = {0.0f, 0.0f, (float)width, (float)height};
     id encoder = begin_pass(buffer, target, 1, r, g, b, 1.0f);
-    draw_target(encoder, bgra ? m.shapes_bgra : m.shapes_rgba, bgra ? m.composite_bgra : m.composite_rgba, frame_data,
-                frame, 0, count, whole, textures);
+    draw_target(encoder, bgra ? m.shapes_bgra : m.shapes_rgba, bgra ? m.fills_bgra : m.fills_rgba,
+                bgra ? m.composite_bgra : m.composite_rgba, frame_data, frame, 0, count, whole, textures);
     call(encoder, "endEncoding");
     if (drawable != NULL) {
         SEND(void, id)(buffer, cw.sel("presentDrawable:"), drawable);
@@ -771,7 +799,8 @@ int32_t cw_metal_render_to(const float *frame, uint32_t count, const float *laye
 
 /* Draws the frame offscreen and waits for it, reading nothing back: for timing the GPU. */
 int32_t cw_metal_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                             const float *records, uint32_t layer_count, uint32_t width, uint32_t height) {
-    return cw_metal_render_to(frame, count, layers, layer_instances, records, layer_count, width, height, 0.0f, 0.0f,
-                              0.0f, NULL);
+                             const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r,
+                             float g, float b) {
+    return cw_metal_render_to(frame, count, layers, layer_instances, records, layer_count, width, height, r, g, b,
+                              NULL);
 }

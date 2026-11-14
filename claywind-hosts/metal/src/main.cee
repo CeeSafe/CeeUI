@@ -470,7 +470,7 @@ fn bench(ui: borrow mut Ui, gpu: borrow mut GpuBackend, frames: u64) -> i32 {
         gpu.begin(width, height, ratio);
         ui.renderInto(mut gpu);
         let t2 = nanos();
-        let ignored = gpu.renderOnly(width, height);
+        let ignored = gpu.renderOnly(width, height, Color.hex(pageBg(ui)));
         let t3 = nanos();
         if (f > 0) { // the first frame fills the atlas
             layout += ms(t0, t1);
