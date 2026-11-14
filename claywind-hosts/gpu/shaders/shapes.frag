@@ -65,7 +65,7 @@ void main() {
     if (p.x < I.clip.x || p.y < I.clip.y || p.x >= I.clip.z || p.y >= I.clip.w) {
         discard;
     }
-    float k = clipCover(I, p);
+    float k = I.misc.z > 0.0 ? clipCover(I.misc.z, p) : 1.0;
     bool xf = I.xf1.w != 0.0;
     vec2 q = xf ? vLocal : p;
     float aa = xf ? I.xf1.z : 1.0;

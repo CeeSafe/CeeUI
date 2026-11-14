@@ -12,22 +12,28 @@ struct Inst {
     vec4 stops;
     vec4 params;
     vec4 clip;
-    vec4 clipShape;
-    vec4 clipRadii;
     vec4 misc;
     vec4 extra;
     vec4 xf0;
     vec4 xf1;
-    vec4 clipXf0;
-    vec4 clipXf1;
-    vec4 clip2Shape;
-    vec4 clip2Radii;
-    vec4 clip2Xf0;
-    vec4 clip2Xf1;
+};
+
+// A clip shape (gpu.cee's SHAPE): its box and radii, the inverse of its transform (xf0: a b c d; xf1: e f, scale,
+// transformed), and the shape it is nested in (link.x, its index plus 1, 0 for none).
+struct ClipShape {
+    vec4 shape;
+    vec4 radii;
+    vec4 xf0;
+    vec4 xf1;
+    vec4 link;
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer Instances {
     Inst insts[];
+};
+
+layout(std430, set = 0, binding = 2) readonly buffer Clips {
+    ClipShape clips[];
 };
 
 // target: the target's origin in the frame (xy) and its size (zw), in pixels; box: a blur pass's axis, radius,
@@ -51,22 +57,17 @@ float cover(float d) {
     return clamp(0.5 - d, 0.0, 1.0);
 }
 
-// The clip's coverage of frame pixel p: its rounded shape, in its own space when it is transformed.
-float clipCover(Inst I, vec2 p) {
-    bool xf = I.clipXf1.w != 0.0;
-    if (!xf && !any(greaterThan(I.clipRadii, vec4(0.0)))) {
-        return 1.0;
-    }
-    vec2 q = xf ? vec2(I.clipXf0.x * p.x + I.clipXf0.z * p.y + I.clipXf1.x, I.clipXf0.y * p.x + I.clipXf0.w * p.y + I.clipXf1.y)
-                : p;
-    float k = cover(sdRR(q, I.clipShape, I.clipRadii) * (xf ? I.clipXf1.z : 1.0));
-    // The shape it is nested in, if any (scale above 0): the coverages multiply, as Raster's nested masks do.
-    if (I.clip2Xf1.z > 0.0) {
-        bool xf2 = I.clip2Xf1.w != 0.0;
-        vec2 q2 = xf2 ? vec2(I.clip2Xf0.x * p.x + I.clip2Xf0.z * p.y + I.clip2Xf1.x,
-                             I.clip2Xf0.y * p.x + I.clip2Xf0.w * p.y + I.clip2Xf1.y)
-                      : p;
-        k *= cover(sdRR(q2, I.clip2Shape, I.clip2Radii) * (xf2 ? I.clip2Xf1.z : 1.0));
+// The clip's coverage of frame pixel p: the product of every shape in its chain, each in its own space, as Raster's
+// nested mask clips multiply. `index` is the instance's misc.z: a shape's index plus 1, or 0.
+float clipCover(float index, vec2 p) {
+    float k = 1.0;
+    int i = int(index) - 1;
+    for (int n = 0; n < 64 && i >= 0; n++) {
+        ClipShape C = clips[i];
+        bool xf = C.xf1.w != 0.0;
+        vec2 q = xf ? vec2(C.xf0.x * p.x + C.xf0.z * p.y + C.xf1.x, C.xf0.y * p.x + C.xf0.w * p.y + C.xf1.y) : p;
+        k *= cover(sdRR(q, C.shape, C.radii) * (xf ? C.xf1.z : 1.0));
+        i = int(C.link.x) - 1;
     }
     return k;
 }

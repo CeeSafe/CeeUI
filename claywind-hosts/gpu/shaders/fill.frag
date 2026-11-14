@@ -11,6 +11,6 @@ void main() {
     if (p.x < I.clip.x || p.y < I.clip.y || p.x >= I.clip.z || p.y >= I.clip.w) {
         discard;
     }
-    float k = clipCover(I, p);
+    float k = I.misc.z > 0.0 ? clipCover(I.misc.z, p) : 1.0;
     outColor = I.c0 * (cover(sdRR(p, I.rect, I.radii)) * k);
 }

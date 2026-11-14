@@ -46,20 +46,21 @@ int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height);
 int32_t cw_gpu_attach(int32_t kind, uint64_t nswindow, uint64_t nsview);
 void cw_gpu_atlas(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1);
 int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                         const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r, float g,
+                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r, float g,
                          float b);
 int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                           const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r,
+                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r,
                            float g, float b, uint32_t *out);
 int32_t cw_gpu_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                             const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r,
+                             const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r,
                              float g, float b);
 double cw_gpu_gpu_ms(void);
 void cw_gpu_finish(void);
 
-#define CW_FLOATS 84 /* gpu.cee's FLOATS: 21 float4s per instance */
+#define CW_FLOATS 52 /* gpu.cee's FLOATS: 13 float4s per instance */
+#define CW_SHAPE 20  /* gpu.cee's SHAPE: 5 float4s per clip shape */
 #define CW_RECORD 8  /* gpu.cee's RECORD: a layer's first instance, count, box x0 y0 x1 y1, box radii k0 k1 */
-#define CW_KIND 44   /* where an instance keeps its kind */
+#define CW_KIND 36   /* where an instance keeps its kind (misc.x) */
 #define CW_KIND_LAYER 6.0f
 #define CW_MAX_LAYERS 256
 
@@ -68,9 +69,10 @@ static const char *const cw_shader_parts[] = {
     "#include <metal_stdlib>\n"
     "using namespace metal;\n"
     "struct Inst { float4 rect; float4 radii; float4 c0; float4 c1; float4 c2; float4 c3; float4 stops;\n"
-    "              float4 params; float4 clip; float4 clipShape; float4 clipRadii; float4 misc; float4 extra;\n"
-    "              float4 xf0; float4 xf1; float4 clipXf0; float4 clipXf1;\n"
-    "              float4 clip2Shape; float4 clip2Radii; float4 clip2Xf0; float4 clip2Xf1; };\n"
+    "              float4 params; float4 clip; float4 misc; float4 extra; float4 xf0; float4 xf1; };\n"
+    /* A clip shape: its box and radii, the inverse of its transform (xf0: a b c d; xf1: e f, scale, transformed),
+       and the shape it is nested in (link.x, its index plus 1, 0 for none). */
+    "struct ClipShape { float4 shape; float4 radii; float4 xf0; float4 xf1; float4 link; };\n"
     "struct VOut { float4 position [[position]]; uint inst [[flat]]; float2 local; };\n"
     /* target: the target's origin in the frame (xy) and its size (zw), in pixels. */
     "vertex VOut vmain(uint vid [[vertex_id]], uint iid [[instance_id]], const device Inst *insts [[buffer(0)]],\n"
@@ -100,18 +102,17 @@ static const char *const cw_shader_parts[] = {
     /* The share of a pixel inside an edge at distance d from its centre (exact for a straight edge). */
     "static float cover(float d) { return clamp(0.5 - d, 0.0, 1.0); }\n"
     /* The clip's coverage of frame pixel p: its rounded shape, in its own space when it is transformed. */
-    "static float clipCover(const device Inst &I, float2 p) {\n"
-    "    bool xf = I.clipXf1.w != 0.0;\n"
-    "    if (!xf && !any(I.clipRadii > 0.0)) { return 1.0; }\n"
-    "    float2 q = xf ? float2(I.clipXf0.x * p.x + I.clipXf0.z * p.y + I.clipXf1.x,\n"
-    "                           I.clipXf0.y * p.x + I.clipXf0.w * p.y + I.clipXf1.y) : p;\n"
-    "    float k = cover(sdRR(q, I.clipShape, I.clipRadii) * (xf ? I.clipXf1.z : 1.0));\n"
-    /* The shape it is nested in, if any (scale above 0): the coverages multiply, as Raster's nested masks do. */
-    "    if (I.clip2Xf1.z > 0.0) {\n"
-    "        bool xf2 = I.clip2Xf1.w != 0.0;\n"
-    "        float2 q2 = xf2 ? float2(I.clip2Xf0.x * p.x + I.clip2Xf0.z * p.y + I.clip2Xf1.x,\n"
-    "                                 I.clip2Xf0.y * p.x + I.clip2Xf0.w * p.y + I.clip2Xf1.y) : p;\n"
-    "        k *= cover(sdRR(q2, I.clip2Shape, I.clip2Radii) * (xf2 ? I.clip2Xf1.z : 1.0));\n"
+    /* The clip's coverage of frame pixel p: the product of every shape in its chain, each in its own space, as
+       Raster's nested mask clips multiply. `index` is the instance's misc.z: a shape's index plus 1, or 0. */
+    "static float clipCover(const device ClipShape *clips, float index, float2 p) {\n"
+    "    float k = 1.0;\n"
+    "    int i = int(index) - 1;\n"
+    "    for (int n = 0; n < 64 && i >= 0; n++) {\n"
+    "        const device ClipShape &C = clips[i];\n"
+    "        bool xf = C.xf1.w != 0.0;\n"
+    "        float2 q = xf ? float2(C.xf0.x * p.x + C.xf0.z * p.y + C.xf1.x, C.xf0.y * p.x + C.xf0.w * p.y + C.xf1.y) : p;\n"
+    "        k *= cover(sdRR(q, C.shape, C.radii) * (xf ? C.xf1.z : 1.0));\n"
+    "        i = int(C.link.x) - 1;\n"
     "    }\n"
     "    return k;\n"
     "}\n"
@@ -144,11 +145,12 @@ static const char *const cw_shader_parts[] = {
     "    return float4(c.rgb * c.a, c.a);\n"
     "}\n"
     "fragment float4 fmain(VOut in [[stage_in]], const device Inst *insts [[buffer(0)]],\n"
-    "                      constant float4 &target [[buffer(1)]], texture2d<float> atlas [[texture(0)]]) {\n"
+    "                      constant float4 &target [[buffer(1)]], const device ClipShape *clips [[buffer(2)]],\n"
+    "                      texture2d<float> atlas [[texture(0)]]) {\n"
     "    const device Inst &I = insts[in.inst];\n"
     "    float2 p = in.position.xy + target.xy;\n"
     "    if (p.x < I.clip.x || p.y < I.clip.y || p.x >= I.clip.z || p.y >= I.clip.w) { discard_fragment(); }\n"
-    "    float k = clipCover(I, p);\n"
+    "    float k = I.misc.z > 0.0 ? clipCover(clips, I.misc.z, p) : 1.0;\n"
     "    bool xf = I.xf1.w != 0.0;\n"
     "    float2 q = xf ? in.local : p;\n"
     "    float aa = xf ? I.xf1.z : 1.0;\n"
@@ -184,11 +186,11 @@ static const char *const cw_shader_parts[] = {
     "}\n"
     /* A plain fill, the most common instance: fmain's kind 0 without a transform, in a smaller shader. */
     "fragment float4 ffill(VOut in [[stage_in]], const device Inst *insts [[buffer(0)]],\n"
-    "                      constant float4 &target [[buffer(1)]]) {\n"
+    "                      constant float4 &target [[buffer(1)]], const device ClipShape *clips [[buffer(2)]]) {\n"
     "    const device Inst &I = insts[in.inst];\n"
     "    float2 p = in.position.xy + target.xy;\n"
     "    if (p.x < I.clip.x || p.y < I.clip.y || p.x >= I.clip.z || p.y >= I.clip.w) { discard_fragment(); }\n"
-    "    float k = clipCover(I, p);\n"
+    "    float k = I.misc.z > 0.0 ? clipCover(clips, I.misc.z, p) : 1.0;\n"
     "    return I.c0 * (cover(sdRR(p, I.rect, I.radii)) * k);\n"
     "}\n"
     /* ---- layers: raster_effects.cee's 8-bit formulas, ThorVG's ---- */
@@ -632,18 +634,19 @@ static int pipeline_class(const float *instance) {
     if (instance[CW_KIND] == CW_KIND_LAYER) {
         return 2;
     }
-    return instance[CW_KIND] == 0.0f && instance[59] == 0.0f ? 1 : 0; /* kind 0, xf1.w 0 */
+    return instance[CW_KIND] == 0.0f && instance[51] == 0.0f ? 1 : 0; /* kind 0, xf1.w 0 */
 }
 
 /* Draws instances [first, first + count) of `data` into the target of `encoder`, whose box in the frame is `box`:
    shapes and plain fills in runs, each with its pipeline, and each layer composite on its own with its texture. */
-static void draw_target(id encoder, id shapes, id fills, id composite, id buffer, const float *data, uint32_t first,
-                        uint32_t count, const float box[4], id *textures) {
+static void draw_target(id encoder, id shapes, id fills, id composite, id buffer, id clips, const float *data,
+                        uint32_t first, uint32_t count, const float box[4], id *textures) {
     SEND(void, id, unsigned long, unsigned long)(encoder, cw.sel("setVertexBuffer:offset:atIndex:"), buffer, 0ul, 0ul);
     SEND(void, const void *, unsigned long, unsigned long)(encoder, cw.sel("setVertexBytes:length:atIndex:"), box,
                                                            4 * sizeof(float), 1ul);
     SEND(void, id, unsigned long, unsigned long)(encoder, cw.sel("setFragmentBuffer:offset:atIndex:"), buffer, 0ul,
                                                  0ul);
+    SEND(void, id, unsigned long, unsigned long)(encoder, cw.sel("setFragmentBuffer:offset:atIndex:"), clips, 0ul, 2ul);
     SEND(void, const void *, unsigned long, unsigned long)(encoder, cw.sel("setFragmentBytes:length:atIndex:"), box,
                                                            4 * sizeof(float), 1ul);
     SEND(void, id, unsigned long)(encoder, cw.sel("setFragmentTexture:atIndex:"), m.atlas, 0ul);
@@ -681,27 +684,30 @@ static void box_pass(id buffer, id source, id target, int axis, int d, uint32_t 
     call(encoder, "endEncoding");
 }
 
-static id buffer_of(const float *data, uint32_t count) {
+/* A buffer holding `count` items of `floats` floats each (one zeroed item when there are none). */
+static id buffer_of(const float *data, uint32_t count, uint32_t floats) {
+    static const float empty[CW_FLOATS] = {0};
     if (count == 0) {
-        static const float empty[CW_FLOATS] = {0};
         data = empty;
         count = 1;
     }
     return SEND(id, const void *, unsigned long, unsigned long)(m.device, cw.sel("newBufferWithBytes:length:options:"),
-                                                                data, (unsigned long)count * CW_FLOATS * sizeof(float),
+                                                                data, (unsigned long)count * floats * sizeof(float),
                                                                 0ul);
 }
 
 /* Encodes a whole frame: each layer in the order it closed, its blur, then the frame into `target`. */
 static void encode(id target, int bgra, const float *frame, uint32_t count, const float *layers,
-                   uint32_t layer_instances, const float *records, uint32_t layer_count, uint32_t width,
+                   uint32_t layer_instances, const float *records, uint32_t layer_count, const float *clips,
+                   uint32_t clip_count, uint32_t width,
                    uint32_t height, float r, float g, float b, id drawable) {
     for (int k = 0; k < CW_POOL; k++) {
         m.pool[k].used = 0;
     }
     id buffer = call(m.queue, "commandBuffer");
-    id frame_data = buffer_of(frame, count);
-    id layer_data = buffer_of(layers, layer_instances);
+    id frame_data = buffer_of(frame, count, CW_FLOATS);
+    id layer_data = buffer_of(layers, layer_instances, CW_FLOATS);
+    id clip_data = buffer_of(clips, clip_count, CW_SHAPE);
     id textures[CW_MAX_LAYERS];
     uint32_t n = layer_count < CW_MAX_LAYERS ? layer_count : CW_MAX_LAYERS;
     for (uint32_t l = 0; l < n; l++) {
@@ -718,7 +724,7 @@ static void encode(id target, int bgra, const float *frame, uint32_t count, cons
         }
         float box[4] = {(float)x0, (float)y0, (float)w, (float)h};
         id encoder = begin_pass(buffer, texture, 1, 0, 0, 0, 0);
-        draw_target(encoder, m.shapes_rgba, m.fills_rgba, m.composite_rgba, layer_data, layers, (uint32_t)rec[0],
+        draw_target(encoder, m.shapes_rgba, m.fills_rgba, m.composite_rgba, layer_data, clip_data, layers, (uint32_t)rec[0],
                     (uint32_t)rec[1], box, textures);
         call(encoder, "endEncoding");
         int k0 = (int)rec[6], k1 = (int)rec[7];
@@ -746,7 +752,7 @@ static void encode(id target, int bgra, const float *frame, uint32_t count, cons
     float whole[4] = {0.0f, 0.0f, (float)width, (float)height};
     id encoder = begin_pass(buffer, target, 1, r, g, b, 1.0f);
     draw_target(encoder, bgra ? m.shapes_bgra : m.shapes_rgba, bgra ? m.fills_bgra : m.fills_rgba,
-                bgra ? m.composite_bgra : m.composite_rgba, frame_data, frame, 0, count, whole, textures);
+                bgra ? m.composite_bgra : m.composite_rgba, frame_data, clip_data, frame, 0, count, whole, textures);
     call(encoder, "endEncoding");
     if (drawable != NULL) {
         SEND(void, id)(buffer, cw.sel("presentDrawable:"), drawable);
@@ -754,12 +760,13 @@ static void encode(id target, int bgra, const float *frame, uint32_t count, cons
     call(buffer, "commit");
     call(frame_data, "release");
     call(layer_data, "release");
+    call(clip_data, "release");
     m.last = call(buffer, "retain");
 }
 
 /* Draws the frame into the window's next drawable, `width` × `height` pixels, and presents it. */
 int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                         const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r, float g,
+                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r, float g,
                          float b) {
     if (m.layer == NULL) {
         return 1;
@@ -775,7 +782,7 @@ int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, 
         cw.pool_pop(pool);
         return 2;
     }
-    encode(call(drawable, "texture"), 1, frame, count, layers, layer_instances, records, layer_count, width, height,
+    encode(call(drawable, "texture"), 1, frame, count, layers, layer_instances, records, layer_count, clips, clip_count, width, height,
            r, g, b, drawable);
     cw.pool_pop(pool);
     return 0;
@@ -783,7 +790,7 @@ int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, 
 
 /* Draws the frame into an offscreen texture and copies its pixels to `out` (RGBA bytes, Raster's order). */
 int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                           const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r,
+                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r,
                            float g, float b, uint32_t *out) {
     if (m.device == NULL) {
         return 1;
@@ -803,7 +810,7 @@ int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers
         m.offscreen_width = width;
         m.offscreen_height = height;
     }
-    encode(m.offscreen, 0, frame, count, layers, layer_instances, records, layer_count, width, height, r, g, b, NULL);
+    encode(m.offscreen, 0, frame, count, layers, layer_instances, records, layer_count, clips, clip_count, width, height, r, g, b, NULL);
     cw_gpu_finish();
     if (out != NULL) {
         cw_region region = {{0, 0, 0}, {width, height, 1}};
@@ -817,9 +824,9 @@ int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers
 
 /* Draws the frame offscreen and waits for it, reading nothing back: for timing the GPU. */
 int32_t cw_gpu_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                             const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r,
+                             const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r,
                              float g, float b) {
-    return cw_gpu_render_to(frame, count, layers, layer_instances, records, layer_count, width, height, r, g, b,
+    return cw_gpu_render_to(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, width, height, r, g, b,
                               NULL);
 }
 #else

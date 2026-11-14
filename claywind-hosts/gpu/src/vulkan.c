@@ -47,20 +47,21 @@ int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height);
 int32_t cw_gpu_attach(int32_t kind, uint64_t first, uint64_t second);
 void cw_gpu_atlas(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1);
 int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                       const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r, float g,
+                       const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r, float g,
                        float b);
 int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                         const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r, float g,
+                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r, float g,
                          float b, uint32_t *out);
 int32_t cw_gpu_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                           const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r,
+                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r,
                            float g, float b);
 double cw_gpu_gpu_ms(void);
 void cw_gpu_finish(void);
 
-#define CW_FLOATS 84 /* gpu.cee's FLOATS: 21 vec4s per instance */
+#define CW_FLOATS 52 /* gpu.cee's FLOATS: 13 vec4s per instance */
+#define CW_SHAPE 20  /* gpu.cee's SHAPE: 5 vec4s per clip shape */
 #define CW_RECORD 8  /* gpu.cee's RECORD */
-#define CW_KIND 44
+#define CW_KIND 36 /* misc.x */
 #define CW_KIND_LAYER 6.0f
 #define CW_MAX_LAYERS 256
 #define CW_POOL 96
@@ -213,7 +214,7 @@ static struct {
     int atlas_ready; /* in SHADER_READ_ONLY_OPTIMAL */
     int atlas_dirty;
     uint32_t ax0, ay0, ax1, ay1;
-    cw_buffer staging, instances, readback;
+    cw_buffer staging, instances, clips, readback;
     cw_texture pool[CW_POOL];
     cw_texture offscreen;
     VkSurfaceKHR surface;
@@ -670,15 +671,16 @@ int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height) {
         vkCreateQueryPool(g.device, &qinfo, NULL, &g.queries);
     }
     /* Set 0: the instances and the atlas; set 1: a layer (or a blur's source); set 2: the target, as input. */
-    VkDescriptorSetLayoutBinding set0[2] = {
+    VkDescriptorSetLayoutBinding set0[3] = {
         {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
     };
     VkDescriptorSetLayoutBinding set1 = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
                                          NULL};
     VkDescriptorSetLayoutBinding set2 = {0, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL};
     VkDescriptorSetLayoutCreateInfo l0 = {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 2, .pBindings = set0};
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 3, .pBindings = set0};
     VkDescriptorSetLayoutCreateInfo l1 = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 1, .pBindings = &set1};
     VkDescriptorSetLayoutCreateInfo l2 = {
@@ -694,7 +696,7 @@ int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height) {
                                          .pPushConstantRanges = &push};
     vkCreatePipelineLayout(g.device, &layout, NULL, &g.layout);
     VkDescriptorPoolSize sizes[3] = {
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 32},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2048},
         {VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1024},
     };
@@ -1003,7 +1005,7 @@ static int pipeline_class(const float *instance) {
     if (instance[CW_KIND] == CW_KIND_LAYER) {
         return 2;
     }
-    return instance[CW_KIND] == 0.0f && instance[59] == 0.0f ? 1 : 0;
+    return instance[CW_KIND] == 0.0f && instance[51] == 0.0f ? 1 : 0; /* kind 0, xf1.w 0 */
 }
 
 /* Draws `count` instances of `data` (which the instance buffer holds from index `base`) into the current pass's
@@ -1077,7 +1079,8 @@ static void box_pass(cw_texture *from, cw_texture *to, int axis, int d, uint32_t
    `target` through `pass`. */
 static int record(VkRenderPass pass, VkFramebuffer target, VkImageView target_view, int present, const float *frame,
                   uint32_t count, const float *layers, uint32_t layer_instances, const float *records,
-                  uint32_t layer_count, uint32_t width, uint32_t height, float r, float gr, float b) {
+                  uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height,
+                  float r, float gr, float b) {
     for (int k = 0; k < CW_POOL; k++) {
         g.pool[k].used = 0;
     }
@@ -1091,6 +1094,13 @@ static int record(VkRenderPass pass, VkFramebuffer target, VkImageView target_vi
     memcpy(g.instances.mapped, frame, (size_t)count * CW_FLOATS * sizeof(float));
     memcpy((float *)g.instances.mapped + (size_t)count * CW_FLOATS, layers,
            (size_t)layer_instances * CW_FLOATS * sizeof(float));
+    /* The clip shapes (one zeroed one when there are none: a storage buffer may not be empty). */
+    if (!ensure_buffer(&g.clips, (clip_count ? clip_count : 1) * CW_SHAPE * sizeof(float),
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)) {
+        return 0;
+    }
+    memset(g.clips.mapped, 0, CW_SHAPE * sizeof(float));
+    memcpy(g.clips.mapped, clips, (size_t)clip_count * CW_SHAPE * sizeof(float));
     VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                                       .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
     vkResetCommandBuffer(g.cmd, 0);
@@ -1118,8 +1128,9 @@ static int record(VkRenderPass pass, VkFramebuffer target, VkImageView target_vi
     }
     VkDescriptorSet set0 = allocate_set(0);
     VkDescriptorBufferInfo buffer = {g.instances.buffer, 0, VK_WHOLE_SIZE};
+    VkDescriptorBufferInfo shapes = {g.clips.buffer, 0, VK_WHOLE_SIZE};
     VkDescriptorImageInfo atlas = {g.linear, g.atlas_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet writes[2] = {
+    VkWriteDescriptorSet writes[3] = {
         {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
          .dstSet = set0,
          .dstBinding = 0,
@@ -1132,8 +1143,14 @@ static int record(VkRenderPass pass, VkFramebuffer target, VkImageView target_vi
          .descriptorCount = 1,
          .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
          .pImageInfo = &atlas},
+        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         .dstSet = set0,
+         .dstBinding = 2,
+         .descriptorCount = 1,
+         .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         .pBufferInfo = &shapes},
     };
-    vkUpdateDescriptorSets(g.device, 2, writes, 0, NULL);
+    vkUpdateDescriptorSets(g.device, 3, writes, 0, NULL);
     cw_texture *textures[CW_MAX_LAYERS];
     uint32_t n = layer_count < CW_MAX_LAYERS ? layer_count : CW_MAX_LAYERS;
     for (uint32_t l = 0; l < n; l++) {
@@ -1204,7 +1221,7 @@ static void end_and_submit(int present) {
 
 /* Draws the frame into the window's next swapchain image, `width` × `height` pixels, and presents it. */
 int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                       const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r, float g_,
+                       const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r, float g_,
                        float b) {
     if (g.surface == VK_NULL_HANDLE) {
         return 1;
@@ -1235,7 +1252,7 @@ int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, 
     uint32_t w = g.swap_width < width ? g.swap_width : width;
     uint32_t h = g.swap_height < height ? g.swap_height : height;
     if (!record(g.rp_present, g.swap_framebuffers[index], g.swap_views[index], 1, frame, count, layers,
-                layer_instances, records, layer_count, w, h, r, g_, b)) {
+                layer_instances, records, layer_count, clips, clip_count, w, h, r, g_, b)) {
         return 3;
     }
     end_and_submit(1);
@@ -1257,7 +1274,7 @@ int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, 
 
 /* Draws the frame into an offscreen image and copies its pixels to `out` (RGBA bytes, Raster's order). */
 int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                         const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r,
+                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r,
                          float g_, float b, uint32_t *out) {
     if (!g.ready) {
         return 1;
@@ -1283,7 +1300,7 @@ int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers
         return 3;
     }
     if (!record(g.rp_clear, o->framebuffer, o->view, 0, frame, count, layers, layer_instances, records, layer_count,
-                width, height, r, g_, b)) {
+                clips, clip_count, width, height, r, g_, b)) {
         return 4;
     }
     if (out != NULL) {
@@ -1305,9 +1322,9 @@ int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers
 
 /* Draws the frame offscreen and waits for it, reading nothing back: for timing the GPU. */
 int32_t cw_gpu_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                           const float *records, uint32_t layer_count, uint32_t width, uint32_t height, float r,
+                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r,
                            float g_, float b) {
-    return cw_gpu_render_to(frame, count, layers, layer_instances, records, layer_count, width, height, r, g_, b,
+    return cw_gpu_render_to(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, width, height, r, g_, b,
                             NULL);
 }
 #else
