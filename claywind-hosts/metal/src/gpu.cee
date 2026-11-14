@@ -1,0 +1,817 @@
+// SPDX-License-Identifier: MIT
+// The GPU spike's backend: ClayWind's commands as instances for metal.c, one quad each, with the shape, colours,
+// clip and opacity the fragment shader needs. Glyphs and icons are coverage masks that `Raster` rasterizes once (so
+// their shapes are the reference renderer's), packed into an atlas. Layers that composite a group (blend modes,
+// filters) and transforms are not drawn by this spike: their contents are drawn plainly, and `unsupported` counts
+// them.
+
+import claywind;
+
+/// Floats per instance: metal.c's CW_FLOATS, 13 float4s.
+const FLOATS: usize = 52;
+/// The atlas's side in pixels.
+public const ATLAS: usize = 2048;
+/// The largest mask cell `Raster` draws (its capacity).
+public const CELL: usize = 512;
+
+// Offsets of the instance's float4s (metal.c's `struct Inst`).
+const RECT: usize = 0;
+const RADII: usize = 4;
+const C0: usize = 8;
+const C1: usize = 12;
+const STOPS: usize = 24;
+const PARAMS: usize = 28;
+const CLIP: usize = 32;
+const CLIP_SHAPE: usize = 36;
+const CLIP_RADII: usize = 40;
+const MISC: usize = 44;
+const EXTRA: usize = 48;
+
+// The shader's kinds.
+const KIND_FILL: f32 = 0.0;
+const KIND_FRAME: f32 = 1.0;
+const KIND_SHADOW: f32 = 2.0;
+const KIND_LINEAR: f32 = 3.0;
+const KIND_RADIAL: f32 = 4.0;
+const KIND_MASK: f32 = 5.0;
+
+extern "C" {
+    @effects(sleep)
+    fn cw_metal_atlas(pixels: *u8, stride: u32, x0: u32, y0: u32, x1: u32, y1: u32);
+    @effects(sleep)
+    fn cw_metal_present(instances: *f32, count: u32, width: u32, height: u32, r: f32, g: f32, b: f32) -> i32;
+    @effects(sleep)
+    fn cw_metal_render_to(
+        instances: *f32,
+        count: u32,
+        width: u32,
+        height: u32,
+        r: f32,
+        g: f32,
+        b: f32,
+        out: *mut u32,
+    ) -> i32;
+    @effects(sleep)
+    fn cw_metal_render_only(instances: *f32, count: u32, width: u32, height: u32) -> i32;
+}
+
+/// A clip in pixels: the rectangle every pixel must be inside, and for a rounded clip, its shape.
+struct Clip {
+    x0: f32;
+    y0: f32;
+    x1: f32;
+    y1: f32;
+    shape: Rect;
+    radii: Corners;
+    rounded: bool;
+}
+
+/// A mask in the atlas: its place (u, v) and size, and its top-left corner relative to the integer pen position.
+struct MaskEntry {
+    u: u32;
+    v: u32;
+    w: u32;
+    h: u32;
+    ox: i32;
+    oy: i32;
+}
+
+/// ClayWind's commands as Metal instances, with the `Raster` that gives text metrics and rasterizes masks.
+public struct GpuBackend<region r> {
+    public raster: Raster<r>;
+    instances: Vector<f32>;
+    previous: Vector<f32>;
+    clips: Vector<Clip>;
+    opacity: Vector<f32>;
+    ratio: f32;
+    masks: HashMap<u64, MaskEntry>;
+    atlas: Vector<u8>;
+    shelfX: usize;
+    shelfY: usize;
+    shelfH: usize;
+    dirtyX0: usize;
+    dirtyY0: usize;
+    dirtyX1: usize;
+    dirtyY1: usize;
+    placed: Vector<PlacedChar>;
+    scratch: Vector<u8>;
+    /// Commands this spike does not draw (blend, filter and transform groups, pictures), last frame.
+    public unsupported: u32;
+    /// Whether a mask did not fit the atlas.
+    public atlasFull: bool;
+}
+
+fn zeroBytes(count: usize) -> Vector<u8> {
+    var v = Vector<u8>.withCapacity(count)!;
+    for (i in 0..count) {
+        v.push(0)!;
+    }
+    return v;
+}
+
+fn unit(v: u8) -> f32 => round<f32>(v as u32) / 255.0;
+
+/// A colour premultiplied by its alpha, as floats, into `v[at..at + 4]`.
+fn putPremultiplied(v: borrow mut [f32; 52], at: usize, c: Color) {
+    let a = unit(c.a);
+    v[at] = unit(c.r) * a;
+    v[at + 1] = unit(c.g) * a;
+    v[at + 2] = unit(c.b) * a;
+    v[at + 3] = a;
+}
+
+fn putStraight(v: borrow mut [f32; 52], at: usize, c: Color) {
+    v[at] = unit(c.r);
+    v[at + 1] = unit(c.g);
+    v[at + 2] = unit(c.b);
+    v[at + 3] = unit(c.a);
+}
+
+fn putRect(v: borrow mut [f32; 52], at: usize, b: Rect) {
+    v[at] = b.x;
+    v[at + 1] = b.y;
+    v[at + 2] = b.w;
+    v[at + 3] = b.h;
+}
+
+fn putCorners(v: borrow mut [f32; 52], at: usize, c: Corners) {
+    v[at] = c.topLeft;
+    v[at + 1] = c.topRight;
+    v[at + 2] = c.bottomRight;
+    v[at + 3] = c.bottomLeft;
+}
+
+/// raster_fill.cee's clampRadii: fitted so adjacent radii never overlap, never negative.
+fn fit(w: f32, h: f32, c: Corners) -> Corners {
+    let f = c.fitted(w, h);
+    return Corners {
+        topLeft: f.topLeft.max(0.0),
+        topRight: f.topRight.max(0.0),
+        bottomRight: f.bottomRight.max(0.0),
+        bottomLeft: f.bottomLeft.max(0.0),
+    };
+}
+
+fn scaled(c: Corners, s: f32) -> Corners => Corners {
+    topLeft: c.topLeft * s,
+    topRight: c.topRight * s,
+    bottomRight: c.bottomRight * s,
+    bottomLeft: c.bottomLeft * s,
+};
+
+/// Radii grown by `g` where they are rounded (cw_appendRoundedRect's grow).
+fn grown(c: Corners, g: f32) -> Corners => Corners {
+    topLeft: if (c.topLeft > 0.0) c.topLeft + g else 0.0,
+    topRight: if (c.topRight > 0.0) c.topRight + g else 0.0,
+    bottomRight: if (c.bottomRight > 0.0) c.bottomRight + g else 0.0,
+    bottomLeft: if (c.bottomLeft > 0.0) c.bottomLeft + g else 0.0,
+};
+
+/// A sub-pixel offset in `steps` steps: 0 to steps - 1. Masks are cached per step, so a glyph lands within 1/steps
+/// of a pixel of where Raster draws it.
+fn step(f: f32, steps: f32) -> u32 {
+    let q = (f * steps).floor();
+    return if (q < 0.0) 0 else if (q > steps - 1.0) saturatingTruncate<u32>(
+        steps - 1.0,
+    ) else saturatingTruncate<u32>(q);
+}
+
+/// Horizontal and vertical sub-pixel steps for masks.
+const STEPS_X: f32 = 16.0;
+const STEPS_Y: f32 = 4.0;
+
+fn quantized(x: f32, steps: f32) -> u64 => saturatingTruncate<u64>(Math.round(x * steps));
+
+fn whole(x: f32) -> usize => saturatingTruncate<usize>(x.ceil());
+
+impl<region r> GpuBackend<r> {
+    /// A backend over `raster`, whose fonts it uses; the raster needs a capacity of `CELL` × `CELL`.
+    public fn create(raster: Raster<r>) -> GpuBackend<r> {
+        var placed = Vector<PlacedChar>.withCapacity(4096)!;
+        for (i in 0..4096) {
+            placed.push(PlacedChar { codepoint: 0, x: 0.0 })!;
+        }
+        return GpuBackend {
+            raster: raster,
+            instances: Vector<f32>.withCapacity(FLOATS * 8192)!,
+            previous: Vector<f32>.withCapacity(FLOATS * 8192)!,
+            clips: Vector<Clip>.withCapacity(64)!,
+            opacity: Vector<f32>.withCapacity(32)!,
+            ratio: 1.0,
+            masks: HashMap<u64, MaskEntry>.create(),
+            atlas: zeroBytes(ATLAS * ATLAS),
+            shelfX: 0,
+            shelfY: 0,
+            shelfH: 0,
+            dirtyX0: ATLAS,
+            dirtyY0: ATLAS,
+            dirtyX1: 0,
+            dirtyY1: 0,
+            placed: placed,
+            scratch: zeroBytes(CELL * CELL),
+            unsupported: 0,
+            atlasFull: false,
+        };
+    }
+
+    /// Starts a frame of `width` × `height` pixels at `ratio` pixels per point.
+    public fn begin(borrow mut this, width: u32, height: u32, ratio: f32) {
+        this.instances.clear();
+        this.clips.clear();
+        this.clips.push(
+            Clip {
+                x0: 0.0,
+                y0: 0.0,
+                x1: round<f32>(width),
+                y1: round<f32>(height),
+                shape: Rect.zero(),
+                radii: Corners.all(0.0),
+                rounded: false,
+            },
+        )!;
+        this.opacity.clear();
+        this.opacity.push(1.0)!;
+        this.ratio = ratio;
+        this.unsupported = 0;
+    }
+
+    /// The frame's instance count.
+    public fn instanceCount(borrow this) -> usize => this.instances.length / FLOATS;
+
+    /// Whether this frame's instances differ from the last frame's; they become the last frame's.
+    public fn changed(borrow mut this) -> bool {
+        var same = this.instances.length == this.previous.length;
+        if (same) {
+            for (k in 0..this.instances.length) {
+                if (this.instances[k] != this.previous[k]) {
+                    same = false;
+                    break;
+                }
+            }
+        }
+        if (!same) {
+            this.previous.clear();
+            for (k in 0..this.instances.length) {
+                this.previous.push(this.instances[k])!;
+            }
+        }
+        return !same;
+    }
+
+    /// Sends the part of the atlas that changed to the GPU.
+    /// Safety: metal.c reads the rows [y0, y1) of the atlas, which holds ATLAS × ATLAS bytes, during the call only.
+    public fn upload(borrow mut this) {
+        if (this.dirtyX1 <= this.dirtyX0 || this.dirtyY1 <= this.dirtyY0) {
+            return;
+        }
+        let pixels = this.atlas.view();
+        unsafe {
+            cw_metal_atlas(
+                pixels.ptr,
+                truncate<u32>(ATLAS),
+                truncate<u32>(this.dirtyX0),
+                truncate<u32>(this.dirtyY0),
+                truncate<u32>(this.dirtyX1),
+                truncate<u32>(this.dirtyY1),
+            );
+        }
+        this.dirtyX0 = ATLAS;
+        this.dirtyY0 = ATLAS;
+        this.dirtyX1 = 0;
+        this.dirtyY1 = 0;
+    }
+
+    /// Draws the frame into the window and presents it; 0 when it was shown.
+    /// Safety: metal.c copies the instances, `instanceCount()` × FLOATS floats, during the call only.
+    public fn present(borrow mut this, width: u32, height: u32, clear: Color) -> i32 {
+        this.upload();
+        let data = this.instances.view();
+        return unsafe { cw_metal_present(
+            data.ptr,
+            truncate<u32>(this.instanceCount()),
+            width,
+            height,
+            unit(clear.r),
+            unit(clear.g),
+            unit(clear.b),
+        ) };
+    }
+
+    /// Draws the frame offscreen and copies its pixels (premultiplied RGBA8, Raster's layout) to `out`.
+    /// Safety: metal.c copies the instances during the call, and writes `width` × `height` pixels, which `out` is
+    /// checked to hold.
+    public fn renderTo(borrow mut this, width: u32, height: u32, clear: Color, out: SliceMut<u32>) -> i32 {
+        if ((out.length as u64) < (width as u64) * (height as u64)) {
+            return -1;
+        }
+        this.upload();
+        let data = this.instances.view();
+        return unsafe { cw_metal_render_to(
+            data.ptr,
+            truncate<u32>(this.instanceCount()),
+            width,
+            height,
+            unit(clear.r),
+            unit(clear.g),
+            unit(clear.b),
+            out.ptr,
+        ) };
+    }
+
+    /// Draws the frame offscreen and waits for the GPU, for timing.
+    /// Safety: metal.c copies the instances during the call only.
+    public fn renderOnly(borrow mut this, width: u32, height: u32) -> i32 {
+        this.upload();
+        let data = this.instances.view();
+        return unsafe { cw_metal_render_only(data.ptr, truncate<u32>(this.instanceCount()), width, height) };
+    }
+
+    /// A new instance of `kind` with the current clip and opacity.
+    fn start(borrow this, kind: f32) -> [f32; 52] {
+        var v = [0.0f32; 52];
+        let c = this.clips[this.clips.length - 1];
+        v[CLIP] = c.x0;
+        v[CLIP + 1] = c.y0;
+        v[CLIP + 2] = c.x1;
+        v[CLIP + 3] = c.y1;
+        if (c.rounded) {
+            putRect(mut v, CLIP_SHAPE, c.shape);
+            putCorners(mut v, CLIP_RADII, c.radii);
+        }
+        v[MISC] = kind;
+        v[MISC + 1] = this.opacity[this.opacity.length - 1];
+        return v;
+    }
+
+    fn emit(borrow mut this, v: [f32; 52]) {
+        for (k in 0..FLOATS) {
+            this.instances.push(v[k])!;
+        }
+    }
+
+    fn px(borrow this, b: Rect) -> Rect {
+        let s = this.ratio;
+        return Rect { x: b.x * s, y: b.y * s, w: b.w * s, h: b.h * s };
+    }
+
+    fn fill(borrow mut this, area: Rect, color: Color, radius: Corners) {
+        if (color.a == 0 || area.w <= 0.0 || area.h <= 0.0) {
+            return;
+        }
+        var v = this.start(KIND_FILL);
+        putRect(mut v, RECT, this.px(area));
+        putCorners(mut v, RADII, scaled(fit(area.w, area.h, radius), this.ratio));
+        putPremultiplied(mut v, C0, color);
+        this.emit(v);
+    }
+
+    /// raster_backend.cee's drawBorder: the box minus the box inset by the widths.
+    fn border(borrow mut this, b: Rect, color: Color, radius: Corners, w: BorderWidth) {
+        if (color.a == 0 || (w.left <= 0.0 && w.right <= 0.0 && w.top <= 0.0 && w.bottom <= 0.0)) {
+            return;
+        }
+        let s = this.ratio;
+        let c = fit(b.w, b.h, radius);
+        var v = this.start(KIND_FRAME);
+        putRect(mut v, RECT, this.px(b));
+        putCorners(mut v, RADII, scaled(c, s));
+        putPremultiplied(mut v, C0, color);
+        let iw = b.w - w.left - w.right;
+        let ih = b.h - w.top - w.bottom;
+        if (iw > 0.0 && ih > 0.0) {
+            putRect(mut v, PARAMS, this.px(Rect { x: b.x + w.left, y: b.y + w.top, w: iw, h: ih }));
+            // Raster's inner corners are elliptical (x and y radii); a circle of the smaller is close.
+            let inner = Corners {
+                topLeft: (c.topLeft - w.left).max(0.0).min((c.topLeft - w.top).max(0.0)),
+                topRight: (c.topRight - w.right).max(0.0).min((c.topRight - w.top).max(0.0)),
+                bottomRight: (c.bottomRight - w.right).max(0.0).min((c.bottomRight - w.bottom).max(0.0)),
+                bottomLeft: (c.bottomLeft - w.left).max(0.0).min((c.bottomLeft - w.bottom).max(0.0)),
+            };
+            putCorners(mut v, C1, scaled(inner, s));
+        }
+        this.emit(v);
+    }
+
+    /// raster_backend.cee's drawRing: between the box grown by `offset` and by `offset + width`.
+    fn ring(borrow mut this, b: Rect, ring: Ring, radius: Corners) {
+        if (ring.color.a == 0 || ring.width <= 0.0) {
+            return;
+        }
+        let half = ring.width * 0.5;
+        let g = ring.offset + half;
+        let w = b.w + 2.0 * g;
+        let h = b.h + 2.0 * g;
+        if (w <= 0.0 || h <= 0.0) {
+            return;
+        }
+        let path = fit(w, h, grown(radius, g));
+        let s = this.ratio;
+        var v = this.start(KIND_FRAME);
+        putRect(
+            mut v,
+            RECT,
+            this.px(Rect { x: b.x - g - half, y: b.y - g - half, w: w + ring.width, h: h + ring.width }),
+        );
+        putCorners(
+            mut v,
+            RADII,
+            scaled(
+                Corners {
+                    topLeft: path.topLeft + half,
+                    topRight: path.topRight + half,
+                    bottomRight: path.bottomRight + half,
+                    bottomLeft: path.bottomLeft + half,
+                },
+                s,
+            ),
+        );
+        putPremultiplied(mut v, C0, ring.color);
+        if (w > ring.width && h > ring.width) {
+            putRect(
+                mut v,
+                PARAMS,
+                this.px(Rect { x: b.x - g + half, y: b.y - g + half, w: w - ring.width, h: h - ring.width }),
+            );
+            putCorners(
+                mut v,
+                C1,
+                scaled(
+                    Corners {
+                        topLeft: (path.topLeft - half).max(0.0),
+                        topRight: (path.topRight - half).max(0.0),
+                        bottomRight: (path.bottomRight - half).max(0.0),
+                        bottomLeft: (path.bottomLeft - half).max(0.0),
+                    },
+                    s,
+                ),
+            );
+        }
+        this.emit(v);
+    }
+
+    /// raster_backend.cee's drawShadow: the box offset and grown by `spread`, blurred with σ = blur / 2.
+    fn shadow(borrow mut this, area: Rect, shadow: Shadow, radius: Corners) {
+        if (shadow.color.a == 0) {
+            return;
+        }
+        let sp = shadow.spread;
+        let g = Rect {
+            x: area.x + shadow.offsetX - sp,
+            y: area.y + shadow.offsetY - sp,
+            w: area.w + 2.0 * sp,
+            h: area.h + 2.0 * sp,
+        };
+        if (g.w <= 0.0 || g.h <= 0.0) {
+            return;
+        }
+        let s = this.ratio;
+        let sigma = if (shadow.blur > 0.5) shadow.blur * 0.5 else 0.0;
+        var v = this.start(KIND_SHADOW);
+        putRect(mut v, RECT, this.px(g));
+        putCorners(mut v, RADII, scaled(fit(g.w, g.h, grown(radius, sp)), s));
+        putPremultiplied(mut v, C0, shadow.color);
+        v[PARAMS] = sigma * s;
+        v[MISC + 3] = (sigma * 3.0 + 2.0) * s;
+        this.emit(v);
+    }
+
+    /// raster_backend.cee's drawGradient: CSS linear or radial, up to four stops.
+    fn gradient(borrow mut this, area: Rect, g: Gradient, radius: Corners) {
+        if (area.w <= 0.0 || area.h <= 0.0) {
+            return;
+        }
+        let b = this.px(area);
+        let cx = b.x + b.w * 0.5;
+        let cy = b.y + b.h * 0.5;
+        var v = this.start(KIND_LINEAR);
+        match (g.kind) {
+            GradientKind.Radial => {
+                v[MISC] = KIND_RADIAL;
+                let rr = Math.hypot(b.w, b.h) * 0.5;
+                v[PARAMS] = cx;
+                v[PARAMS + 1] = cy;
+                v[PARAMS + 2] = if (rr > 0.0) rr else 1.0;
+            }
+            GradientKind.Linear => {
+                var angle = g.angle;
+                if (!g.useAngle) {
+                    angle = if (g.vertical) 180.0 else 90.0;
+                }
+                let a = Math.radians(angle);
+                let dx = Math.sin(a);
+                let dy = -Math.cos(a);
+                let half = ((b.w * dx).abs() + (b.h * dy).abs()) * 0.5;
+                v[PARAMS] = cx - dx * half;
+                v[PARAMS + 1] = cy - dy * half;
+                v[PARAMS + 2] = dx * 2.0 * half;
+                v[PARAMS + 3] = dy * 2.0 * half;
+                let len2 = v[PARAMS + 2] * v[PARAMS + 2] + v[PARAMS + 3] * v[PARAMS + 3];
+                v[EXTRA + 2] = if (len2 > 0.0) len2 else 1.0;
+            }
+        }
+        if (g.stopCount == 0) {
+            putStraight(mut v, C0, g.from);
+            putStraight(mut v, C1, g.to);
+            v[STOPS] = 0.0;
+            v[STOPS + 1] = 1.0;
+            v[EXTRA] = 2.0;
+        } else {
+            var last: f32 = 0.0;
+            let n = if (g.stopCount > 4) 4usize else g.stopCount;
+            for (i in 0..n) {
+                // CSS: a stop before the previous one snaps to it.
+                let p = g.stops[i].position.max(last).min(1.0);
+                last = p;
+                putStraight(mut v, C0 + 4 * i, g.stops[i].color);
+                v[STOPS + i] = p;
+            }
+            v[EXTRA] = round<f32>(n);
+        }
+        v[EXTRA + 1] = match (g.spread) {
+            GradientSpread.Pad => 0.0,
+            GradientSpread.Reflect => 1.0,
+            GradientSpread.Repeat => 2.0,
+        };
+        putRect(mut v, RECT, b);
+        putCorners(mut v, RADII, scaled(fit(area.w, area.h, radius), this.ratio));
+        this.emit(v);
+    }
+
+    /// One mask instance: the entry's pixels at the integer pen position (`ix`, `iy`), tinted `color`.
+    fn emitMask(borrow mut this, e: MaskEntry, ix: f32, iy: f32, color: Color) {
+        if (e.w == 0 || e.h == 0) {
+            return;
+        }
+        var v = this.start(KIND_MASK);
+        v[RECT] = ix + round<f32>(e.ox);
+        v[RECT + 1] = iy + round<f32>(e.oy);
+        v[RECT + 2] = round<f32>(e.w);
+        v[RECT + 3] = round<f32>(e.h);
+        v[PARAMS] = round<f32>(e.u);
+        v[PARAMS + 1] = round<f32>(e.v);
+        v[MISC + 3] = -1.0; // exactly the mask's pixels: no anti-aliasing margin
+        putPremultiplied(mut v, C0, color);
+        this.emit(v);
+    }
+
+    /// tvgb_text: each character's mask at its pen position, to a sixteenth of a pixel across and a quarter down.
+    fn text(borrow mut this, area: Rect, run: TextRun, utf8: Slice<u8>) {
+        if (utf8.length == 0 || run.color.a == 0) {
+            return;
+        }
+        let s = this.ratio;
+        let size = (if (run.fontSize > 0.0) run.fontSize else 16.0) * s;
+        let placed = match (this.raster.placeRun(
+            utf8,
+            run.fontId,
+            size,
+            run.letterSpacing * s,
+            mut this.placed.viewMut(),
+        )) {
+            Some(p) => p,
+            null => { return; }
+        };
+        let top = area.y * s;
+        let iy = top.floor();
+        let by = step(top - iy, STEPS_Y);
+        for (k in 0..placed.count) {
+            let pc = this.placed[k];
+            let x = area.x * s + pc.x;
+            let ix = x.floor();
+            let bx = step(x - ix, STEPS_X);
+            match (this.glyphMask(run.fontId, pc.codepoint, size, bx, by)) {
+                Some(e) => { this.emitMask(e, ix, iy, run.color); }
+                null => {}
+            }
+        }
+    }
+
+    fn glyphMask(borrow mut this, fontId: u32, codepoint: u32, size: f32, bx: u32, by: u32) -> MaskEntry? {
+        let key = (1u64 << 62) | ((fontId as u64) & 0xff) << 52 | ((codepoint as u64) & 0x1fffff) << 31 |
+            (quantized(size, 8.0) & 0xffff) << 15 | (bx as u64) << 11 | (by as u64) << 9;
+        match (this.masks.get(key)) {
+            Some(e) => { return MaskEntry { u: e.u, v: e.v, w: e.w, h: e.h, ox: e.ox, oy: e.oy }; }
+            null => {}
+        }
+        let pad = whole(size * 0.5) + 2;
+        let cell = whole(size * 1.5) + 2 * pad;
+        if (cell > CELL) {
+            return null;
+        }
+        var bytes = [0u8; 4];
+        let length = utf8Encode(codepoint, mut bytes);
+        let padF = round<f32>(pad);
+        let command = Command.Text(
+            Rect {
+                x: padF + round<f32>(bx) / STEPS_X,
+                y: padF + round<f32>(by) / STEPS_Y,
+                w: round<f32>(cell),
+                h: round<f32>(cell),
+            },
+            TextRun {
+                start: 0,
+                length: length,
+                color: Color.rgba(255, 255, 255, 255),
+                fontId: fontId,
+                fontSize: size,
+                letterSpacing: 0.0,
+                lineHeight: 0.0,
+            },
+        );
+        let origin = 0 - truncate<i32>(pad);
+        return this.addMask(key, command, bytes[0..length], cell, cell, origin, origin);
+    }
+
+    /// tvgb_icon: the icon's mask at its box, to the same sub-pixel steps as text.
+    fn icon(borrow mut this, area: Rect, icon: Icon) {
+        if (icon.color.a == 0 || area.w <= 0.0 || area.h <= 0.0) {
+            return;
+        }
+        let b = this.px(area);
+        let ix = b.x.floor();
+        let iy = b.y.floor();
+        let bx = step(b.x - ix, STEPS_X);
+        let by = step(b.y - iy, STEPS_Y);
+        let stroke = (if (icon.stroke > 0.0) icon.stroke else 2.0) * this.ratio;
+        let key = (2u64 << 62) | ((icon.id as u64) & 0xff) << 50 | (quantized(b.w, 4.0) & 0x3fff) << 36 |
+            (quantized(b.h, 4.0) & 0x3fff) << 22 | (quantized(stroke, 4.0) & 0x3ff) << 12 | (bx as u64) << 8 |
+            (by as u64) << 6;
+        var entry: MaskEntry? = null;
+        match (this.masks.get(key)) {
+            Some(e) => { entry = MaskEntry { u: e.u, v: e.v, w: e.w, h: e.h, ox: e.ox, oy: e.oy }; }
+            null => {}
+        }
+        if (entry.isNull()) {
+            let w = whole(b.w + 1.0) + 2;
+            let h = whole(b.h + 1.0) + 2;
+            if (w > CELL || h > CELL) {
+                return;
+            }
+            let command = Command.IconDraw(
+                Rect { x: 1.0 + round<f32>(bx) / STEPS_X, y: 1.0 + round<f32>(by) / STEPS_Y, w: b.w, h: b.h },
+                Icon { id: icon.id, color: Color.rgba(255, 255, 255, 255), stroke: stroke },
+            );
+            let none = [0u8; 1];
+            entry = this.addMask(key, command, none[0..0], w, h, -1, -1);
+        }
+        match (entry) {
+            Some(e) => { this.emitMask(e, ix, iy, icon.color); }
+            null => {}
+        }
+    }
+
+    /// Rasterizes `command` in a `w` × `h` cell, crops it to its coverage, and packs it into the atlas. `ox`, `oy`:
+    /// the cell's top-left relative to the integer pen position.
+    fn addMask(
+        borrow mut this,
+        key: u64,
+        command: Command,
+        text: Slice<u8>,
+        w: usize,
+        h: usize,
+        ox: i32,
+        oy: i32,
+    ) -> MaskEntry? {
+        if (!this.raster.rasterizeMask(command, text, w, h, mut this.scratch.viewMut())) {
+            return null;
+        }
+        var x0 = w;
+        var y0 = h;
+        var x1: usize = 0;
+        var y1: usize = 0;
+        for (y in 0..h) {
+            for (x in 0..w) {
+                if (this.scratch[y * w + x] != 0) {
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x + 1);
+                    y1 = y1.max(y + 1);
+                }
+            }
+        }
+        if (x1 <= x0 || y1 <= y0) {
+            let empty = MaskEntry { u: 0, v: 0, w: 0, h: 0, ox: 0, oy: 0 };
+            let stored = this.masks.put(key, empty)!;
+            return empty;
+        }
+        let bw = x1 - x0;
+        let bh = y1 - y0;
+        if (this.shelfX + bw + 1 > ATLAS) {
+            this.shelfX = 0;
+            this.shelfY += this.shelfH + 1;
+            this.shelfH = 0;
+        }
+        if (this.shelfY + bh > ATLAS) {
+            this.atlasFull = true;
+            return null;
+        }
+        let u = this.shelfX;
+        let v = this.shelfY;
+        for (y in 0..bh) {
+            for (x in 0..bw) {
+                this.atlas[(v + y) * ATLAS + u + x] = this.scratch[(y0 + y) * w + x0 + x];
+            }
+        }
+        this.shelfX += bw + 1;
+        this.shelfH = this.shelfH.max(bh);
+        this.dirtyX0 = this.dirtyX0.min(u);
+        this.dirtyY0 = this.dirtyY0.min(v);
+        this.dirtyX1 = this.dirtyX1.max(u + bw);
+        this.dirtyY1 = this.dirtyY1.max(v + bh);
+        let entry = MaskEntry {
+            u: truncate<u32>(u),
+            v: truncate<u32>(v),
+            w: truncate<u32>(bw),
+            h: truncate<u32>(bh),
+            ox: ox + truncate<i32>(x0),
+            oy: oy + truncate<i32>(y0),
+        };
+        let stored = this.masks.put(key, entry)!;
+        return entry;
+    }
+
+    /// tvgb_scissorStart: a plain box clips to its rounded pixel edges; a rounded one keeps its shape.
+    fn clipStart(borrow mut this, area: Rect, radius: Corners) {
+        let parent = this.clips[this.clips.length - 1];
+        let b = this.px(area);
+        var c = parent;
+        if (radius.isZero()) {
+            c.x0 = Math.round(b.x).max(parent.x0);
+            c.y0 = Math.round(b.y).max(parent.y0);
+            c.x1 = Math.round(b.x + b.w).min(parent.x1);
+            c.y1 = Math.round(b.y + b.h).min(parent.y1);
+        } else {
+            c.x0 = b.x.floor().max(parent.x0);
+            c.y0 = b.y.floor().max(parent.y0);
+            c.x1 = (b.x + b.w).ceil().min(parent.x1);
+            c.y1 = (b.y + b.h).ceil().min(parent.y1);
+            c.shape = b;
+            c.radii = scaled(fit(area.w, area.h, radius), this.ratio);
+            c.rounded = true;
+        }
+        c.x1 = c.x1.max(c.x0);
+        c.y1 = c.y1.max(c.y0);
+        this.clips.push(c)!;
+    }
+}
+
+/// `codepoint` as UTF-8 in `out`; its length.
+fn utf8Encode(codepoint: u32, out: borrow mut [u8; 4]) -> usize {
+    if (codepoint < 0x80) {
+        out[0] = truncate<u8>(codepoint);
+        return 1;
+    }
+    if (codepoint < 0x800) {
+        out[0] = truncate<u8>(0xc0 | (codepoint >> 6));
+        out[1] = truncate<u8>(0x80 | (codepoint & 0x3f));
+        return 2;
+    }
+    if (codepoint < 0x10000) {
+        out[0] = truncate<u8>(0xe0 | (codepoint >> 12));
+        out[1] = truncate<u8>(0x80 | ((codepoint >> 6) & 0x3f));
+        out[2] = truncate<u8>(0x80 | (codepoint & 0x3f));
+        return 3;
+    }
+    out[0] = truncate<u8>(0xf0 | (codepoint >> 18));
+    out[1] = truncate<u8>(0x80 | ((codepoint >> 12) & 0x3f));
+    out[2] = truncate<u8>(0x80 | ((codepoint >> 6) & 0x3f));
+    out[3] = truncate<u8>(0x80 | (codepoint & 0x3f));
+    return 4;
+}
+
+impl<region r> Backend for GpuBackend<r> {
+    fn draw(borrow mut this, command: Command, text: Slice<u8>) {
+        match (command) {
+            Command.Fill(area, color, radius) => { this.fill(area, color, radius); }
+            Command.Stroke(area, color, radius, widths) => { this.border(area, color, radius, widths); }
+            Command.Text(area, run) => { this.text(area, run, text); }
+            Command.DropShadow(area, shadow, radius) => { this.shadow(area, shadow, radius); }
+            Command.GradientFill(area, gradient, radius) => { this.gradient(area, gradient, radius); }
+            Command.RingStroke(area, ring, radius) => { this.ring(area, ring, radius); }
+            Command.IconDraw(area, icon) => { this.icon(area, icon); }
+            Command.ClipStart(area, radius, _, _) => { this.clipStart(area, radius); }
+            Command.ClipEnd => {
+                if (this.clips.length > 1) {
+                    let gone = this.clips.pop();
+                }
+            }
+            Command.OpacityStart(_, alpha) => {
+                let top = this.opacity[this.opacity.length - 1];
+                this.opacity.push(top * alpha)!;
+            }
+            Command.OpacityEnd(_) => {
+                if (this.opacity.length > 1) {
+                    let gone = this.opacity.pop();
+                }
+            }
+            Command.Picture(_, _, _, _) => { this.unsupported += 1; }
+            Command.CustomDraw(_, _, _, _) => { this.unsupported += 1; }
+            Command.TransformStart(_, _) => { this.unsupported += 1; }
+            Command.TransformEnd => {}
+            Command.BlendStart(_) => { this.unsupported += 1; }
+            Command.BlendEnd => {}
+            Command.FilterStart(_, _, _) => { this.unsupported += 1; }
+            Command.FilterEnd(_, _) => {}
+        }
+    }
+}

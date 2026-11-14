@@ -45,6 +45,7 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 | `claywind-hosts/headless/` | The demo rendered to files: screenshots, golden tests and benchmarks |
 | `claywind-hosts/browser/` | An HTTP + WebSocket server streaming the demo to a `<canvas>` page |
 | `claywind-hosts/terminal/` | A small dashboard drawn in a terminal, with mouse and keyboard |
+| `claywind-hosts/metal/` | The GPU spike (macOS): the demo drawn by Metal in a window it draws itself, a side-by-side check against `Raster` on every tab, and a 5K benchmark |
 | `claywind-tests/` | The test suite (`ceesafec test`) |
 | `ClayWind-PORT-PLAN.md` | The port's plan and its results, phase by phase |
 | `CEESAFE-FINDINGS.md` | What the port found in CeeSafe itself, and how each finding was resolved |

@@ -1,0 +1,492 @@
+// SPDX-License-Identifier: MIT
+// The GPU spike: the ClayWind demo drawn by Metal (gpu.cee, metal.c) in a window the program draws itself
+// (lib/std's WindowSurface.External and Window.nativeHandle, CeeSafe ADR 0137). macOS only.
+//
+//   ./out/metal                      the demo in a window, redrawn only when its instances change
+//   CLAYWIND_STATS=1                 also print the CPU and GPU time per frame, every 120 frames shown
+//   CLAYWIND_COMPARE=DIR             no window: draw every tab with Raster and with Metal from the same commands,
+//                                    print how far apart they are, and write both and their difference to DIR
+//   CLAYWIND_BENCH=N                 no window: N frames of the dashboard at 5K (5120 × 2880), timed
+//   CLAYWIND_FONT_DIR=DIR            where Arial.ttf, "Arial Bold.ttf" and "Courier New.ttf" are
+//   CLAYWIND_LIGHT=1                 light mode
+
+import claywind;
+import claywind_demo;
+
+const START_WIDTH: u32 = 1024;
+const START_HEIGHT: u32 = 640;
+
+extern "C" {
+    @effects(sleep, alloc)
+    fn cw_metal_init(atlasWidth: u32, atlasHeight: u32) -> i32;
+    @effects(sleep, alloc)
+    fn cw_metal_attach(nswindow: u64, nsview: u64) -> i32;
+    @effects()
+    fn cw_metal_gpu_ms() -> f64;
+}
+
+fn zeros(count: usize) -> Vector<u8> {
+    var v = Vector<u8>.withCapacity(count)!;
+    for (i in 0..count) {
+        v.push(0)!;
+    }
+    return v;
+}
+
+fn readFile(path: StringView) -> Vector<u8> {
+    var bytes = Vector<u8>.create();
+    match (File.open(path)) {
+        Ok(f) => {
+            var file = f;
+            var chunk = [0u8; 65536];
+            loop {
+                let n = match (file.read(mut chunk[..])) {
+                    Ok(k) => k,
+                    Err(_) => 0,
+                };
+                if (n == 0) {
+                    break;
+                }
+                for (i in 0usize..n) {
+                    bytes.push(chunk[i])!;
+                }
+            }
+        }
+        Err(_) => {}
+    }
+    return bytes;
+}
+
+fn fontPath(dir: StringView, file: StringView, path: borrow mut [u8; 512]) -> usize {
+    var w = TextWriter.create(mut path[..]);
+    w.text(dir);
+    w.byte('/');
+    w.text(file);
+    return w.written().length;
+}
+
+/// Loads the regular, bold and monospaced faces into `raster` from CLAYWIND_FONT_DIR or macOS's fonts.
+fn loadFonts(raster: borrow mut Raster) -> bool {
+    let dir = match (Environment.variable("CLAYWIND_FONT_DIR")) {
+        Some(d) => d,
+        null => "/System/Library/Fonts/Supplemental",
+    };
+    let files: [StringView; 3] = ["Arial.ttf", "Arial Bold.ttf", "Courier New.ttf"];
+    let ids: [u32; 3] = [FONT_18, FONT_BOLD, FONT_MONO];
+    for (k in 0usize..3) {
+        var path = [0u8; 512];
+        let n = fontPath(dir, files[k], mut path);
+        let name = match (StringView.fromUtf8(path[0..n])) {
+            Some(s) => s,
+            null => { return false; }
+        };
+        let bytes = readFile(name);
+        if (bytes.length == 0 || !raster.loadFont(ids[k], bytes.view())) {
+            Console.writeError("metal: cannot load ");
+            Console.writeErrorLine(name);
+            return false;
+        }
+    }
+    return true;
+}
+
+fn nanos() -> u64 => Clock.monotonicNanos();
+
+fn ms(from: u64, to: u64) -> f64 => round<f64>(to - from) / 1000000.0;
+
+/// Safety: metal.c's init only reads its two sizes.
+fn main() -> i32 {
+    var uiStorage = zeros(16777216);
+    var gpuStorage = zeros(33554432);
+    let uiMemory = FixedBufferAllocator.over(mut uiStorage.viewMut());
+    let gpuMemory = FixedBufferAllocator.over(mut gpuStorage.viewMut());
+    var ui = match (Ui.create(uiMemory, UiCapacity.of(4096))) {
+        Ok(u) => u,
+        Err(_) => {
+            Console.writeErrorLine("metal: not enough memory for the UI");
+            return 1;
+        }
+    };
+    var masks = match (Raster.create(gpuMemory, RasterCapacity.of(CELL, CELL))) {
+        Ok(r) => r,
+        Err(_) => {
+            Console.writeErrorLine("metal: not enough memory for the mask renderer");
+            return 1;
+        }
+    };
+    if (!loadFonts(mut masks)) {
+        return 1;
+    }
+    var gpu = GpuBackend.create(masks);
+    let started = unsafe { cw_metal_init(truncate<u32>(ATLAS), truncate<u32>(ATLAS)) };
+    if (started != 0) {
+        Console.write("metal: no Metal device or pipeline (");
+        Console.write(started);
+        Console.writeLine(")");
+        return 1;
+    }
+    ui.setDarkMode(Environment.variable("CLAYWIND_LIGHT") == null);
+    match (Environment.variable("CLAYWIND_COMPARE")) {
+        Some(dir) => { return compare(mut ui, mut gpu, dir); }
+        null => {}
+    }
+    match (Environment.variable("CLAYWIND_BENCH")) {
+        Some(n) => { return bench(mut ui, mut gpu, number(n)); }
+        null => {}
+    }
+    return interactive(mut ui, mut gpu);
+}
+
+fn number(text: StringView) -> u64 {
+    var n: u64 = 0;
+    for (b in text.bytes()) {
+        if (b >= '0' && b <= '9') {
+            n = n * 10 + (b - '0') as u64;
+        }
+    }
+    return n;
+}
+
+/// The demo in a window that Metal draws: redrawn only when the frame's instances change.
+/// Safety: metal.c keeps the window's handles, which stay valid while `window` lives, through the whole loop.
+fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
+    var window = match (Window.openWith("ClayWind — Metal", START_WIDTH, START_HEIGHT, WindowSurface.External)) {
+        Ok(w) => w,
+        Err(_) => {
+            Console.writeErrorLine("metal: cannot open a window");
+            return 1;
+        }
+    };
+    match (window.nativeHandle()) {
+        WindowHandle.AppKit(nswindow, nsview) => {
+            if (unsafe { cw_metal_attach(nswindow, nsview) } != 0) {
+                Console.writeErrorLine("metal: cannot attach a Metal layer");
+                return 1;
+            }
+        }
+        _ => {
+            Console.writeErrorLine("metal: this spike needs macOS");
+            return 1;
+        }
+    }
+    let stats = Environment.variable("CLAYWIND_STATS") != null;
+    let size = window.size();
+    var platform = DesktopPlatform.create(Dims { w: round<f32>(size.width), h: round<f32>(size.height) });
+    var app = DemoApp.create();
+    var last = Timer.now();
+    var lastWidth: u32 = 0;
+    var lastHeight: u32 = 0;
+    var shown: u64 = 0;
+    var cpuTotal: f64 = 0.0;
+    var gpuTotal: f64 = 0.0;
+    loop {
+        loop {
+            match (window.nextEvent()) {
+                Some(WindowEvent.Closed) => { return 0; }
+                Some(e) => { platform.apply(e); }
+                null => { break; }
+            }
+        }
+        let t0 = nanos();
+        let points = window.size();
+        let scale = window.scale().max(1.0);
+        let width = saturatingTruncate<u32>(Math.round(round<f32>(points.width) * scale));
+        let height = saturatingTruncate<u32>(Math.round(round<f32>(points.height) * scale));
+        let now = Timer.now();
+        platform.setFrameTime(round<f32>(now - last) / 1000.0);
+        last = now;
+        ui.begin(mut platform);
+        demoFrame(mut ui, mut app, gpu.raster);
+        match (ui.endFrame(mut platform, gpu.raster)) {
+            Ok() => {}
+            Err(_) => {
+                Console.writeErrorLine("metal: the frame does not fit the UI capacity");
+                return 1;
+            }
+        }
+        window.setCursor(windowCursor(platform.cursor));
+        gpu.begin(width, height, scale);
+        ui.renderInto(mut gpu);
+        if (gpu.changed() || width != lastWidth || height != lastHeight) {
+            if (gpu.present(width, height, Color.hex(pageBg(ui))) != 0) {
+                Console.writeErrorLine("metal: no drawable");
+            }
+            lastWidth = width;
+            lastHeight = height;
+            shown += 1;
+            cpuTotal += ms(t0, nanos());
+            gpuTotal += unsafe { cw_metal_gpu_ms() };
+            if (stats && shown % 120 == 0) {
+                Console.write("frames ");
+                Console.write(shown);
+                Console.write(", instances ");
+                Console.write(gpu.instanceCount());
+                Console.write(", cpu ms ");
+                Console.write(cpuTotal / 120.0);
+                Console.write(", gpu ms ");
+                Console.writeLine(gpuTotal / 120.0);
+                cpuTotal = 0.0;
+                gpuTotal = 0.0;
+            }
+        } else {
+            window.waitFrame();
+        }
+        platform.endFrame();
+    }
+}
+
+/// The demo's frame `frames` times on a scripted platform (no input), as the headless host settles a tab.
+fn settle(
+    ui: borrow mut Ui,
+    app: borrow mut DemoApp,
+    gpu: borrow GpuBackend,
+    platform: borrow mut ScriptPlatform,
+    frames: u32,
+) {
+    for (f in 0..frames) {
+        platform.beginFrame();
+        ui.begin(mut platform);
+        demoFrame(mut ui, mut app, gpu.raster);
+        ui.endFrame(mut platform, gpu.raster)!;
+        platform.endFrame();
+    }
+}
+
+/// Every tab drawn by Raster and by Metal from the same commands, at 1024 × 640 points and a ratio of 2: how far
+/// apart the two frames are, and both frames and their difference as BMPs in `dir`.
+fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i32 {
+    let ratio: f32 = 2.0;
+    let width: u32 = 2048;
+    let height: u32 = 1280;
+    var storage = zeros(201326592);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var reference = match (Raster.create(memory, RasterCapacity.of(width as usize, height as usize))) {
+        Ok(r) => r,
+        Err(_) => {
+            Console.writeErrorLine("metal: not enough memory for the reference renderer");
+            return 1;
+        }
+    };
+    if (!loadFonts(mut reference)) {
+        return 1;
+    }
+    reference.setPixelRatio(ratio);
+    var pixels = Vector<u32>.withCapacity((width * height) as usize)!;
+    for (i in 0..width * height) {
+        pixels.push(0)!;
+    }
+    Console.writeLine("tab        instances  skipped  raster ms  metal ms  mean diff  >8 %     >32 %    max");
+    var worst: f64 = 0.0;
+    for (tab in 0usize..NAV_COUNT) {
+        var app = DemoApp.create();
+        app.selectTab(tab);
+        let none = [0u8; 1];
+        var platform = ScriptPlatform.create(none[0..0], Dims { w: 1024.0, h: 640.0 });
+        settle(mut ui, mut app, gpu, mut platform, 28);
+        let clear = Color.hex(pageBg(ui));
+        let r0 = nanos();
+        reference.begin(clear);
+        ui.renderInto(mut reference);
+        reference.finish();
+        let r1 = nanos();
+        gpu.begin(width, height, ratio);
+        ui.renderInto(mut gpu);
+        if (gpu.renderTo(width, height, clear, mut pixels.viewMut()) != 0) {
+            Console.writeErrorLine("metal: the offscreen frame failed");
+            return 1;
+        }
+        let r2 = nanos();
+        // A second pass, now that the atlas holds every mask: the steady-state cost.
+        gpu.begin(width, height, ratio);
+        ui.renderInto(mut gpu);
+        let r3 = nanos();
+        let ignored = gpu.renderTo(width, height, clear, mut pixels.viewMut());
+        let r4 = nanos();
+        let a = reference.pixels();
+        var sum: u64 = 0;
+        var over8: u64 = 0;
+        var over32: u64 = 0;
+        var largest: u32 = 0;
+        var diff = Vector<u32>.withCapacity(a.length)!;
+        for (k in 0..a.length) {
+            let d = channelDiff(a[k], pixels[k]);
+            sum += d as u64;
+            if (d > 8) {
+                over8 += 1;
+            }
+            if (d > 32) {
+                over32 += 1;
+            }
+            largest = largest.max(d);
+            let shade = (d * 4).min(255);
+            diff.push(0xff000000u32 | shade | shade << 8 | shade << 16)!;
+        }
+        let count = round<f64>(a.length);
+        let mean = round<f64>(sum) / count;
+        let pct32 = round<f64>(over32) * 100.0 / count;
+        worst = worst.max(pct32);
+        Console.write(tabName(tab));
+        Console.write("  ");
+        Console.write(gpu.instanceCount());
+        Console.write("  ");
+        Console.write(gpu.unsupported);
+        Console.write("  ");
+        Console.write(ms(r0, r1));
+        Console.write("  ");
+        Console.write(ms(r2, r3) + ms(r3, r4));
+        Console.write("  ");
+        Console.write(mean);
+        Console.write("  ");
+        Console.write(round<f64>(over8) * 100.0 / count);
+        Console.write("  ");
+        Console.write(pct32);
+        Console.write("  ");
+        Console.writeLine(largest);
+        writeImage(dir, tab, "raster", a, width, height);
+        writeImage(dir, tab, "metal", pixels.view(), width, height);
+        writeImage(dir, tab, "diff", diff.view(), width, height);
+        let ignore = r2;
+    }
+    if (gpu.atlasFull) {
+        Console.writeLine("the atlas filled up");
+    }
+    return 0;
+}
+
+fn tabName(tab: usize) -> StringView => match (tab) {
+    0 => "dashboard",
+    1 => "controls ",
+    2 => "effects  ",
+    3 => "projects ",
+    4 => "activity ",
+    _ => "settings ",
+};
+
+/// The largest difference between two pixels' channels.
+fn channelDiff(a: u32, b: u32) -> u32 {
+    var largest: u32 = 0;
+    for (k in 0u32..4) {
+        let x = (a >> (8 * k)) & 0xff;
+        let y = (b >> (8 * k)) & 0xff;
+        largest = largest.max(if (x > y) x - y else y - x);
+    }
+    return largest;
+}
+
+fn pushLe(out: borrow mut Vector<u8>, v: u32, bytes: u32) {
+    for (i in 0..bytes) {
+        out.push(truncate<u8>(v >> (8 * i)))!;
+    }
+}
+
+/// `pixels` as a top-down 32-bit BMP in `dir`, named for the tab and the renderer.
+fn writeImage(dir: StringView, tab: usize, what: StringView, pixels: Slice<u32>, w: u32, h: u32) {
+    var out = Vector<u8>.withCapacity((w * h * 4 + 122) as usize)!;
+    let size = w * h * 4;
+    out.push('B')!;
+    out.push('M')!;
+    pushLe(mut out, 122 + size, 4);
+    pushLe(mut out, 0, 4);
+    pushLe(mut out, 122, 4);
+    pushLe(mut out, 108, 4);
+    pushLe(mut out, w, 4);
+    pushLe(mut out, (h ^ 0xFFFFFFFF) + 1, 4); // negative height: top-down rows
+    pushLe(mut out, 1, 2);
+    pushLe(mut out, 32, 2);
+    pushLe(mut out, 3, 4); // BI_BITFIELDS
+    pushLe(mut out, size, 4);
+    pushLe(mut out, 2835, 4);
+    pushLe(mut out, 2835, 4);
+    pushLe(mut out, 0, 4);
+    pushLe(mut out, 0, 4);
+    pushLe(mut out, 0x00FF0000, 4);
+    pushLe(mut out, 0x0000FF00, 4);
+    pushLe(mut out, 0x000000FF, 4);
+    pushLe(mut out, 0xFF000000, 4);
+    pushLe(mut out, 0x73524742, 4); // LCS_sRGB
+    for (i in 0..48) {
+        out.push(0)!;
+    }
+    for (p in pixels) {
+        out.push(truncate<u8>(p >> 16))!;
+        out.push(truncate<u8>(p >> 8))!;
+        out.push(truncate<u8>(p))!;
+        out.push(truncate<u8>(p >> 24))!;
+    }
+    var path = [0u8; 512];
+    var writer = TextWriter.create(mut path[..]);
+    writer.text(dir);
+    writer.text("/tab");
+    writer.decimal(tab as u64);
+    writer.byte('-');
+    writer.text(what);
+    writer.text(".bmp");
+    let n = writer.written().length;
+    let name = match (StringView.fromUtf8(path[0..n])) {
+        Some(s) => s,
+        null => { return; }
+    };
+    match (File.create(name)) {
+        Ok(f) => {
+            var file = f;
+            let written = file.write(out.view());
+        }
+        Err(_) => {
+            Console.writeError("metal: cannot write ");
+            Console.writeErrorLine(name);
+        }
+    }
+}
+
+/// `frames` frames of the dashboard at 5K (2560 × 1440 points at a ratio of 2), offscreen: the time to lay out,
+/// to build the instances, and the GPU's time.
+/// Safety: cw_metal_gpu_ms only reads the last frame's time.
+fn bench(ui: borrow mut Ui, gpu: borrow mut GpuBackend, frames: u64) -> i32 {
+    let ratio: f32 = 2.0;
+    let width: u32 = 5120;
+    let height: u32 = 2880;
+    var app = DemoApp.create();
+    let none = [0u8; 1];
+    var platform = ScriptPlatform.create(none[0..0], Dims { w: 2560.0, h: 1440.0 });
+    settle(mut ui, mut app, gpu, mut platform, 28);
+    var layout: f64 = 0.0;
+    var build: f64 = 0.0;
+    var total: f64 = 0.0;
+    var gpuMs: f64 = 0.0;
+    let n = if (frames < 1) 1 else frames;
+    for (f in 0..n + 1) {
+        let t0 = nanos();
+        platform.beginFrame();
+        ui.begin(mut platform);
+        demoFrame(mut ui, mut app, gpu.raster);
+        ui.endFrame(mut platform, gpu.raster)!;
+        platform.endFrame();
+        let t1 = nanos();
+        gpu.begin(width, height, ratio);
+        ui.renderInto(mut gpu);
+        let t2 = nanos();
+        let ignored = gpu.renderOnly(width, height);
+        let t3 = nanos();
+        if (f > 0) { // the first frame fills the atlas
+            layout += ms(t0, t1);
+            build += ms(t1, t2);
+            total += ms(t0, t3);
+            gpuMs += unsafe { cw_metal_gpu_ms() };
+        }
+    }
+    let count = round<f64>(n);
+    Console.write("5120 x 2880, ");
+    Console.write(gpu.instanceCount());
+    Console.write(" instances, ");
+    Console.write(n);
+    Console.writeLine(" frames, ms per frame:");
+    Console.write("  layout ");
+    Console.writeLine(layout / count);
+    Console.write("  build  ");
+    Console.writeLine(build / count);
+    Console.write("  gpu    ");
+    Console.writeLine(gpuMs / count);
+    Console.write("  total  ");
+    Console.writeLine(total / count);
+    return 0;
+}

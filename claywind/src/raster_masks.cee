@@ -1,0 +1,107 @@
+// SPDX-License-Identifier: MIT
+// What a GPU backend needs from the software renderer: where a text run's characters go, and coverage masks of
+// glyphs and icons drawn exactly as `Raster` draws them, to keep in a texture atlas.
+
+/// What `Raster.placeRun` placed: the ascent in pixels (the baseline's distance below the run's top) and how many
+/// characters it wrote.
+public struct PlacedRun {
+    public ascent: f32;
+    public count: usize;
+}
+
+/// A character of a text run, placed by `Raster.placeRun`.
+public struct PlacedChar {
+    public codepoint: u32;
+    /// The pen's x for this character, in pixels at the run's size, from the run's left edge.
+    public x: f32;
+}
+
+impl<region r> Raster<r> {
+    /// Places the characters of `utf8` as `Command.Text` draws them at `fontSize` pixels per em: kerning, and
+    /// `letterSpacing` spread over the run as `drawText` spreads it. Newlines and characters the font lacks are left
+    /// out, and so are characters past `out`'s length. Null without a font.
+    public fn placeRun(
+        borrow this,
+        utf8: Slice<u8>,
+        fontId: u32,
+        fontSize: f32,
+        letterSpacing: f32,
+        out: SliceMut<PlacedChar>,
+    ) -> PlacedRun? {
+        var count: usize = 0;
+        let slot = match (this.fontSlot(fontId)) {
+            Some(s) => s,
+            null => { return null; }
+        };
+        let size = if (fontSize > 0.0) fontSize else 16.0;
+        let scale = size / slot.info.unitsPerEm;
+        var spacing: f32 = 1.0;
+        if (letterSpacing > 0.0) {
+            let natural = this.measureWidth(utf8, fontId, size, 0.0);
+            if (natural > 0.0) {
+                spacing = (natural + letterSpacing * round<f32>(utf8.length)) / natural;
+            }
+        }
+        let d = this.fontPool[slot.offset..slot.offset + slot.size];
+        var cursor: f32 = 0.0;
+        var previous: u32 = INVALID_GLYPH;
+        var i: usize = 0;
+        while (i < utf8.length) {
+            let cp = decodeUtf8(utf8, i);
+            i += cp[1] as usize;
+            if (cp[0] == 10) {
+                continue;
+            }
+            let glyph = glyphIndex(d, slot.info, cp[0]);
+            if (glyph == INVALID_GLYPH) {
+                continue;
+            }
+            var kernX: f32 = 0.0;
+            if (previous != INVALID_GLYPH) {
+                kernX = kerning(d, slot.info, previous, glyph);
+            }
+            let advance = glyphAdvance(d, slot.info, glyph);
+            if (count < out.length) {
+                out[count] = PlacedChar { codepoint: cp[0], x: (cursor + kernX) * scale };
+                count += 1;
+            }
+            cursor += (advance + kernX) * spacing;
+            previous = glyph;
+        }
+        return PlacedRun { ascent: slot.info.ascent * scale, count: count };
+    }
+
+    /// Draws `command` (with `text` for a `Command.Text`) at one pixel per point into a transparent `width` ×
+    /// `height` frame, and writes the frame's coverage, row by row, to `out`. Draw it in white for a mask: the
+    /// coverage is then the alpha `Raster` would composite. False when the size exceeds the capacity or `out`. The
+    /// frame's size and the pixel ratio are restored, so a `Raster` used for text metrics can make masks between
+    /// frames.
+    public fn rasterizeMask(
+        borrow mut this,
+        command: Command,
+        text: Slice<u8>,
+        width: usize,
+        height: usize,
+        out: SliceMut<u8>,
+    ) -> bool {
+        if (out.length < width * height) {
+            return false;
+        }
+        let savedRatio = this.ratio;
+        let savedWidth = idx(this.width);
+        let savedHeight = idx(this.height);
+        if (!this.resize(width, height)) {
+            return false;
+        }
+        this.ratio = 1.0;
+        this.begin(Color.rgba(0, 0, 0, 0));
+        this.draw(command, text);
+        this.finish();
+        for (k in 0..width * height) {
+            out[k] = truncate<u8>(this.pool[k] >> 24);
+        }
+        this.ratio = savedRatio;
+        let restored = this.resize(savedWidth, savedHeight);
+        return true;
+    }
+}
