@@ -57,7 +57,7 @@ int32_t cw_gpu_render_only(const float *frame, uint32_t count, const float *laye
 double cw_gpu_gpu_ms(void);
 void cw_gpu_finish(void);
 
-#define CW_FLOATS 68 /* gpu.cee's FLOATS: 17 float4s per instance */
+#define CW_FLOATS 84 /* gpu.cee's FLOATS: 21 float4s per instance */
 #define CW_RECORD 8  /* gpu.cee's RECORD: a layer's first instance, count, box x0 y0 x1 y1, box radii k0 k1 */
 #define CW_KIND 44   /* where an instance keeps its kind */
 #define CW_KIND_LAYER 6.0f
@@ -69,7 +69,8 @@ static const char *const cw_shader_parts[] = {
     "using namespace metal;\n"
     "struct Inst { float4 rect; float4 radii; float4 c0; float4 c1; float4 c2; float4 c3; float4 stops;\n"
     "              float4 params; float4 clip; float4 clipShape; float4 clipRadii; float4 misc; float4 extra;\n"
-    "              float4 xf0; float4 xf1; float4 clipXf0; float4 clipXf1; };\n"
+    "              float4 xf0; float4 xf1; float4 clipXf0; float4 clipXf1;\n"
+    "              float4 clip2Shape; float4 clip2Radii; float4 clip2Xf0; float4 clip2Xf1; };\n"
     "struct VOut { float4 position [[position]]; uint inst [[flat]]; float2 local; };\n"
     /* target: the target's origin in the frame (xy) and its size (zw), in pixels. */
     "vertex VOut vmain(uint vid [[vertex_id]], uint iid [[instance_id]], const device Inst *insts [[buffer(0)]],\n"
@@ -104,7 +105,15 @@ static const char *const cw_shader_parts[] = {
     "    if (!xf && !any(I.clipRadii > 0.0)) { return 1.0; }\n"
     "    float2 q = xf ? float2(I.clipXf0.x * p.x + I.clipXf0.z * p.y + I.clipXf1.x,\n"
     "                           I.clipXf0.y * p.x + I.clipXf0.w * p.y + I.clipXf1.y) : p;\n"
-    "    return cover(sdRR(q, I.clipShape, I.clipRadii) * (xf ? I.clipXf1.z : 1.0));\n"
+    "    float k = cover(sdRR(q, I.clipShape, I.clipRadii) * (xf ? I.clipXf1.z : 1.0));\n"
+    /* The shape it is nested in, if any (scale above 0): the coverages multiply, as Raster's nested masks do. */
+    "    if (I.clip2Xf1.z > 0.0) {\n"
+    "        bool xf2 = I.clip2Xf1.w != 0.0;\n"
+    "        float2 q2 = xf2 ? float2(I.clip2Xf0.x * p.x + I.clip2Xf0.z * p.y + I.clip2Xf1.x,\n"
+    "                                 I.clip2Xf0.y * p.x + I.clip2Xf0.w * p.y + I.clip2Xf1.y) : p;\n"
+    "        k *= cover(sdRR(q2, I.clip2Shape, I.clip2Radii) * (xf2 ? I.clip2Xf1.z : 1.0));\n"
+    "    }\n"
+    "    return k;\n"
     "}\n"
     "static float erfApprox(float x) {\n"
     "    float x2 = x * x;\n"

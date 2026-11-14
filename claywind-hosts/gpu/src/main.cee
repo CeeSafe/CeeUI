@@ -493,7 +493,7 @@ fn drawScene<B: Backend>(b: borrow mut B) {
     b.draw(Command.TransformStart(Rect.zero(), transform(-9.0, 1.0, 0.0, 300.0, 470.0)), empty);
     b.draw(Command.ClipStart(Rect { x: 120.0, y: 360.0, w: 360.0, h: 220.0 }, Corners.all(36.0), true, true), empty);
     b.draw(Command.Fill(Rect { x: 100.0, y: 340.0, w: 400.0, h: 260.0 }, Color.hex(0x1e293bff), all), empty);
-    b.draw(Command.ClipStart(Rect { x: 140.0, y: 380.0, w: 200.0, h: 120.0 }, all, true, true), empty);
+    b.draw(Command.ClipStart(Rect { x: 96.0, y: 336.0, w: 240.0, h: 160.0 }, all, true, true), empty);
     b.draw(Command.Fill(Rect { x: 100.0, y: 360.0, w: 300.0, h: 200.0 }, Color.hex(0x3b82f6ff), all), empty);
     b.draw(Command.ClipEnd, empty);
     b.draw(Command.OpacityStart(Rect { x: 300.0, y: 420.0, w: 220.0, h: 180.0 }, 0.5), empty);
@@ -512,6 +512,26 @@ fn drawScene<B: Backend>(b: borrow mut B) {
     label(mut b, 150.0, 520.0, "nested clip, group, blend");
     b.draw(Command.ClipEnd, empty);
     b.draw(Command.TransformEnd, empty);
+    // A rotated rounded clip inside a plain rounded one, and a third rounded clip inside both (the GPU keeps the
+    // inner two: approximated).
+    b.draw(Command.ClipStart(Rect { x: 520.0, y: 300.0, w: 170.0, h: 140.0 }, Corners.all(30.0), true, true), empty);
+    b.draw(Command.Fill(Rect { x: 500.0, y: 280.0, w: 210.0, h: 180.0 }, Color.hex(0x334155ff), all), empty);
+    b.draw(Command.TransformStart(Rect.zero(), transform(25.0, 1.0, 0.0, 605.0, 370.0)), empty);
+    b.draw(Command.ClipStart(Rect { x: 540.0, y: 320.0, w: 150.0, h: 110.0 }, Corners.all(18.0), true, true), empty);
+    b.draw(
+        Command.GradientFill(
+            Rect { x: 500.0, y: 280.0, w: 220.0, h: 190.0 },
+            gradient(0x22d3eeff, 0xa855f7ff, 90.0),
+            all,
+        ),
+        empty,
+    );
+    b.draw(Command.ClipStart(Rect { x: 600.0, y: 340.0, w: 120.0, h: 120.0 }, Corners.all(60.0), true, true), empty);
+    b.draw(Command.Fill(Rect { x: 560.0, y: 300.0, w: 200.0, h: 200.0 }, Color.hex(0xfde047ff), all), empty);
+    b.draw(Command.ClipEnd, empty);
+    b.draw(Command.ClipEnd, empty);
+    b.draw(Command.TransformEnd, empty);
+    b.draw(Command.ClipEnd, empty);
     // A rounded clip under a strong rotation and a scale below 1.
     b.draw(Command.TransformStart(Rect.zero(), transform(35.0, 0.8, 0.0, 780.0, 460.0)), empty);
     b.draw(Command.ClipStart(Rect { x: 660.0, y: 360.0, w: 240.0, h: 200.0 }, Corners.all(40.0), true, true), empty);

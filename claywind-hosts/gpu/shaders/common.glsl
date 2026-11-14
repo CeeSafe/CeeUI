@@ -20,6 +20,10 @@ struct Inst {
     vec4 xf1;
     vec4 clipXf0;
     vec4 clipXf1;
+    vec4 clip2Shape;
+    vec4 clip2Radii;
+    vec4 clip2Xf0;
+    vec4 clip2Xf1;
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer Instances {
@@ -55,5 +59,14 @@ float clipCover(Inst I, vec2 p) {
     }
     vec2 q = xf ? vec2(I.clipXf0.x * p.x + I.clipXf0.z * p.y + I.clipXf1.x, I.clipXf0.y * p.x + I.clipXf0.w * p.y + I.clipXf1.y)
                 : p;
-    return cover(sdRR(q, I.clipShape, I.clipRadii) * (xf ? I.clipXf1.z : 1.0));
+    float k = cover(sdRR(q, I.clipShape, I.clipRadii) * (xf ? I.clipXf1.z : 1.0));
+    // The shape it is nested in, if any (scale above 0): the coverages multiply, as Raster's nested masks do.
+    if (I.clip2Xf1.z > 0.0) {
+        bool xf2 = I.clip2Xf1.w != 0.0;
+        vec2 q2 = xf2 ? vec2(I.clip2Xf0.x * p.x + I.clip2Xf0.z * p.y + I.clip2Xf1.x,
+                             I.clip2Xf0.y * p.x + I.clip2Xf0.w * p.y + I.clip2Xf1.y)
+                      : p;
+        k *= cover(sdRR(q2, I.clip2Shape, I.clip2Radii) * (xf2 ? I.clip2Xf1.z : 1.0));
+    }
+    return k;
 }
