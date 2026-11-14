@@ -10,8 +10,8 @@
 
 import claywind;
 
-/// Floats per instance: metal.c's CW_FLOATS, 15 float4s.
-const FLOATS: usize = 60;
+/// Floats per instance: metal.c's CW_FLOATS, 17 float4s.
+const FLOATS: usize = 68;
 /// Floats per layer record: metal.c's CW_RECORD (first instance, count, box x0 y0 x1 y1, box radii k0 k1).
 const RECORD: usize = 8;
 /// The atlas's side in pixels.
@@ -33,6 +33,9 @@ const MISC: usize = 44;
 const EXTRA: usize = 48;
 const XF0: usize = 52;
 const XF1: usize = 56;
+// A clip under a transform: the inverse of its transform (frame pixels to the clip's own), its scale, and a flag.
+const CLIP_XF0: usize = 60;
+const CLIP_XF1: usize = 64;
 
 // The shader's kinds.
 const KIND_FILL: f32 = 0.0;
@@ -105,6 +108,11 @@ struct Clip {
     shape: Rect;
     radii: Corners;
     rounded: bool;
+    /// A shape under a transform: `inverse` maps frame pixels into the shape's own, where it is `scale` times
+    /// smaller.
+    transformed: bool;
+    inverse: Affine2;
+    scale: f32;
 }
 
 /// A box of pixels: [x0, x1) × [y0, y1).
@@ -182,7 +190,7 @@ public struct GpuBackend<region r> {
     scratch: Vector<u8>;
     /// Commands this spike does not draw (pictures, custom draws), last frame.
     public unsupported: u32;
-    /// Clips under a transform, drawn as their axis-aligned bounds, last frame.
+    /// Clip shapes nested in another shape, last frame: Raster intersects the two, this keeps the inner one.
     public approximated: u32;
     /// Whether a mask did not fit the atlas.
     public atlasFull: bool;
@@ -199,7 +207,7 @@ fn zeroBytes(count: usize) -> Vector<u8> {
 fn unit(v: u8) -> f32 => round<f32>(v as u32) / 255.0;
 
 /// A colour premultiplied by its alpha, as floats, into `v[at..at + 4]`.
-fn putPremultiplied(v: borrow mut [f32; 60], at: usize, c: Color) {
+fn putPremultiplied(v: borrow mut [f32; 68], at: usize, c: Color) {
     let a = unit(c.a);
     v[at] = unit(c.r) * a;
     v[at + 1] = unit(c.g) * a;
@@ -207,21 +215,21 @@ fn putPremultiplied(v: borrow mut [f32; 60], at: usize, c: Color) {
     v[at + 3] = a;
 }
 
-fn putStraight(v: borrow mut [f32; 60], at: usize, c: Color) {
+fn putStraight(v: borrow mut [f32; 68], at: usize, c: Color) {
     v[at] = unit(c.r);
     v[at + 1] = unit(c.g);
     v[at + 2] = unit(c.b);
     v[at + 3] = unit(c.a);
 }
 
-fn putRect(v: borrow mut [f32; 60], at: usize, b: Rect) {
+fn putRect(v: borrow mut [f32; 68], at: usize, b: Rect) {
     v[at] = b.x;
     v[at + 1] = b.y;
     v[at + 2] = b.w;
     v[at + 3] = b.h;
 }
 
-fn putCorners(v: borrow mut [f32; 60], at: usize, c: Corners) {
+fn putCorners(v: borrow mut [f32; 68], at: usize, c: Corners) {
     v[at] = c.topLeft;
     v[at + 1] = c.topRight;
     v[at + 2] = c.bottomRight;
@@ -332,6 +340,9 @@ impl<region r> GpuBackend<r> {
                 shape: Rect.zero(),
                 radii: Corners.all(0.0),
                 rounded: false,
+                transformed: false,
+                inverse: Affine2.identity(),
+                scale: 1.0,
             },
         )!;
         this.ratio = ratio;
@@ -541,7 +552,7 @@ impl<region r> GpuBackend<r> {
             return null;
         }
         if (s[v + CLIP_RADII] > 0.0 || s[v + CLIP_RADII + 1] > 0.0 || s[v + CLIP_RADII + 2] > 0.0 ||
-            s[v + CLIP_RADII + 3] > 0.0) {
+            s[v + CLIP_RADII + 3] > 0.0 || s[v + CLIP_XF1 + 3] != 0.0) {
             return null;
         }
         let r = s[v + RADII].max(s[v + RADII + 1]).max(s[v + RADII + 2]).max(s[v + RADII + 3]);
@@ -637,8 +648,8 @@ impl<region r> GpuBackend<r> {
     }
 
     /// A new instance of `kind` with the current clip and transform.
-    fn start(borrow this, kind: f32) -> [f32; 60] {
-        var v = [0.0f32; 60];
+    fn start(borrow this, kind: f32) -> [f32; 68] {
+        var v = [0.0f32; 68];
         let c = this.clips[this.clips.length - 1];
         v[CLIP] = c.x0;
         v[CLIP + 1] = c.y0;
@@ -647,6 +658,16 @@ impl<region r> GpuBackend<r> {
         if (c.rounded) {
             putRect(mut v, CLIP_SHAPE, c.shape);
             putCorners(mut v, CLIP_RADII, c.radii);
+        }
+        if (c.transformed) {
+            v[CLIP_XF0] = c.inverse.a;
+            v[CLIP_XF0 + 1] = c.inverse.b;
+            v[CLIP_XF0 + 2] = c.inverse.c;
+            v[CLIP_XF0 + 3] = c.inverse.d;
+            v[CLIP_XF1] = c.inverse.e;
+            v[CLIP_XF1 + 1] = c.inverse.f;
+            v[CLIP_XF1 + 2] = c.scale;
+            v[CLIP_XF1 + 3] = 1.0;
         }
         v[MISC] = kind;
         v[MISC + 1] = 1.0;
@@ -664,7 +685,7 @@ impl<region r> GpuBackend<r> {
         return v;
     }
 
-    fn emit(borrow mut this, v: [f32; 60]) {
+    fn emit(borrow mut this, v: [f32; 68]) {
         for (k in 0..FLOATS) {
             this.stream.push(v[k])!;
         }
@@ -1094,13 +1115,31 @@ impl<region r> GpuBackend<r> {
         var c = parent;
         let m = this.transforms[this.transforms.length - 1];
         if (!isIdentity(m)) {
-            // Raster clips a transformed box with its shape; this spike clips to the shape's bounds.
-            b = m.bounds(b);
-            c.x0 = b.x.floor().max(parent.x0);
-            c.y0 = b.y.floor().max(parent.y0);
-            c.x1 = (b.x + b.w).ceil().min(parent.x1);
-            c.y1 = (b.y + b.h).ceil().min(parent.y1);
-            this.approximated += 1;
+            // As Raster: the box's shape, transformed (its mask clip). The pixels it may cover are its bounds; the
+            // shader tests each one against the shape in the shape's own space, through the inverse transform.
+            let bounds = m.bounds(b);
+            c.x0 = bounds.x.floor().max(parent.x0);
+            c.y0 = bounds.y.floor().max(parent.y0);
+            c.x1 = (bounds.x + bounds.w).ceil().min(parent.x1);
+            c.y1 = (bounds.y + bounds.h).ceil().min(parent.y1);
+            match (m.inverse()) {
+                Some(inverse) => {
+                    if (parent.rounded) {
+                        this.approximated += 1; // two shapes: this spike keeps the inner one
+                    }
+                    c.shape = b;
+                    c.radii = scaled(fit(area.w, area.h, radius), this.ratio);
+                    c.rounded = true;
+                    c.transformed = true;
+                    c.inverse = inverse;
+                    c.scale = (m.a * m.d - m.b * m.c).abs().sqrt();
+                }
+                null => {
+                    // A transform that flattens the box: nothing is inside it.
+                    c.x1 = c.x0;
+                    c.y1 = c.y0;
+                }
+            }
         } else if (radius.isZero()) {
             c.x0 = Math.round(b.x).max(parent.x0);
             c.y0 = Math.round(b.y).max(parent.y0);
@@ -1111,9 +1150,15 @@ impl<region r> GpuBackend<r> {
             c.y0 = b.y.floor().max(parent.y0);
             c.x1 = (b.x + b.w).ceil().min(parent.x1);
             c.y1 = (b.y + b.h).ceil().min(parent.y1);
+            if (parent.rounded) {
+                this.approximated += 1; // two shapes: this spike keeps the inner one
+            }
             c.shape = b;
             c.radii = scaled(fit(area.w, area.h, radius), this.ratio);
             c.rounded = true;
+            c.transformed = false;
+            c.inverse = Affine2.identity();
+            c.scale = 1.0;
         }
         c.x1 = c.x1.max(c.x0);
         c.y1 = c.y1.max(c.y0);
@@ -1203,7 +1248,7 @@ impl<region r> GpuBackend<r> {
         if (this.layers.length > 0 && this.layers[this.layers.length - 1].kind == LAYER_FILTER) {
             blend = 0.0;
         }
-        var v = [0.0f32; 60];
+        var v = [0.0f32; 68];
         v[RECT] = x0;
         v[RECT + 1] = y0;
         v[RECT + 2] = x1 - x0;

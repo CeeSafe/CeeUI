@@ -18,6 +18,8 @@ struct Inst {
     vec4 extra;
     vec4 xf0;
     vec4 xf1;
+    vec4 clipXf0;
+    vec4 clipXf1;
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer Instances {
@@ -43,4 +45,15 @@ float sdRR(vec2 p, vec4 rect, vec4 rad) {
 // The share of a pixel inside an edge at distance d from its centre (exact for a straight edge).
 float cover(float d) {
     return clamp(0.5 - d, 0.0, 1.0);
+}
+
+// The clip's coverage of frame pixel p: its rounded shape, in its own space when it is transformed.
+float clipCover(Inst I, vec2 p) {
+    bool xf = I.clipXf1.w != 0.0;
+    if (!xf && !any(greaterThan(I.clipRadii, vec4(0.0)))) {
+        return 1.0;
+    }
+    vec2 q = xf ? vec2(I.clipXf0.x * p.x + I.clipXf0.z * p.y + I.clipXf1.x, I.clipXf0.y * p.x + I.clipXf0.w * p.y + I.clipXf1.y)
+                : p;
+    return cover(sdRR(q, I.clipShape, I.clipRadii) * (xf ? I.clipXf1.z : 1.0));
 }

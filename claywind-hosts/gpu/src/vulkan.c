@@ -58,7 +58,7 @@ int32_t cw_gpu_render_only(const float *frame, uint32_t count, const float *laye
 double cw_gpu_gpu_ms(void);
 void cw_gpu_finish(void);
 
-#define CW_FLOATS 60 /* gpu.cee's FLOATS: 15 vec4s per instance */
+#define CW_FLOATS 68 /* gpu.cee's FLOATS: 17 vec4s per instance */
 #define CW_RECORD 8  /* gpu.cee's RECORD */
 #define CW_KIND 44
 #define CW_KIND_LAYER 6.0f
