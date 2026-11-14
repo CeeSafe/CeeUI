@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: MIT
 // The GPU spike's backend: ClayWind's commands as instances for metal.c, one quad each, with the shape, colours,
-// clip and opacity the fragment shader needs. Glyphs and icons are coverage masks that `Raster` rasterizes once (so
-// their shapes are the reference renderer's), packed into an atlas. Layers that composite a group (blend modes,
-// filters) and transforms are not drawn by this spike: their contents are drawn plainly, and `unsupported` counts
-// them.
+// clip and transform the fragment shader needs. Glyphs and icons are coverage masks that `Raster` rasterizes once (so
+// their shapes are the reference renderer's), packed into an atlas.
+//
+// A group (opacity, a blend mode, a filter) is a layer, as in Raster: its instances are drawn into a texture of its
+// box, which one composite instance then puts into its parent. The instances go into one stream; when a layer closes,
+// its own (its children's composites among them) move to `layerData` with a record, and its composite takes their
+// place in the parent. Layers therefore close children first, the order metal.c draws them in.
 
 import claywind;
 
-/// Floats per instance: metal.c's CW_FLOATS, 13 float4s.
-const FLOATS: usize = 52;
+/// Floats per instance: metal.c's CW_FLOATS, 15 float4s.
+const FLOATS: usize = 60;
+/// Floats per layer record: metal.c's CW_RECORD (first instance, count, box x0 y0 x1 y1, box radii k0 k1).
+const RECORD: usize = 8;
 /// The atlas's side in pixels.
 public const ATLAS: usize = 2048;
 /// The largest mask cell `Raster` draws (its capacity).
@@ -26,6 +31,8 @@ const CLIP_SHAPE: usize = 36;
 const CLIP_RADII: usize = 40;
 const MISC: usize = 44;
 const EXTRA: usize = 48;
+const XF0: usize = 52;
+const XF1: usize = 56;
 
 // The shader's kinds.
 const KIND_FILL: f32 = 0.0;
@@ -34,16 +41,38 @@ const KIND_SHADOW: f32 = 2.0;
 const KIND_LINEAR: f32 = 3.0;
 const KIND_RADIAL: f32 = 4.0;
 const KIND_MASK: f32 = 5.0;
+const KIND_LAYER: f32 = 6.0;
+
+// What a layer does to its group.
+const LAYER_OPACITY: u32 = 0;
+const LAYER_BLEND: u32 = 1;
+const LAYER_FILTER: u32 = 2;
 
 extern "C" {
     @effects(sleep)
     fn cw_metal_atlas(pixels: *u8, stride: u32, x0: u32, y0: u32, x1: u32, y1: u32);
     @effects(sleep)
-    fn cw_metal_present(instances: *f32, count: u32, width: u32, height: u32, r: f32, g: f32, b: f32) -> i32;
+    fn cw_metal_present(
+        frame: *f32,
+        count: u32,
+        layers: *f32,
+        layerInstances: u32,
+        records: *f32,
+        layerCount: u32,
+        width: u32,
+        height: u32,
+        r: f32,
+        g: f32,
+        b: f32,
+    ) -> i32;
     @effects(sleep)
     fn cw_metal_render_to(
-        instances: *f32,
+        frame: *f32,
         count: u32,
+        layers: *f32,
+        layerInstances: u32,
+        records: *f32,
+        layerCount: u32,
         width: u32,
         height: u32,
         r: f32,
@@ -52,7 +81,16 @@ extern "C" {
         out: *mut u32,
     ) -> i32;
     @effects(sleep)
-    fn cw_metal_render_only(instances: *f32, count: u32, width: u32, height: u32) -> i32;
+    fn cw_metal_render_only(
+        frame: *f32,
+        count: u32,
+        layers: *f32,
+        layerInstances: u32,
+        records: *f32,
+        layerCount: u32,
+        width: u32,
+        height: u32,
+    ) -> i32;
 }
 
 /// A clip in pixels: the rectangle every pixel must be inside, and for a rounded clip, its shape.
@@ -64,6 +102,27 @@ struct Clip {
     shape: Rect;
     radii: Corners;
     rounded: bool;
+}
+
+/// A layer that is open: where its instances start in the stream, what it does, and its box in pixels.
+struct OpenLayer {
+    start: usize;
+    kind: u32;
+    alpha: f32;
+    blend: f32;
+    filter: f32;
+    amount: f32;
+    x0: f32;
+    y0: f32;
+    x1: f32;
+    y1: f32;
+    k0: f32;
+    k1: f32;
+    /// The bounds of everything drawn into it so far, in pixels (empty while cx1 <= cx0).
+    cx0: f32;
+    cy0: f32;
+    cx1: f32;
+    cy1: f32;
 }
 
 /// A mask in the atlas: its place (u, v) and size, and its top-left corner relative to the integer pen position.
@@ -79,11 +138,16 @@ struct MaskEntry {
 /// ClayWind's commands as Metal instances, with the `Raster` that gives text metrics and rasterizes masks.
 public struct GpuBackend<region r> {
     public raster: Raster<r>;
-    instances: Vector<f32>;
+    stream: Vector<f32>;
+    layerData: Vector<f32>;
+    records: Vector<f32>;
     previous: Vector<f32>;
     clips: Vector<Clip>;
-    opacity: Vector<f32>;
+    layers: Vector<OpenLayer>;
+    transforms: Vector<Affine2>;
     ratio: f32;
+    width: f32;
+    height: f32;
     masks: HashMap<u64, MaskEntry>;
     atlas: Vector<u8>;
     shelfX: usize;
@@ -95,8 +159,10 @@ public struct GpuBackend<region r> {
     dirtyY1: usize;
     placed: Vector<PlacedChar>;
     scratch: Vector<u8>;
-    /// Commands this spike does not draw (blend, filter and transform groups, pictures), last frame.
+    /// Commands this spike does not draw (pictures, custom draws), last frame.
     public unsupported: u32;
+    /// Clips under a transform, drawn as their axis-aligned bounds, last frame.
+    public approximated: u32;
     /// Whether a mask did not fit the atlas.
     public atlasFull: bool;
 }
@@ -112,7 +178,7 @@ fn zeroBytes(count: usize) -> Vector<u8> {
 fn unit(v: u8) -> f32 => round<f32>(v as u32) / 255.0;
 
 /// A colour premultiplied by its alpha, as floats, into `v[at..at + 4]`.
-fn putPremultiplied(v: borrow mut [f32; 52], at: usize, c: Color) {
+fn putPremultiplied(v: borrow mut [f32; 60], at: usize, c: Color) {
     let a = unit(c.a);
     v[at] = unit(c.r) * a;
     v[at + 1] = unit(c.g) * a;
@@ -120,21 +186,21 @@ fn putPremultiplied(v: borrow mut [f32; 52], at: usize, c: Color) {
     v[at + 3] = a;
 }
 
-fn putStraight(v: borrow mut [f32; 52], at: usize, c: Color) {
+fn putStraight(v: borrow mut [f32; 60], at: usize, c: Color) {
     v[at] = unit(c.r);
     v[at + 1] = unit(c.g);
     v[at + 2] = unit(c.b);
     v[at + 3] = unit(c.a);
 }
 
-fn putRect(v: borrow mut [f32; 52], at: usize, b: Rect) {
+fn putRect(v: borrow mut [f32; 60], at: usize, b: Rect) {
     v[at] = b.x;
     v[at + 1] = b.y;
     v[at + 2] = b.w;
     v[at + 3] = b.h;
 }
 
-fn putCorners(v: borrow mut [f32; 52], at: usize, c: Corners) {
+fn putCorners(v: borrow mut [f32; 60], at: usize, c: Corners) {
     v[at] = c.topLeft;
     v[at + 1] = c.topRight;
     v[at + 2] = c.bottomRight;
@@ -193,11 +259,16 @@ impl<region r> GpuBackend<r> {
         }
         return GpuBackend {
             raster: raster,
-            instances: Vector<f32>.withCapacity(FLOATS * 8192)!,
+            stream: Vector<f32>.withCapacity(FLOATS * 8192)!,
+            layerData: Vector<f32>.withCapacity(FLOATS * 1024)!,
+            records: Vector<f32>.withCapacity(RECORD * 64)!,
             previous: Vector<f32>.withCapacity(FLOATS * 8192)!,
             clips: Vector<Clip>.withCapacity(64)!,
-            opacity: Vector<f32>.withCapacity(32)!,
+            layers: Vector<OpenLayer>.withCapacity(32)!,
+            transforms: Vector<Affine2>.withCapacity(32)!,
             ratio: 1.0,
+            width: 0.0,
+            height: 0.0,
             masks: HashMap<u64, MaskEntry>.create(),
             atlas: zeroBytes(ATLAS * ATLAS),
             shelfX: 0,
@@ -210,13 +281,21 @@ impl<region r> GpuBackend<r> {
             placed: placed,
             scratch: zeroBytes(CELL * CELL),
             unsupported: 0,
+            approximated: 0,
             atlasFull: false,
         };
     }
 
     /// Starts a frame of `width` × `height` pixels at `ratio` pixels per point.
     public fn begin(borrow mut this, width: u32, height: u32, ratio: f32) {
-        this.instances.clear();
+        this.stream.clear();
+        this.layerData.clear();
+        this.records.clear();
+        this.layers.clear();
+        this.transforms.clear();
+        this.transforms.push(Affine2.identity())!;
+        this.width = round<f32>(width);
+        this.height = round<f32>(height);
         this.clips.clear();
         this.clips.push(
             Clip {
@@ -229,30 +308,65 @@ impl<region r> GpuBackend<r> {
                 rounded: false,
             },
         )!;
-        this.opacity.clear();
-        this.opacity.push(1.0)!;
         this.ratio = ratio;
         this.unsupported = 0;
+        this.approximated = 0;
     }
 
-    /// The frame's instance count.
-    public fn instanceCount(borrow this) -> usize => this.instances.length / FLOATS;
+    /// The frame's instance count, its layers' included.
+    public fn instanceCount(borrow this) -> usize => (this.stream.length + this.layerData.length) / FLOATS;
 
-    /// Whether this frame's instances differ from the last frame's; they become the last frame's.
+    /// The frame's layer count.
+    public fn layerCount(borrow this) -> usize => this.records.length / RECORD;
+
+    /// Whether this frame's instances and layers differ from the last frame's; they become the last frame's.
     public fn changed(borrow mut this) -> bool {
-        var same = this.instances.length == this.previous.length;
+        let total = this.stream.length + this.layerData.length + this.records.length + 2;
+        var same = total == this.previous.length;
         if (same) {
-            for (k in 0..this.instances.length) {
-                if (this.instances[k] != this.previous[k]) {
+            var at: usize = 0;
+            for (k in 0..this.stream.length) {
+                if (this.stream[k] != this.previous[at]) {
                     same = false;
                     break;
+                }
+                at += 1;
+            }
+            same = same && this.previous[at] == round<f32>(this.layerData.length);
+            at += 1;
+            if (same) {
+                for (k in 0..this.layerData.length) {
+                    if (this.layerData[k] != this.previous[at]) {
+                        same = false;
+                        break;
+                    }
+                    at += 1;
+                }
+            }
+            same = same && this.previous[at] == round<f32>(this.records.length);
+            at += 1;
+            if (same) {
+                for (k in 0..this.records.length) {
+                    if (this.records[k] != this.previous[at]) {
+                        same = false;
+                        break;
+                    }
+                    at += 1;
                 }
             }
         }
         if (!same) {
             this.previous.clear();
-            for (k in 0..this.instances.length) {
-                this.previous.push(this.instances[k])!;
+            for (k in 0..this.stream.length) {
+                this.previous.push(this.stream[k])!;
+            }
+            this.previous.push(round<f32>(this.layerData.length))!;
+            for (k in 0..this.layerData.length) {
+                this.previous.push(this.layerData[k])!;
+            }
+            this.previous.push(round<f32>(this.records.length))!;
+            for (k in 0..this.records.length) {
+                this.previous.push(this.records[k])!;
             }
         }
         return !same;
@@ -282,13 +396,20 @@ impl<region r> GpuBackend<r> {
     }
 
     /// Draws the frame into the window and presents it; 0 when it was shown.
-    /// Safety: metal.c copies the instances, `instanceCount()` × FLOATS floats, during the call only.
+    /// Safety: metal.c copies the instances and the records, each vector's length, during the call only.
     public fn present(borrow mut this, width: u32, height: u32, clear: Color) -> i32 {
+        this.closeAll();
         this.upload();
-        let data = this.instances.view();
+        let frame = this.stream.view();
+        let layers = this.layerData.view();
+        let records = this.records.view();
         return unsafe { cw_metal_present(
-            data.ptr,
-            truncate<u32>(this.instanceCount()),
+            frame.ptr,
+            truncate<u32>(frame.length / FLOATS),
+            layers.ptr,
+            truncate<u32>(layers.length / FLOATS),
+            records.ptr,
+            truncate<u32>(records.length / RECORD),
             width,
             height,
             unit(clear.r),
@@ -298,17 +419,24 @@ impl<region r> GpuBackend<r> {
     }
 
     /// Draws the frame offscreen and copies its pixels (premultiplied RGBA8, Raster's layout) to `out`.
-    /// Safety: metal.c copies the instances during the call, and writes `width` × `height` pixels, which `out` is
-    /// checked to hold.
+    /// Safety: metal.c copies the instances and the records during the call, and writes `width` × `height` pixels,
+    /// which `out` is checked to hold.
     public fn renderTo(borrow mut this, width: u32, height: u32, clear: Color, out: SliceMut<u32>) -> i32 {
         if ((out.length as u64) < (width as u64) * (height as u64)) {
             return -1;
         }
+        this.closeAll();
         this.upload();
-        let data = this.instances.view();
+        let frame = this.stream.view();
+        let layers = this.layerData.view();
+        let records = this.records.view();
         return unsafe { cw_metal_render_to(
-            data.ptr,
-            truncate<u32>(this.instanceCount()),
+            frame.ptr,
+            truncate<u32>(frame.length / FLOATS),
+            layers.ptr,
+            truncate<u32>(layers.length / FLOATS),
+            records.ptr,
+            truncate<u32>(records.length / RECORD),
             width,
             height,
             unit(clear.r),
@@ -319,16 +447,28 @@ impl<region r> GpuBackend<r> {
     }
 
     /// Draws the frame offscreen and waits for the GPU, for timing.
-    /// Safety: metal.c copies the instances during the call only.
+    /// Safety: metal.c copies the instances and the records during the call only.
     public fn renderOnly(borrow mut this, width: u32, height: u32) -> i32 {
+        this.closeAll();
         this.upload();
-        let data = this.instances.view();
-        return unsafe { cw_metal_render_only(data.ptr, truncate<u32>(this.instanceCount()), width, height) };
+        let frame = this.stream.view();
+        let layers = this.layerData.view();
+        let records = this.records.view();
+        return unsafe { cw_metal_render_only(
+            frame.ptr,
+            truncate<u32>(frame.length / FLOATS),
+            layers.ptr,
+            truncate<u32>(layers.length / FLOATS),
+            records.ptr,
+            truncate<u32>(records.length / RECORD),
+            width,
+            height,
+        ) };
     }
 
-    /// A new instance of `kind` with the current clip and opacity.
-    fn start(borrow this, kind: f32) -> [f32; 52] {
-        var v = [0.0f32; 52];
+    /// A new instance of `kind` with the current clip and transform.
+    fn start(borrow this, kind: f32) -> [f32; 60] {
+        var v = [0.0f32; 60];
         let c = this.clips[this.clips.length - 1];
         v[CLIP] = c.x0;
         v[CLIP + 1] = c.y0;
@@ -339,14 +479,61 @@ impl<region r> GpuBackend<r> {
             putCorners(mut v, CLIP_RADII, c.radii);
         }
         v[MISC] = kind;
-        v[MISC + 1] = this.opacity[this.opacity.length - 1];
+        v[MISC + 1] = 1.0;
+        let m = this.transforms[this.transforms.length - 1];
+        if (!isIdentity(m)) {
+            v[XF0] = m.a;
+            v[XF0 + 1] = m.b;
+            v[XF0 + 2] = m.c;
+            v[XF0 + 3] = m.d;
+            v[XF1] = m.e;
+            v[XF1 + 1] = m.f;
+            v[XF1 + 2] = (m.a * m.d - m.b * m.c).abs().sqrt();
+            v[XF1 + 3] = 1.0;
+        }
         return v;
     }
 
-    fn emit(borrow mut this, v: [f32; 52]) {
+    fn emit(borrow mut this, v: [f32; 60]) {
         for (k in 0..FLOATS) {
-            this.instances.push(v[k])!;
+            this.stream.push(v[k])!;
         }
+        // The pixels it may touch: its quad (as metal.c's vertex shader makes it), clipped.
+        if (this.layers.length == 0) {
+            return;
+        }
+        let outset = v[MISC + 3] + 1.0;
+        var b = Rect {
+            x: v[RECT] - outset,
+            y: v[RECT + 1] - outset,
+            w: v[RECT + 2] + 2.0 * outset,
+            h: v[RECT + 3] + 2.0 * outset,
+        };
+        if (v[XF1 + 3] != 0.0) {
+            let m = Affine2 { a: v[XF0], b: v[XF0 + 1], c: v[XF0 + 2], d: v[XF0 + 3], e: v[XF1], f: v[XF1 + 1] };
+            b = m.bounds(b);
+        }
+        let x0 = b.x.floor().max(v[CLIP]);
+        let y0 = b.y.floor().max(v[CLIP + 1]);
+        let x1 = (b.x + b.w).ceil().min(v[CLIP + 2]);
+        let y1 = (b.y + b.h).ceil().min(v[CLIP + 3]);
+        if (x1 <= x0 || y1 <= y0) {
+            return;
+        }
+        let top = this.layers.length - 1;
+        var l = this.layers[top];
+        if (l.cx1 <= l.cx0) {
+            l.cx0 = x0;
+            l.cy0 = y0;
+            l.cx1 = x1;
+            l.cy1 = y1;
+        } else {
+            l.cx0 = l.cx0.min(x0);
+            l.cy0 = l.cy0.min(y0);
+            l.cx1 = l.cx1.max(x1);
+            l.cy1 = l.cy1.max(y1);
+        }
+        this.layers[top] = l;
     }
 
     fn px(borrow this, b: Rect) -> Rect {
@@ -733,9 +920,18 @@ impl<region r> GpuBackend<r> {
     /// tvgb_scissorStart: a plain box clips to its rounded pixel edges; a rounded one keeps its shape.
     fn clipStart(borrow mut this, area: Rect, radius: Corners) {
         let parent = this.clips[this.clips.length - 1];
-        let b = this.px(area);
+        var b = this.px(area);
         var c = parent;
-        if (radius.isZero()) {
+        let m = this.transforms[this.transforms.length - 1];
+        if (!isIdentity(m)) {
+            // Raster clips a transformed box with its shape; this spike clips to the shape's bounds.
+            b = m.bounds(b);
+            c.x0 = b.x.floor().max(parent.x0);
+            c.y0 = b.y.floor().max(parent.y0);
+            c.x1 = (b.x + b.w).ceil().min(parent.x1);
+            c.y1 = (b.y + b.h).ceil().min(parent.y1);
+            this.approximated += 1;
+        } else if (radius.isZero()) {
             c.x0 = Math.round(b.x).max(parent.x0);
             c.y0 = Math.round(b.y).max(parent.y0);
             c.x1 = Math.round(b.x + b.w).min(parent.x1);
@@ -753,6 +949,191 @@ impl<region r> GpuBackend<r> {
         c.y1 = c.y1.max(c.y0);
         this.clips.push(c)!;
     }
+
+    /// raster_core.cee's pushLayerOver: a layer over the current clip's box, within the frame, and within what its
+    /// parent needs widened by the reach of its blur (`sigma2`, in pixels squared).
+    fn pushLayer(borrow mut this, kind: u32, alpha: f32, blend: f32, filter: f32, amount: f32, sigma2: f32) {
+        let c = this.clips[this.clips.length - 1];
+        var lx0: f32 = 0.0;
+        var ly0: f32 = 0.0;
+        var lx1 = this.width;
+        var ly1 = this.height;
+        if (this.layers.length > 0) {
+            let parent = this.layers[this.layers.length - 1];
+            lx0 = parent.x0;
+            ly0 = parent.y0;
+            lx1 = parent.x1;
+            ly1 = parent.y1;
+        }
+        let boxes = blurBoxes(sigma2);
+        let reach = if (sigma2 > 0.0) round<f32>(imax(boxes[0], 0) + imax(boxes[1], 0) + 2) else 0.0;
+        let x0 = c.x0.max(0.0).max(lx0 - reach);
+        let y0 = c.y0.max(0.0).max(ly0 - reach);
+        let x1 = c.x1.min(this.width).min(lx1 + reach).max(x0);
+        let y1 = c.y1.min(this.height).min(ly1 + reach).max(y0);
+        this.layers.push(
+            OpenLayer {
+                start: this.stream.length,
+                kind: kind,
+                alpha: alpha,
+                blend: blend,
+                filter: filter,
+                amount: amount,
+                x0: x0,
+                y0: y0,
+                x1: x1,
+                y1: y1,
+                k0: if (sigma2 > 0.0) round<f32>(boxes[0]) else 0.0,
+                k1: if (sigma2 > 0.0) round<f32>(boxes[1]) else 0.0,
+                cx0: 0.0,
+                cy0: 0.0,
+                cx1: 0.0,
+                cy1: 0.0,
+            },
+        )!;
+    }
+
+    /// raster_core.cee's popLayer: the layer's instances move to `layerData` with a record, and one composite
+    /// instance takes their place in the parent.
+    fn popLayer(borrow mut this) {
+        let top = match (this.layers.pop()) {
+            Some(l) => l,
+            null => { return; }
+        };
+        // As Raster processes only the part of a layer that holds anything, grown by its blur's reach: its texture
+        // is the layer's content bounds grown by that reach, within its box. Beyond the content the layer is
+        // transparent, so the blur and the composite give the same pixels.
+        let reach = if (top.k0 > 0.0 || top.k1 > 0.0) top.k0.max(0.0) + top.k1.max(0.0) + 2.0 else 0.0;
+        let x0 = (top.cx0 - reach).max(top.x0);
+        let y0 = (top.cy0 - reach).max(top.y0);
+        let x1 = (top.cx1 + reach).min(top.x1);
+        let y1 = (top.cy1 + reach).min(top.y1);
+        if (top.cx1 <= top.cx0 || x1 <= x0 || y1 <= y0) {
+            // Nothing drawn, or nothing inside its box: the layer composites to nothing.
+            while (this.stream.length > top.start) {
+                let gone = this.stream.pop();
+            }
+            return;
+        }
+        let first = this.layerData.length / FLOATS;
+        let count = (this.stream.length - top.start) / FLOATS;
+        for (k in top.start..this.stream.length) {
+            this.layerData.push(this.stream[k])!;
+        }
+        while (this.stream.length > top.start) {
+            let gone = this.stream.pop();
+        }
+        let index = this.records.length / RECORD;
+        let record = [round<f32>(first), round<f32>(count), x0, y0, x1, y1, top.k0, top.k1];
+        for (k in 0usize..RECORD) {
+            this.records.push(record[k])!;
+        }
+        // ThorVG composites a group straight into a filter group normally, whatever its blend mode.
+        var blend = top.blend;
+        if (this.layers.length > 0 && this.layers[this.layers.length - 1].kind == LAYER_FILTER) {
+            blend = 0.0;
+        }
+        var v = [0.0f32; 60];
+        v[RECT] = x0;
+        v[RECT + 1] = y0;
+        v[RECT + 2] = x1 - x0;
+        v[RECT + 3] = y1 - y0;
+        v[CLIP] = -1000000.0;
+        v[CLIP + 1] = -1000000.0;
+        v[CLIP + 2] = 1000000.0;
+        v[CLIP + 3] = 1000000.0;
+        v[PARAMS] = round<f32>(index);
+        v[PARAMS + 1] = blend;
+        v[PARAMS + 2] = top.filter;
+        v[PARAMS + 3] = top.amount;
+        v[MISC] = KIND_LAYER;
+        v[MISC + 1] = top.alpha;
+        v[MISC + 3] = -1.0; // exactly the layer's texture
+        this.emit(v);
+    }
+
+    /// Closes the layers an unbalanced stream left open, as Raster's finish does.
+    fn closeAll(borrow mut this) {
+        while (this.layers.length > 0) {
+            this.popLayer();
+        }
+    }
+
+    /// Raster's scale of a blur: sigma squared times the transform's x scale squared, in pixels.
+    fn blurScale2(borrow this) -> f32 {
+        let m = this.transforms[this.transforms.length - 1];
+        return this.ratio * this.ratio * (m.a * m.a + m.c * m.c);
+    }
+
+    fn filterStart(borrow mut this, mode: FilterMode, amount: f32) {
+        match (mode) {
+            FilterMode.Blur => {
+                this.pushLayer(LAYER_FILTER, 1.0, 0.0, 1.0, 0.0, amount * amount * this.blurScale2());
+            }
+            FilterMode.Grayscale => { this.pushLayer(LAYER_FILTER, 1.0, 0.0, 2.0, 0.0, 0.0); }
+            FilterMode.Brightness => {
+                if (amount == 1.0) {
+                    this.pushLayer(LAYER_FILTER, 1.0, 0.0, 0.0, 0.0, 0.0);
+                } else if (amount > 1.0) {
+                    this.pushLayer(LAYER_FILTER, 1.0, 0.0, 3.0, quantize(amount - 1.0), 0.0);
+                } else {
+                    this.pushLayer(LAYER_FILTER, 1.0, 0.0, 4.0, quantize(1.0 - amount), 0.0);
+                }
+            }
+            FilterMode.None => { this.pushLayer(LAYER_FILTER, 1.0, 0.0, 0.0, 0.0, 0.0); }
+        }
+    }
+
+    /// tvgb_transformStart, in pixels: the transform in points conjugated by the pixel ratio, after the current one.
+    fn transformStart(borrow mut this, t: TransformData) {
+        let m = transformMatrix(t);
+        let s = this.ratio;
+        let inPixels = Affine2 { a: m.a, b: m.b, c: m.c, d: m.d, e: m.e * s, f: m.f * s };
+        let current = this.transforms[this.transforms.length - 1];
+        this.transforms.push(current.after(inPixels))!;
+    }
+}
+
+fn isIdentity(m: Affine2) -> bool => m.a == 1.0 && m.b == 0.0 && m.c == 0.0 && m.d == 1.0 && m.e == 0.0 && m.f == 0.0;
+
+fn imax(a: i32, b: i32) -> i32 => if (a > b) a else b;
+
+/// Opacity as ThorVG stores it: in 1/255 steps (raster_core.cee's quantize).
+fn quantize(a: f32) -> f32 => round<f32>(truncate<u32>(Math.clamp(a * 255.0, 0.0, 255.0))) / 255.0;
+
+/// raster_effects.cee's gaussianBlur box radii (k0, k1) for a variance of `sigma2` pixels squared.
+fn blurBoxes(sigma2: f32) -> [i32; 2] {
+    if (sigma2 <= 0.0) {
+        return [0, 0];
+    }
+    var wl = truncate<i32>((12.0 * sigma2 / 3.0 + 1.0).sqrt());
+    if (wl % 2 == 0) {
+        wl -= 1;
+    }
+    let wu = wl + 2;
+    let wlf = round<f32>(wl);
+    let mi = (12.0 * sigma2 - 3.0 * wlf * wlf - 12.0 * wlf - 9.0) / (-4.0 * wlf - 4.0);
+    let m = truncate<i32>((mi + 0.5).max(-1000.0).min(1000.0));
+    let k0 = ((if (0 < m) wl else wu) - 1) / 2;
+    let k1 = ((if (1 < m) wl else wu) - 1) / 2;
+    return [k0, k1];
+}
+
+/// raster_backend.cee's transformMatrix: M = T(pivot) R(rotation) S(scale) Shear(skewX, skewY) T(-pivot), in points.
+fn transformMatrix(t: TransformData) -> Affine2 {
+    let rad = Math.radians(t.rotation);
+    let c = Math.cos(rad);
+    let s = Math.sin(rad);
+    let sc = if (t.scale != 0.0) t.scale else 1.0;
+    let tx = if (t.skewX != 0.0) Math.tan(Math.radians(t.skewX)) else 0.0;
+    let ty = if (t.skewY != 0.0) Math.tan(Math.radians(t.skewY)) else 0.0;
+    let e11 = sc * (c - s * ty);
+    let e12 = sc * (c * tx - s);
+    let e21 = sc * (s + c * ty);
+    let e22 = sc * (s * tx + c);
+    let px = t.pivot.x;
+    let py = t.pivot.y;
+    return Affine2 { a: e11, b: e21, c: e12, d: e22, e: px - (e11 * px + e12 * py), f: py - (e21 * px + e22 * py) };
 }
 
 /// `codepoint` as UTF-8 in `out`; its length.
@@ -795,23 +1176,42 @@ impl<region r> Backend for GpuBackend<r> {
                     let gone = this.clips.pop();
                 }
             }
-            Command.OpacityStart(_, alpha) => {
-                let top = this.opacity[this.opacity.length - 1];
-                this.opacity.push(top * alpha)!;
-            }
-            Command.OpacityEnd(_) => {
-                if (this.opacity.length > 1) {
-                    let gone = this.opacity.pop();
+            Command.OpacityStart(_, alpha) => { this.pushLayer(LAYER_OPACITY, quantize(alpha), 0.0, 0.0, 0.0, 0.0); }
+            Command.OpacityEnd(_) => { this.popLayer(); }
+            Command.BlendStart(mode) => { this.pushLayer(LAYER_BLEND, 1.0, blendCode(mode), 0.0, 0.0, 0.0); }
+            Command.BlendEnd => { this.popLayer(); }
+            Command.FilterStart(_, mode, amount) => { this.filterStart(mode, amount); }
+            Command.FilterEnd(_, _) => { this.popLayer(); }
+            Command.TransformStart(_, t) => { this.transformStart(t); }
+            Command.TransformEnd => {
+                if (this.transforms.length > 1) {
+                    let gone = this.transforms.pop();
                 }
             }
             Command.Picture(_, _, _, _) => { this.unsupported += 1; }
             Command.CustomDraw(_, _, _, _) => { this.unsupported += 1; }
-            Command.TransformStart(_, _) => { this.unsupported += 1; }
-            Command.TransformEnd => {}
-            Command.BlendStart(_) => { this.unsupported += 1; }
-            Command.BlendEnd => {}
-            Command.FilterStart(_, _, _) => { this.unsupported += 1; }
-            Command.FilterEnd(_, _) => {}
         }
     }
 }
+
+/// BlendMode's number in metal.c's blend formulas (the enum's order).
+fn blendCode(mode: BlendMode) -> f32 => match (mode) {
+    BlendMode.None => 0.0,
+    BlendMode.Multiply => 1.0,
+    BlendMode.Add => 2.0,
+    BlendMode.Subtract => 3.0,
+    BlendMode.Screen => 4.0,
+    BlendMode.Overlay => 5.0,
+    BlendMode.Darken => 6.0,
+    BlendMode.Lighten => 7.0,
+    BlendMode.ColorDodge => 8.0,
+    BlendMode.ColorBurn => 9.0,
+    BlendMode.HardLight => 10.0,
+    BlendMode.SoftLight => 11.0,
+    BlendMode.Difference => 12.0,
+    BlendMode.Exclusion => 13.0,
+    BlendMode.Hue => 14.0,
+    BlendMode.Saturation => 15.0,
+    BlendMode.Color => 16.0,
+    BlendMode.Luminosity => 17.0,
+};

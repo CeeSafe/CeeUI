@@ -252,13 +252,18 @@ fn settle(
     }
 }
 
-/// Every tab drawn by Raster and by Metal from the same commands, at 1024 × 640 points and a ratio of 2: how far
+/// Every tab drawn by Raster and by Metal from the same commands, at 1024 × 640 points (CLAYWIND_COMPARE_HEIGHT
+/// sets the height, up to 1000) and a ratio of 2: how far
 /// apart the two frames are, and both frames and their difference as BMPs in `dir`.
 fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i32 {
     let ratio: f32 = 2.0;
+    let points = match (Environment.variable("CLAYWIND_COMPARE_HEIGHT")) {
+        Some(h) => truncate<u32>(number(h).max(100).min(1000)),
+        null => 640,
+    };
     let width: u32 = 2048;
-    let height: u32 = 1280;
-    var storage = zeros(201326592);
+    let height: u32 = points * 2;
+    var storage = zeros(335544320);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
     var reference = match (Raster.create(memory, RasterCapacity.of(width as usize, height as usize))) {
         Ok(r) => r,
@@ -281,7 +286,7 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
         var app = DemoApp.create();
         app.selectTab(tab);
         let none = [0u8; 1];
-        var platform = ScriptPlatform.create(none[0..0], Dims { w: 1024.0, h: 640.0 });
+        var platform = ScriptPlatform.create(none[0..0], Dims { w: 1024.0, h: round<f32>(points) });
         settle(mut ui, mut app, gpu, mut platform, 28);
         let clear = Color.hex(pageBg(ui));
         let r0 = nanos();
