@@ -109,3 +109,86 @@ fn fallbackGlyphsAreShapedMeasuredAndDrawn() -> Result<void, TestFailure> {
     }
     return Check.isTrue(ink > 30, "中 is drawn from the fallback font");
 }
+
+/// A CID-keyed CFF collection; CLAYWIND_CFF_FONT names another CFF font to look at.
+fn cffPath() -> StringView => Environment.variable("CLAYWIND_CFF_FONT") ?? "/System/Library/Fonts/Hiragino Sans GB.ttc";
+
+/// The raster's pixels as a binary PGM (its red channel) at `path`, for a person to look at.
+fn writeGray(ras: borrow Raster, w: usize, h: usize, path: StringView) {
+    var out = Vector<u8>.create();
+    var header = [0u8; 32];
+    var hw = TextWriter.create(mut header[..]);
+    hw.text("P5\n");
+    hw.decimal(w as u64);
+    hw.byte(' ');
+    hw.decimal(h as u64);
+    hw.text("\n255\n");
+    for (b in hw.written()) {
+        out.push(b)!;
+    }
+    for (y in 0..h) {
+        for (x in 0..w) {
+            out.push(ras.pixelAt(x, y).r)!;
+        }
+    }
+    match (File.create(path)) {
+        Ok(f) => {
+            var file = f;
+            let ignored = file.write(out.view());
+        }
+        Err(_) => {}
+    }
+}
+
+@test
+fn cffOutlinesDraw() -> Result<void, TestFailure> {
+    let file = readFile(cffPath());
+    if (file.length == 0) {
+        Console.writeLine("  (Hiragino Sans GB not found: skipped)");
+        return Ok();
+    }
+    let d = file.view();
+    let info = parseFontFace(d, 0)!;
+    Check.isTrue(glyphIndex(d, info, 0x6C38) != 0, "永 is mapped")?;
+    var storage = heap(67108864);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(320, 64);
+    c.imagePixels = 4;
+    c.fontBytes = 33554432;
+    var ras = Raster.create(memory, c)!;
+    Check.isTrue(ras.loadFontFace(0, d, 0), "a CID-keyed CFF face loads")?;
+    ras.begin(Color.rgb(0, 0, 0));
+    let text = "永中AB的あ鬱";
+    let run = TextRun {
+        start: 0,
+        length: text.length,
+        color: Color.rgb(255, 255, 255),
+        fontId: 0,
+        fontSize: 48.0,
+        letterSpacing: 0.0,
+        lineHeight: 0.0,
+    };
+    ras.draw(Command.Text(Rect { x: 4.0, y: 4.0, w: 312.0, h: 56.0 }, run), text.bytes());
+    ras.finish();
+    match (Environment.variable("CLAYWIND_TEST_OUT")) {
+        Some(p) => { writeGray(ras, 320, 64, p); }
+        null => {}
+    }
+    // Ink in each of the first four glyphs' cells, and none far below the baseline.
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, cluster: 0 }; 8];
+    let shaped = ras.shapeRun(text.bytes(), 0, 48.0, 0.0, mut out[..])!;
+    for (k in 0usize..4) {
+        let x0 = 4 + truncate<usize>(out[k].x);
+        let x1 = if (k + 1 < shaped.count) 4 + truncate<usize>(out[k + 1].x) else 316;
+        var ink: u32 = 0;
+        for (y in 4..60usize) {
+            for (x in x0..x1.min(320)) {
+                if (ras.pixelAt(x, y).r > 128) {
+                    ink += 1;
+                }
+            }
+        }
+        Check.isTrue(ink > 60, "every glyph has ink")?;
+    }
+    return Ok();
+}

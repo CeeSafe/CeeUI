@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The system's fonts for ClayWind, which reads no files itself. `SystemFonts` keeps a catalog of the TrueType faces
+// The system's fonts for ClayWind, which reads no files itself. `SystemFonts` keeps a catalog of the faces
 // in the OS's font folders, read only as far as choosing a fallback needs (each face's table directory, OS/2 and
 // cmap), and `supply` loads into a Raster the faces that cover characters its fonts lack, adding them to its
 // fallback chain. The catalog is built the first time a character is missing, so Latin-only text never scans.
@@ -320,8 +320,8 @@ impl SystemFonts {
         }
     }
 
-    /// Each TrueType face of the font file at `path`: its weight, style and coverage. Faces with CFF outlines (not
-    /// drawn yet) and colour-bitmap faces (sbix, CBDT: not drawn yet) are left out.
+    /// Each face of the font file at `path` with outlines claywind draws (TrueType or CFF): its weight, style and
+    /// coverage. CFF2 faces and colour-bitmap faces (sbix, CBDT: not drawn yet) are left out.
     fn addFile(borrow mut this, path: String) {
         let file = match (File.open(path.view())) {
             Ok(f) => f,
@@ -349,7 +349,7 @@ impl SystemFonts {
                 continue;
             }
             let tables = u16be(dir.view(), 4) as usize;
-            if (!readAt(file, at, mut dir, 12 + tables * 16) || !trueTypeFace(dir.view())) {
+            if (!readAt(file, at, mut dir, 12 + tables * 16) || !drawableFace(dir.view())) {
                 continue;
             }
             if (findTable(

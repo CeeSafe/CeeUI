@@ -24,6 +24,9 @@ public struct FontInfo {
     glyf: usize;
     kern: usize;
     maxp: usize;
+    /// A CFF face's 'CFF ' table and its parts (font_cff.cee), or 0.
+    cff: usize;
+    cffInfo: CffInfo;
 }
 
 /// One glyph's outline in font units (y already flipped, as ThorVG builds it): ops 0 = move, 1 = line,
@@ -158,7 +161,7 @@ public fn parseFontFace(d: Slice<u8>, face: u32) -> FontInfo? {
         return null;
     }
     let kind = u32at(d, dir);
-    if (kind != 0x00010000 && kind != 0x74727565) {
+    if (kind != 0x00010000 && kind != 0x74727565 && kind != 0x4F54544F) {
         return null;
     }
     let head = tableOffset(d, dir, ['h', 'e', 'a', 'd']);
@@ -192,7 +195,11 @@ public fn parseFontFace(d: Slice<u8>, face: u32) -> FontInfo? {
     }
     let loca = tableOffset(d, dir, ['l', 'o', 'c', 'a']);
     let glyf = tableOffset(d, dir, ['g', 'l', 'y', 'f']);
-    if (loca == 0 || glyf == 0) {
+    let cff = tableOffset(d, dir, ['C', 'F', 'F', ' ']);
+    var cffInfo = CffInfo { charStrings: 0, globalSubrs: 0, localSubrs: 0, fdArray: 0, fdSelect: 0 };
+    if (cff != 0) {
+        cffInfo = parseCff(d, cff)?;
+    } else if (loca == 0 || glyf == 0) {
         return null;
     }
     return FontInfo {
@@ -208,6 +215,8 @@ public fn parseFontFace(d: Slice<u8>, face: u32) -> FontInfo? {
         glyf: glyf,
         kern: kern,
         maxp: maxp,
+        cff: cff,
+        cffInfo: cffInfo,
     };
 }
 
@@ -469,13 +478,16 @@ public fn findTable(dir: Slice<u8>, tag: [u8; 4]) -> FontTable? {
     return null;
 }
 
-/// Whether a face's table directory (read on its own) is a TrueType face, the outlines this reader draws (not CFF).
-public fn trueTypeFace(dir: Slice<u8>) -> bool {
+/// Whether a face's table directory (read on its own) has outlines this reader draws: TrueType, or CFF (not CFF2).
+public fn drawableFace(dir: Slice<u8>) -> bool {
     if (!valid(dir, 0, 4)) {
         return false;
     }
     let kind = u32at(dir, 0);
-    return kind == 0x00010000 || kind == 0x74727565;
+    return kind == 0x00010000 || kind == 0x74727565 || (kind == 0x4F54544F && findTable(
+        dir,
+        ['C', 'F', 'F', ' '],
+    ) != null);
 }
 
 // ---- metrics ---------------------------------------------------------------------------------------------------
@@ -577,6 +589,9 @@ fn decodeGlyph(
     depth: u32,
     out: borrow mut GlyphOutline,
 ) -> bool {
+    if (f.cff != 0) {
+        return decodeCffGlyph(d, f.cff, f.cffInfo, glyph, ox, oy, mut out);
+    }
     let at = outlineOffset(d, f, glyph);
     if (at == 0) {
         return true;

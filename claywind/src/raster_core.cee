@@ -160,6 +160,8 @@ public struct Raster<region r> {
             glyf: 0,
             kern: 0,
             maxp: 0,
+            cff: 0,
+            cffInfo: CffInfo { charStrings: 0, globalSubrs: 0, localSubrs: 0, fdArray: 0, fdSelect: 0 },
         };
         let fonts = memory.allocArray(32, FontSlot { id: 0, offset: 0, size: 0, info: noFont })?;
         return Ok(Raster {

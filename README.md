@@ -27,7 +27,8 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   - Anti-aliased paths, rounded rectangles, borders and rings, linear and radial gradients, and images (PNG and BMP
     decoding included).
   - Shadows, blur, grayscale and brightness filters, opacity, and all CSS blend modes.
-- **TrueType fonts:** glyphs read and rendered by the toolkit itself, from single fonts and collections (.ttc). Text
+- **TrueType and OpenType (CFF) fonts:** glyphs read and rendered by the toolkit itself, from single fonts and
+  collections (.ttc), CID-keyed CJK fonts such as Hiragino and Noto Sans CJK included. Text
   is shaped into glyphs that measuring and drawing share, and a character the run's font lacks comes from a
   fallback chain (`Raster.setFallbacks`), so CJK, Hangul, Greek and Cyrillic draw in a Latin run.
 - **System fonts as fallbacks:** `claywind-fonts` (hosted; `SystemFonts.supply`) finds, among the OS's own fonts, a
