@@ -4,7 +4,7 @@
 // (lib/std's WindowSurface.External and Window.nativeHandle, CeeSafe ADR 0137). macOS only.
 //
 //   ./out/gpu                        the demo in a window, redrawn only when its instances change
-//   CLAYWIND_STATS=1                 also print the CPU and GPU time per frame, every 120 frames shown
+//   CLAYWIND_STATS=1                 also print, every 2 seconds, the frames shown, their time and the GPU's
 //   CLAYWIND_COMPARE=DIR             no window: draw every tab with Raster and with Metal from the same commands,
 //                                    print how far apart they are, and write both and their difference to DIR
 //   CLAYWIND_BENCH=N                 no window: N frames of the dashboard at 5K (5120 × 2880), timed
@@ -210,6 +210,7 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
     var shown: u64 = 0;
     var cpuTotal: f64 = 0.0;
     var gpuTotal: f64 = 0.0;
+    var reported = nanos();
     loop {
         loop {
             match (window.nextEvent()) {
@@ -247,20 +248,28 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
             shown += 1;
             cpuTotal += ms(t0, nanos());
             gpuTotal += unsafe { cw_gpu_gpu_ms() };
-            if (stats && shown % 120 == 0) {
-                Console.write("frames ");
-                Console.write(shown);
-                Console.write(", instances ");
-                Console.write(gpu.instanceCount());
-                Console.write(", cpu ms ");
-                Console.write(cpuTotal / 120.0);
-                Console.write(", gpu ms ");
-                Console.writeLine(gpuTotal / 120.0);
-                cpuTotal = 0.0;
-                gpuTotal = 0.0;
-            }
         } else {
             window.waitFrame();
+        }
+        // The previous frame's GPU time is known once the next one starts, so the averages lag by a frame.
+        if (stats && nanos() - reported >= 2000000000) {
+            Console.write("2 s: ");
+            Console.write(shown);
+            Console.write(" frames shown");
+            if (shown > 0) {
+                Console.write(", ");
+                Console.write(gpu.instanceCount());
+                Console.write(" instances, frame ms (with the wait for the display) ");
+                Console.write(cpuTotal / round<f64>(shown));
+                Console.write(", gpu ms ");
+                Console.write(gpuTotal / round<f64>(shown));
+            }
+            Console.writeLine("");
+            Console.flush(); // a file is block-buffered; flushed now, the line survives the window being killed
+            shown = 0;
+            cpuTotal = 0.0;
+            gpuTotal = 0.0;
+            reported = nanos();
         }
         platform.endFrame();
     }
