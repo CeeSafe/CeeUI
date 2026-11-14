@@ -151,7 +151,7 @@ public struct LayoutCapacity {
     public fn of(elements: usize) -> LayoutCapacity => LayoutCapacity {
         elements: elements,
         textBytes: elements * 32,
-        words: elements * 8,
+        words: elements * 16,
         lines: elements * 4,
         commands: elements * 6,
     };
@@ -169,6 +169,9 @@ public struct LayoutTree<region r> {
     roots: FixedList<r, TreeRoot>;
     bytes: FixedList<r, u8>;
     words: FixedList<r, Word>;
+    /// The line breaker's output and working room for one text element (unicode.cee's lineBreaks).
+    breakMarks: SliceMut<r, u8>;
+    breakScratch: SliceMut<r, u32>;
     lines: FixedList<r, TextLine>;
     commands: FixedList<r, Command>;
     order: FixedList<r, usize>;
@@ -197,6 +200,8 @@ public struct LayoutTree<region r> {
         let roots = memory.allocArray(n, TreeRoot { index: 0, parentIndex: null, clipIndex: null, zIndex: 0 })?;
         let text = memory.allocArray(capacity.textBytes, 0u8)?;
         let words = memory.allocArray(capacity.words, Word { start: 0, length: 0, width: 0.0, newline: false })?;
+        let breakMarks = memory.allocArray(capacity.textBytes, 0u8)?;
+        let breakScratch = memory.allocArray(capacity.textBytes * 2, 0u32)?;
         let lines = memory.allocArray(capacity.lines, TextLine { start: 0, length: 0, width: 0.0, height: 0.0 })?;
         let commands = memory.allocArray(capacity.commands, Command.ClipEnd)?;
         let order = memory.allocArray(n, 0usize)?;
@@ -214,6 +219,8 @@ public struct LayoutTree<region r> {
             roots: FixedList<TreeRoot>.over(roots),
             bytes: FixedList<u8>.over(text),
             words: FixedList<Word>.over(words),
+            breakMarks: breakMarks,
+            breakScratch: breakScratch,
             lines: FixedList<TextLine>.over(lines),
             commands: FixedList<Command>.over(commands),
             order: FixedList<usize>.over(order),
@@ -648,56 +655,74 @@ fn measureAllText<M: TextMetrics>(l: borrow mut LayoutTree, metrics: borrow M) -
         let total = node.textLength;
         let space = [32u8];
         let spaceWidth = metrics.measure(space[..], config).w;
-        var start: usize = 0;
-        var end: usize = 0;
         var lineWidth: f32 = 0.0;
         var measuredWidth: f32 = 0.0;
         var measuredHeight: f32 = 0.0;
         var minWord: f32 = 0.0;
         var newlines = false;
         let wordsStart = l.words.length();
-        while (end < total) {
-            let current = l.bytes.items[base + end];
-            if (current == ' ' || current == '\n') {
-                let length = end - start;
-                var d = Dims { w: 0.0, h: 0.0 };
-                if (length > 0) {
-                    d = metrics.measure(l.bytes.items[base + start..base + end], config);
-                }
-                minWord = minWord.max(d.w);
-                measuredHeight = measuredHeight.max(d.h);
-                if (current == ' ') {
-                    let w = d.w + spaceWidth;
-                    if (!l.words.push(Word { start: base + start, length: length + 1, width: w, newline: false })) {
-                        return false;
-                    }
-                    lineWidth += w;
-                } else {
-                    if (length > 0) {
-                        if (!l.words.push(Word { start: base + start, length: length, width: d.w, newline: false })) {
-                            return false;
-                        }
-                    }
-                    if (!l.words.push(Word { start: base + end + 1, length: 0, width: 0.0, newline: true })) {
-                        return false;
-                    }
-                    lineWidth += d.w;
-                    measuredWidth = measuredWidth.max(lineWidth);
-                    newlines = true;
-                    lineWidth = 0.0;
-                }
-                start = end + 1;
-            }
-            end += 1;
+        // Words end at UAX #14's break opportunities. A word's trailing spaces go with it as Clay's do (the first in
+        // the word, any more as words of their own), so text that breaks only at spaces has Clay's words; a hard
+        // line break (LF, CR, CRLF, NEL, LS, PS, VT, FF) ends a line.
+        if (!lineBreaks(l.bytes.items[base..base + total], mut l.breakMarks[0..total], mut l.breakScratch)) {
+            return false;
         }
-        if (end > start) {
-            let d = metrics.measure(l.bytes.items[base + start..base + end], config);
-            if (!l.words.push(Word { start: base + start, length: end - start, width: d.w, newline: false })) {
-                return false;
+        var pos: usize = 0;
+        while (pos < total) {
+            var end = pos + 1;
+            while (end < total && l.breakMarks[end] == BREAK_NONE) {
+                end += 1;
             }
-            lineWidth += d.w;
-            measuredHeight = measuredHeight.max(d.h);
+            // A hard break's characters close the segment: they take no width.
+            var contentEnd = end;
+            var newline = false;
+            let lastStart = utf8Start(l.bytes.items[base..base + total], end);
+            if (lastStart >= pos && hardBreak(decodeUtf8(l.bytes.items[base..base + total], lastStart)[0])) {
+                newline = true;
+                contentEnd = lastStart;
+                if (contentEnd > pos && l.bytes.items[base + contentEnd - 1] == '\r' &&
+                    l.bytes.items[base + lastStart] == '\n') {
+                    contentEnd -= 1;
+                }
+            }
+            var spacesStart = contentEnd;
+            while (spacesStart > pos && l.bytes.items[base + spacesStart - 1] == ' ') {
+                spacesStart -= 1;
+            }
+            let length = spacesStart - pos;
+            var d = Dims { w: 0.0, h: 0.0 };
+            if (length > 0) {
+                d = metrics.measure(l.bytes.items[base + pos..base + spacesStart], config);
+            }
             minWord = minWord.max(d.w);
+            measuredHeight = measuredHeight.max(d.h);
+            if (spacesStart < contentEnd) {
+                let w = d.w + spaceWidth;
+                if (!l.words.push(Word { start: base + pos, length: length + 1, width: w, newline: false })) {
+                    return false;
+                }
+                lineWidth += w;
+                for (extra in spacesStart + 1..contentEnd) {
+                    if (!l.words.push(Word { start: base + extra, length: 1, width: spaceWidth, newline: false })) {
+                        return false;
+                    }
+                    lineWidth += spaceWidth;
+                }
+            } else if (length > 0) {
+                if (!l.words.push(Word { start: base + pos, length: length, width: d.w, newline: false })) {
+                    return false;
+                }
+                lineWidth += d.w;
+            }
+            if (newline) {
+                if (!l.words.push(Word { start: base + end, length: 0, width: 0.0, newline: true })) {
+                    return false;
+                }
+                measuredWidth = measuredWidth.max(lineWidth);
+                newlines = true;
+                lineWidth = 0.0;
+            }
+            pos = end;
         }
         measuredWidth = measuredWidth.max(lineWidth) - config.letterSpacing;
         let preferred = Dims { w: measuredWidth, h: measuredHeight };

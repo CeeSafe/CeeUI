@@ -68,6 +68,14 @@ fn typeChars(platform: borrow mut FakePlatform, text: StringView) {
     platform.typedCount = b.length;
 }
 
+/// Types code points (any, as a keyboard or an input method delivers them).
+fn typeCodepoints(platform: borrow mut FakePlatform, cps: Slice<u32>) {
+    for (i in 0..cps.length) {
+        platform.typed[i] = cps[i];
+    }
+    platform.typedCount = cps.length;
+}
+
 fn centerOf(ui: borrow Ui, name: StringView) -> Vec2 {
     let b = ui.boxOf(name)!;
     return Vec2 { x: b.x + b.w / 2.0, y: b.y + b.h / 2.0 };
@@ -152,6 +160,22 @@ fn controlsDrivenByAScriptedPlatform() -> Result<void, TestFailure> {
     press(mut platform, Key.Backspace);
     step(mut ui, mut platform, mut app)?;
     Check.isTrue(nameIs(app, "Hi") && app.nameCaret == 1, "backspace at the caret")?;
+    // Any character goes in as UTF-8; Backspace, Left and Delete take whole grapheme clusters.
+    press(mut platform, Key.End);
+    step(mut ui, mut platform, mut app)?;
+    let typed = [0x65u32, 0x301, 0x4E2D];
+    typeCodepoints(mut platform, typed[..]);
+    step(mut ui, mut platform, mut app)?;
+    Check.isTrue(nameIs(app, "Hie\u{301}中") && app.nameCaret == 8, "e, a combining acute and 中 as UTF-8")?;
+    press(mut platform, Key.Backspace);
+    step(mut ui, mut platform, mut app)?;
+    Check.isTrue(nameIs(app, "Hie\u{301}") && app.nameCaret == 5, "Backspace takes 中's three bytes")?;
+    press(mut platform, Key.Left);
+    step(mut ui, mut platform, mut app)?;
+    Check.isTrue(app.nameCaret == 2, "Left steps over e and its accent together")?;
+    press(mut platform, Key.Delete);
+    step(mut ui, mut platform, mut app)?;
+    Check.isTrue(nameIs(app, "Hi") && app.nameCaret == 2, "Delete takes the accented e whole")?;
     press(mut platform, Key.Enter);
     step(mut ui, mut platform, mut app)?;
     Check.isTrue(!ui.hasFocusNamed("name"), "Enter clears focus")?;

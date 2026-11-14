@@ -66,7 +66,7 @@ public struct Controls {
         .minH(18.0 + 2.0 * space(2.0)).bg(SLATE_800).rounded(Radius.Md).cursor(Cursor.Text).isFocused(focused)
         .border(1.0, SLATE_600).focus(Style.of().border(2.0, BLUE_400));
 
-    /// ClayWind_TextInput: edits at the end (type, Backspace); Enter leaves the field.
+    /// ClayWind_TextInput: edits at the end (type, Backspace a grapheme cluster); Enter leaves the field.
     public fn textInput(ui: borrow mut Ui, id: StringView, buf: SliceMut<u8>, len: borrow mut usize) -> bool {
         let h = hashId(id);
         ui.registerFocusable(h);
@@ -82,14 +82,15 @@ public struct Controls {
                 if (c == 0) {
                     break;
                 }
-                if (c >= 32 && c < 127 && len < buf.length) {
-                    buf[len] = truncate<u8>(c);
-                    len += 1;
-                    changed = true;
+                if (typeable(c)) {
+                    let at = len;
+                    if (insertChar(buf, mut len, at, c) > 0) {
+                        changed = true;
+                    }
                 }
             }
             if (ui.keyHit(Key.Backspace) && len > 0) {
-                len -= 1;
+                len = graphemeBefore(buf[0..len], len);
                 changed = true;
             }
             if (ui.keyPressed(Key.Enter)) {
@@ -475,39 +476,32 @@ public struct Controls {
                 if (c == 0) {
                     break;
                 }
-                if (c >= 32 && c < 127 && len < buf.length) {
-                    // Shift the tail right by one and insert at the caret.
-                    var k: usize = len;
-                    while (k > caret) {
-                        buf[k] = buf[k - 1];
-                        k -= 1;
+                if (typeable(c)) {
+                    let added = insertChar(buf, mut len, caret, c);
+                    if (added > 0) {
+                        caret += added;
+                        changed = true;
                     }
-                    buf[caret] = truncate<u8>(c);
-                    caret += 1;
-                    len += 1;
-                    changed = true;
                 }
             }
+            // Backspace, Delete and the arrows take a whole grapheme cluster: an accented letter, a flag, an emoji
+            // sequence.
             if (ui.keyHit(Key.Backspace) && caret > 0) {
-                for (k in caret..len) {
-                    buf[k - 1] = buf[k];
-                }
-                caret -= 1;
-                len -= 1;
+                let from = graphemeBefore(buf[0..len], caret);
+                removeBytes(buf, mut len, from, caret);
+                caret = from;
                 changed = true;
             }
             if (ui.keyHit(Key.Delete) && caret < len) {
-                for (k in caret + 1..len) {
-                    buf[k - 1] = buf[k];
-                }
-                len -= 1;
+                let to = graphemeEnd(buf[0..len], caret);
+                removeBytes(buf, mut len, caret, to);
                 changed = true;
             }
             if (ui.keyHit(Key.Left) && caret > 0) {
-                caret -= 1;
+                caret = graphemeBefore(buf[0..len], caret);
             }
             if (ui.keyHit(Key.Right) && caret < len) {
-                caret += 1;
+                caret = graphemeEnd(buf[0..len], caret);
             }
             if (ui.keyPressed(Key.Home)) {
                 caret = 0;
@@ -535,4 +529,38 @@ public struct Controls {
         ui.close();
         return changed;
     }
+}
+
+/// Whether a typed character goes into a text field: anything printable (not a C0 or C1 control, DEL or a
+/// surrogate).
+fn typeable(c: u32) -> bool => c >= 0x20 && c != 0x7F && !(c >= 0x80 && c < 0xA0) && !(c >= 0xD800 && c <= 0xDFFF) &&
+    c <= 0x10FFFF;
+
+/// Inserts `c` as UTF-8 at byte `at` of `buf[0..len]`, moving the rest right: the bytes added, 0 when it does not
+/// fit.
+fn insertChar(buf: SliceMut<u8>, len: borrow mut usize, at: usize, c: u32) -> usize {
+    var bytes = [0u8; 4];
+    let n = encodeUtf8(c, mut bytes);
+    if (len + n > buf.length) {
+        return 0;
+    }
+    var k: usize = len + n;
+    while (k > at + n) {
+        k -= 1;
+        buf[k] = buf[k - n];
+    }
+    for (j in 0..n) {
+        buf[at + j] = bytes[j];
+    }
+    len += n;
+    return n;
+}
+
+/// Removes bytes `from` to `to` of `buf[0..len]`, moving the rest left.
+fn removeBytes(buf: SliceMut<u8>, len: borrow mut usize, from: usize, to: usize) {
+    let gone = to - from;
+    for (k in to..len) {
+        buf[k - gone] = buf[k];
+    }
+    len -= gone;
 }

@@ -30,6 +30,9 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 - **TrueType fonts:** glyphs read and rendered by the toolkit itself, from single fonts and collections (.ttc). Text
   is shaped into glyphs that measuring and drawing share, and a character the run's font lacks comes from a
   fallback chain (`Raster.setFallbacks`), so CJK, Hangul, Greek and Cyrillic draw in a Latin run.
+- **Unicode text segmentation:** lines break at UAX #14's opportunities (so CJK wraps between ideographs and a
+  line breaks after a hyphen), and the caret, Backspace and line clamping work in UAX #29 grapheme clusters. Both
+  pass Unicode 16's own test files.
 - **Retina output.** `Raster.setPixelRatio` draws at the display's pixel ratio while layout stays in points.
 - **Incremental rendering.** `Damage` works out what changed between frames, and the raster redraws only those
   boxes. The result is byte-identical to a full redraw.

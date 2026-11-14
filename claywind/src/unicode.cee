@@ -1,0 +1,550 @@
+// SPDX-License-Identifier: MIT
+// Text segmentation from unicode_data.cee's properties: grapheme clusters (UAX #29, extended) and line-break
+// opportunities (UAX #14, its default rules). Both pass Unicode's own test files (claywind-tests' text tests, with
+// CLAYWIND_UCD pointing at them).
+
+/// A position before which a line may not break.
+public const BREAK_NONE: u8 = 0;
+/// A position before which a line may break.
+public const BREAK_ALLOWED: u8 = 1;
+/// A position before which a line must break (after a newline).
+public const BREAK_MANDATORY: u8 = 2;
+
+/// A code point's packed properties (tools/unicode/build_tables.py has the packing).
+fn unicodeProps(cp: u32) -> u32 {
+    if (cp < 128) {
+        return UNICODE_ASCII[cp as usize];
+    }
+    var lo: usize = 0;
+    var hi: usize = UNICODE_RANGE_COUNT;
+    while (hi - lo > 1) {
+        let mid = lo + (hi - lo) / 2;
+        if (UNICODE_RANGES[mid * 2] <= cp) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    return UNICODE_RANGES[lo * 2 + 1];
+}
+
+fn lbOf(p: u32) -> u32 => p & 63;
+fn gcbOf(p: u32) -> u32 => (p >> 6) & 15;
+fn pictOf(p: u32) -> bool => ((p >> 10) & 1) != 0;
+fn wideOf(p: u32) -> bool => ((p >> 11) & 1) != 0;
+fn incbOf(p: u32) -> u32 => (p >> 12) & 3;
+fn gcOf(p: u32) -> u32 => (p >> 14) & 7;
+
+/// `codepoint` as UTF-8 into `out`; its length (1 to 4). A surrogate or a value past U+10FFFF is U+FFFD.
+public fn encodeUtf8(codepoint: u32, out: borrow mut [u8; 4]) -> usize {
+    var cp = codepoint;
+    if ((cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF) {
+        cp = 0xFFFD;
+    }
+    if (cp < 0x80) {
+        out[0] = truncate<u8>(cp);
+        return 1;
+    }
+    if (cp < 0x800) {
+        out[0] = truncate<u8>(0xC0 | (cp >> 6));
+        out[1] = truncate<u8>(0x80 | (cp & 0x3F));
+        return 2;
+    }
+    if (cp < 0x10000) {
+        out[0] = truncate<u8>(0xE0 | (cp >> 12));
+        out[1] = truncate<u8>(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = truncate<u8>(0x80 | (cp & 0x3F));
+        return 3;
+    }
+    out[0] = truncate<u8>(0xF0 | (cp >> 18));
+    out[1] = truncate<u8>(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = truncate<u8>(0x80 | ((cp >> 6) & 0x3F));
+    out[3] = truncate<u8>(0x80 | (cp & 0x3F));
+    return 4;
+}
+
+/// The start of the character that ends at byte `end` of `utf8` (back over continuation bytes); 0 at the start.
+public fn utf8Start(utf8: Slice<u8>, end: usize) -> usize {
+    if (end == 0) {
+        return 0;
+    }
+    var i = end - 1;
+    while (i > 0 && end - i < 4 && (utf8[i] & 0xC0) == 0x80) {
+        i -= 1;
+    }
+    return i;
+}
+
+/// Whether `cp` is a hard line break: LF, CR, NEL, LS, PS, VT or FF (UAX #14's BK, CR, LF and NL).
+public fn hardBreak(cp: u32) -> bool {
+    let c = lbOf(unicodeProps(cp));
+    return c == LB_BK || c == LB_CR || c == LB_LF || c == LB_NL;
+}
+
+// ---- grapheme clusters (UAX #29) -------------------------------------------------------------------------------
+
+/// Whether the extended grapheme cluster rules break between characters with properties `a` and `b`: `ri` regional
+/// indicators end at `a`, `emoji` is 2 after Extended_Pictographic Extend* ZWJ, and `conjunct` is 2 after an Indic
+/// consonant, extenders and a linker.
+fn graphemeBreak(a: u32, b: u32, ri: u32, emoji: u32, conjunct: u32) -> bool {
+    let ga = gcbOf(a);
+    let gb = gcbOf(b);
+    if (ga == GCB_CR && gb == GCB_LF) {
+        return false; // GB3
+    }
+    if (ga == GCB_CONTROL || ga == GCB_CR || ga == GCB_LF || gb == GCB_CONTROL || gb == GCB_CR || gb == GCB_LF) {
+        return true; // GB4, GB5
+    }
+    if (ga == GCB_L && (gb == GCB_L || gb == GCB_V || gb == GCB_LV || gb == GCB_LVT)) {
+        return false; // GB6
+    }
+    if ((ga == GCB_LV || ga == GCB_V) && (gb == GCB_V || gb == GCB_T)) {
+        return false; // GB7
+    }
+    if ((ga == GCB_LVT || ga == GCB_T) && gb == GCB_T) {
+        return false; // GB8
+    }
+    if (gb == GCB_EXTEND || gb == GCB_ZWJ || gb == GCB_SPACINGMARK || ga == GCB_PREPEND) {
+        return false; // GB9, GB9a, GB9b
+    }
+    if (incbOf(b) == 1 && conjunct == 2) {
+        return false; // GB9c
+    }
+    if (ga == GCB_ZWJ && emoji == 2 && pictOf(b)) {
+        return false; // GB11
+    }
+    if (ga == GCB_REGIONAL_INDICATOR && gb == GCB_REGIONAL_INDICATOR && ri % 2 == 1) {
+        return false; // GB12, GB13
+    }
+    return true; // GB999
+}
+
+/// The end of the grapheme cluster that starts at byte `at` of `utf8` (UAX #29's extended clusters): the byte
+/// after its last character. `at` must start a cluster, as 0 and every end this returns do.
+public fn graphemeEnd(utf8: Slice<u8>, at: usize) -> usize {
+    if (at >= utf8.length) {
+        return utf8.length;
+    }
+    let first = decodeUtf8(utf8, at);
+    var prev = unicodeProps(first[0]);
+    var pos = at + (first[1] as usize);
+    var ri: u32 = if (gcbOf(prev) == GCB_REGIONAL_INDICATOR) 1 else 0;
+    var emoji: u32 = if (pictOf(prev)) 1 else 0;
+    var conjunct: u32 = if (incbOf(prev) == 1) 1 else 0;
+    while (pos < utf8.length) {
+        let next = decodeUtf8(utf8, pos);
+        let p = unicodeProps(next[0]);
+        if (graphemeBreak(prev, p, ri, emoji, conjunct)) {
+            return pos;
+        }
+        ri = if (gcbOf(p) == GCB_REGIONAL_INDICATOR) ri + 1 else 0;
+        emoji = if (pictOf(
+            p,
+        )) 1 else if (gcbOf(p) == GCB_EXTEND && emoji == 1) 1 else if (gcbOf(p) == GCB_ZWJ && emoji == 1) 2 else 0;
+        let incb = incbOf(p);
+        conjunct =
+            if (incb == 1) 1 else if (incb == 3 && conjunct > 0) 2 else if (incb == 2 && conjunct > 0) conjunct else 0;
+        prev = p;
+        pos += next[1] as usize;
+    }
+    return utf8.length;
+}
+
+/// The start of the grapheme cluster that ends at byte `at` of `utf8` (the caret's step left); 0 at the start.
+public fn graphemeBefore(utf8: Slice<u8>, at: usize) -> usize {
+    var start: usize = 0;
+    while (start < utf8.length) {
+        let end = graphemeEnd(utf8, start);
+        if (end >= at) {
+            return start;
+        }
+        start = end;
+    }
+    return start;
+}
+
+// ---- line breaking (UAX #14) -----------------------------------------------------------------------------------
+
+// A character's flags in the line breaker's scratch.
+const LBF_WIDE: u32 = 1;
+const LBF_PI: u32 = 2;
+const LBF_PF: u32 = 4;
+const LBF_UNASSIGNED: u32 = 8;
+const LBF_PICT: u32 = 16;
+const LBF_DOTTED: u32 = 32;    // U+25CC DOTTED CIRCLE
+const LBF_HYPHEN: u32 = 64;    // U+2010 HYPHEN
+const LBF_ABSORBED: u32 = 128; // a combining mark or ZWJ that LB9 attaches to the character before it
+
+/// No character: before the first (sot) or after the last (eot).
+const LB_NONE: u32 = 63;
+
+/// The line breaker's view of a text: per character, its byte offset and its LB1-resolved class and flags.
+struct LineChars<region r> {
+    s: SliceMut<r, u32>;
+    n: i32;
+}
+
+impl<region r> LineChars<r> {
+    fn raw(borrow this, k: i32) -> u32 => this.s[truncate<usize>(k) * 2 + 1] & 63;
+    fn flags(borrow this, k: i32) -> u32 => this.s[truncate<usize>(k) * 2 + 1] >> 8;
+    fn absorbed(borrow this, k: i32) -> bool => (this.flags(k) & LBF_ABSORBED) != 0;
+
+    /// The class of the unit whose base is `k` (LB10: a lone mark or ZWJ is AL), or LB_NONE outside the text.
+    fn cls(borrow this, k: i32) -> u32 {
+        if (k < 0 || k >= this.n) {
+            return LB_NONE;
+        }
+        let c = this.raw(k);
+        return if (c == LB_CM || c == LB_ZWJ) LB_AL else c;
+    }
+
+    /// The flags of the unit whose base is `k` (a lone mark has U+0041's: none).
+    fn unitFlags(borrow this, k: i32) -> u32 {
+        if (k < 0 || k >= this.n) {
+            return 0;
+        }
+        let c = this.raw(k);
+        return if (c == LB_CM || c == LB_ZWJ) 0 else this.flags(k);
+    }
+
+    fn wide(borrow this, k: i32) -> bool => (this.unitFlags(k) & LBF_WIDE) != 0;
+
+    /// The base of the unit that holds character `k`.
+    fn baseOf(borrow this, k: i32) -> i32 {
+        var j = k;
+        while (j > 0 && this.absorbed(j)) {
+            j -= 1;
+        }
+        return j;
+    }
+
+    /// The base of the unit before the one based at `k`, or -1 (sot).
+    fn before(borrow this, k: i32) -> i32 => if (k <= 0) -1 else this.baseOf(k - 1);
+
+    /// The base of the unit after the one based at `k`, or `n` (eot).
+    fn after(borrow this, k: i32) -> i32 {
+        var j = k + 1;
+        while (j < this.n && this.absorbed(j)) {
+            j += 1;
+        }
+        return j;
+    }
+
+    /// Back from unit `k` over spaces: the first unit that is not one, or -1.
+    fn skipSpaces(borrow this, k: i32) -> i32 {
+        var j = k;
+        while (j >= 0 && this.cls(j) == LB_SP) {
+            j = this.before(j);
+        }
+        return j;
+    }
+
+    /// LB28a's (AK | ◌ | AS), and (AK | ◌).
+    fn aksara(borrow this, k: i32) -> bool {
+        let c = this.cls(k);
+        return c == LB_AK || c == LB_AS || (this.unitFlags(k) & LBF_DOTTED) != 0;
+    }
+
+    fn aksaraOrDot(borrow this, k: i32) -> bool => this.cls(k) == LB_AK || (this.unitFlags(k) & LBF_DOTTED) != 0;
+
+    /// UAX #14 before character `k` (1 to n - 1).
+    fn breakBefore(borrow this, k: i32) -> u8 {
+        let ra = this.raw(k - 1);
+        let rb = this.raw(k);
+        // LB4, LB5: after hard line breaks; CR × LF.
+        if (ra == LB_BK) {
+            return BREAK_MANDATORY;
+        }
+        if (ra == LB_CR) {
+            return if (rb == LB_LF) BREAK_NONE else BREAK_MANDATORY;
+        }
+        if (ra == LB_LF || ra == LB_NL) {
+            return BREAK_MANDATORY;
+        }
+        // LB6, LB7: not before hard breaks, spaces or ZW.
+        if (rb == LB_BK || rb == LB_CR || rb == LB_LF || rb == LB_NL || rb == LB_SP || rb == LB_ZW) {
+            return BREAK_NONE;
+        }
+        // LB8: ZW SP* ÷
+        var z = k - 1;
+        while (z > 0 && this.raw(z) == LB_SP) {
+            z -= 1;
+        }
+        if (this.raw(z) == LB_ZW) {
+            return BREAK_ALLOWED;
+        }
+        // LB8a: ZWJ ×; LB9: X (CM | ZWJ)* is X.
+        if (ra == LB_ZWJ || this.absorbed(k)) {
+            return BREAK_NONE;
+        }
+        let a = this.baseOf(k - 1);
+        let b = k;
+        let ca = this.cls(a);
+        let cb = this.cls(b);
+        let fa = this.unitFlags(a);
+        let fb = this.unitFlags(b);
+        // LB11, LB12, LB12a
+        if (ca == LB_WJ || cb == LB_WJ || ca == LB_GL) {
+            return BREAK_NONE;
+        }
+        if (cb == LB_GL && ca != LB_SP && ca != LB_BA && ca != LB_HY) {
+            return BREAK_NONE;
+        }
+        // LB13
+        if (cb == LB_CL || cb == LB_CP || cb == LB_EX || cb == LB_SY) {
+            return BREAK_NONE;
+        }
+        let behind = this.skipSpaces(a);
+        let cbehind = this.cls(behind);
+        // LB14: OP SP* ×
+        if (cbehind == LB_OP) {
+            return BREAK_NONE;
+        }
+        // LB15a: (sot | BK | CR | LF | NL | OP | QU | GL | SP | ZW) [Pi & QU] SP* ×
+        if (cbehind == LB_QU && (this.unitFlags(behind) & LBF_PI) != 0) {
+            let p = this.before(behind);
+            let cp = this.cls(p);
+            if (p < 0 || cp == LB_BK || cp == LB_CR || cp == LB_LF || cp == LB_NL || cp == LB_OP || cp == LB_QU ||
+                cp == LB_GL || cp == LB_SP || cp == LB_ZW) {
+                return BREAK_NONE;
+            }
+        }
+        let next = this.after(b);
+        let cn = this.cls(next);
+        // LB15b: × [Pf & QU] (SP | GL | WJ | CL | QU | CP | EX | IS | SY | BK | CR | LF | NL | ZW | eot)
+        if (cb == LB_QU && (fb & LBF_PF) != 0) {
+            if (next >= this.n || cn == LB_SP || cn == LB_GL || cn == LB_WJ || cn == LB_CL || cn == LB_QU ||
+                cn == LB_CP || cn == LB_EX || cn == LB_IS || cn == LB_SY || cn == LB_BK || cn == LB_CR ||
+                cn == LB_LF || cn == LB_NL || cn == LB_ZW) {
+                return BREAK_NONE;
+            }
+        }
+        // LB15c: SP ÷ IS NU; LB15d: × IS
+        if (ca == LB_SP && cb == LB_IS && cn == LB_NU) {
+            return BREAK_ALLOWED;
+        }
+        if (cb == LB_IS) {
+            return BREAK_NONE;
+        }
+        // LB16: (CL | CP) SP* × NS; LB17: B2 SP* × B2
+        if (cb == LB_NS && (cbehind == LB_CL || cbehind == LB_CP)) {
+            return BREAK_NONE;
+        }
+        if (cb == LB_B2 && cbehind == LB_B2) {
+            return BREAK_NONE;
+        }
+        // LB18: SP ÷
+        if (ca == LB_SP) {
+            return BREAK_ALLOWED;
+        }
+        // LB19: × [QU - Pi]; [QU - Pf] ×
+        if ((cb == LB_QU && (fb & LBF_PI) == 0) || (ca == LB_QU && (fa & LBF_PF) == 0)) {
+            return BREAK_NONE;
+        }
+        // LB19a: unless surrounded by East Asian characters, not either side of a quotation mark.
+        if (cb == LB_QU && (!this.wide(a) || next >= this.n || !this.wide(next))) {
+            return BREAK_NONE;
+        }
+        if (ca == LB_QU) {
+            let p = this.before(a);
+            if (!this.wide(b) || p < 0 || !this.wide(p)) {
+                return BREAK_NONE;
+            }
+        }
+        // LB20: ÷ CB; CB ÷
+        if (ca == LB_CB || cb == LB_CB) {
+            return BREAK_ALLOWED;
+        }
+        // LB20a: (sot | BK | CR | LF | NL | SP | ZW | CB | GL) (HY | U+2010) × AL
+        if (cb == LB_AL && (ca == LB_HY || (fa & LBF_HYPHEN) != 0)) {
+            let p = this.before(a);
+            let cp = this.cls(p);
+            if (p < 0 || cp == LB_BK || cp == LB_CR || cp == LB_LF || cp == LB_NL || cp == LB_SP || cp == LB_ZW ||
+                cp == LB_CB || cp == LB_GL) {
+                return BREAK_NONE;
+            }
+        }
+        // LB21: × BA; × HY; × NS; BB ×
+        if (cb == LB_BA || cb == LB_HY || cb == LB_NS || ca == LB_BB) {
+            return BREAK_NONE;
+        }
+        // LB21a: HL (HY | [BA - $EastAsian]) × [^HL]
+        if (cb != LB_HL && (ca == LB_HY || (ca == LB_BA && (fa & LBF_WIDE) == 0)) && this.cls(
+            this.before(a),
+        ) == LB_HL) {
+            return BREAK_NONE;
+        }
+        // LB21b: SY × HL; LB22: × IN
+        if ((ca == LB_SY && cb == LB_HL) || cb == LB_IN) {
+            return BREAK_NONE;
+        }
+        let letter_a = ca == LB_AL || ca == LB_HL;
+        let letter_b = cb == LB_AL || cb == LB_HL;
+        // LB23, LB23a, LB24
+        if ((letter_a && cb == LB_NU) || (ca == LB_NU && letter_b)) {
+            return BREAK_NONE;
+        }
+        if ((ca == LB_PR && (cb == LB_ID || cb == LB_EB || cb == LB_EM)) ||
+            ((ca == LB_ID || ca == LB_EB || ca == LB_EM) && cb == LB_PO)) {
+            return BREAK_NONE;
+        }
+        if (((ca == LB_PR || ca == LB_PO) && letter_b) || (letter_a && (cb == LB_PR || cb == LB_PO))) {
+            return BREAK_NONE;
+        }
+        // LB25: numbers.
+        if (cb == LB_PO || cb == LB_PR) {
+            var u = a;
+            if (this.cls(u) == LB_CL || this.cls(u) == LB_CP) {
+                u = this.before(u);
+            }
+            while (u >= 0 && (this.cls(u) == LB_SY || this.cls(u) == LB_IS)) {
+                u = this.before(u);
+            }
+            if (this.cls(u) == LB_NU) {
+                return BREAK_NONE;
+            }
+        }
+        if (ca == LB_PO || ca == LB_PR) {
+            if (cb == LB_NU || (cb == LB_OP && cn == LB_NU) ||
+                (cb == LB_OP && cn == LB_IS && this.cls(this.after(next)) == LB_NU)) {
+                return BREAK_NONE;
+            }
+        }
+        if ((ca == LB_HY || ca == LB_IS) && cb == LB_NU) {
+            return BREAK_NONE;
+        }
+        if (cb == LB_NU) {
+            var u = a;
+            while (u >= 0 && (this.cls(u) == LB_SY || this.cls(u) == LB_IS)) {
+                u = this.before(u);
+            }
+            if (this.cls(u) == LB_NU) {
+                return BREAK_NONE;
+            }
+        }
+        // LB26, LB27: Korean syllable blocks.
+        if (ca == LB_JL && (cb == LB_JL || cb == LB_JV || cb == LB_H2 || cb == LB_H3)) {
+            return BREAK_NONE;
+        }
+        if ((ca == LB_JV || ca == LB_H2) && (cb == LB_JV || cb == LB_JT)) {
+            return BREAK_NONE;
+        }
+        if ((ca == LB_JT || ca == LB_H3) && cb == LB_JT) {
+            return BREAK_NONE;
+        }
+        let korean_a = ca == LB_JL || ca == LB_JV || ca == LB_JT || ca == LB_H2 || ca == LB_H3;
+        let korean_b = cb == LB_JL || cb == LB_JV || cb == LB_JT || cb == LB_H2 || cb == LB_H3;
+        if ((korean_a && cb == LB_PO) || (ca == LB_PR && korean_b)) {
+            return BREAK_NONE;
+        }
+        // LB28: (AL | HL) × (AL | HL)
+        if (letter_a && letter_b) {
+            return BREAK_NONE;
+        }
+        // LB28a: Brahmic orthographic syllables.
+        if (ca == LB_AP && this.aksara(b)) {
+            return BREAK_NONE;
+        }
+        if (this.aksara(a) && (cb == LB_VF || cb == LB_VI)) {
+            return BREAK_NONE;
+        }
+        if (ca == LB_VI && this.aksara(this.before(a)) && this.aksaraOrDot(b)) {
+            return BREAK_NONE;
+        }
+        if (this.aksara(a) && this.aksara(b) && cn == LB_VF) {
+            return BREAK_NONE;
+        }
+        // LB29: IS × (AL | HL)
+        if (ca == LB_IS && letter_b) {
+            return BREAK_NONE;
+        }
+        // LB30: (AL | HL | NU) × [OP - $EastAsian]; [CP - $EastAsian] × (AL | HL | NU)
+        if ((letter_a || ca == LB_NU) && cb == LB_OP && (fb & LBF_WIDE) == 0) {
+            return BREAK_NONE;
+        }
+        if (ca == LB_CP && (fa & LBF_WIDE) == 0 && (letter_b || cb == LB_NU)) {
+            return BREAK_NONE;
+        }
+        // LB30a: regional indicators in pairs.
+        if (ca == LB_RI && cb == LB_RI) {
+            var count: u32 = 0;
+            var u = a;
+            while (u >= 0 && this.cls(u) == LB_RI) {
+                count += 1;
+                u = this.before(u);
+            }
+            return if (count % 2 == 1) BREAK_NONE else BREAK_ALLOWED;
+        }
+        // LB30b: EB × EM; [Extended_Pictographic & Cn] × EM
+        if (cb == LB_EM && (ca == LB_EB || ((fa & LBF_PICT) != 0 && (fa & LBF_UNASSIGNED) != 0))) {
+            return BREAK_NONE;
+        }
+        return BREAK_ALLOWED; // LB31
+    }
+}
+
+/// UAX #14's line-break opportunities in `utf8`, by its default rules: `breaks[i]` is BREAK_NONE, BREAK_ALLOWED or
+/// BREAK_MANDATORY for the position before byte `i` (BREAK_NONE inside a character and at 0); the end of the text
+/// is always a break and has no entry. `scratch` needs two u32s per character. False when either is too small.
+public fn lineBreaks(utf8: Slice<u8>, breaks: SliceMut<u8>, scratch: SliceMut<u32>) -> bool {
+    if (breaks.length < utf8.length) {
+        return false;
+    }
+    // LB1: each character's class, resolved; its flags; and LB9's absorption.
+    var n: usize = 0;
+    var i: usize = 0;
+    var previous: u32 = LB_NONE;
+    while (i < utf8.length) {
+        breaks[i] = BREAK_NONE;
+        let cp = decodeUtf8(utf8, i);
+        if (n * 2 + 2 > scratch.length) {
+            return false;
+        }
+        let p = unicodeProps(cp[0]);
+        let gc = gcOf(p);
+        var c = lbOf(p);
+        if (c == LB_AI || c == LB_SG || c == LB_XX) {
+            c = LB_AL;
+        } else if (c == LB_SA) {
+            c = if (gc == GC_MN || gc == GC_MC) LB_CM else LB_AL;
+        } else if (c == LB_CJ) {
+            c = LB_NS;
+        }
+        var flags: u32 = 0;
+        if (wideOf(p)) {
+            flags |= LBF_WIDE;
+        }
+        if (gc == GC_PI) {
+            flags |= LBF_PI;
+        }
+        if (gc == GC_PF) {
+            flags |= LBF_PF;
+        }
+        if (gc == GC_CN) {
+            flags |= LBF_UNASSIGNED;
+        }
+        if (pictOf(p)) {
+            flags |= LBF_PICT;
+        }
+        if (cp[0] == 0x25CC) {
+            flags |= LBF_DOTTED;
+        }
+        if (cp[0] == 0x2010) {
+            flags |= LBF_HYPHEN;
+        }
+        if ((c == LB_CM || c == LB_ZWJ) && n > 0 && previous != LB_BK && previous != LB_CR && previous != LB_LF &&
+            previous != LB_NL && previous != LB_SP && previous != LB_ZW) {
+            flags |= LBF_ABSORBED;
+        }
+        scratch[n * 2] = truncate<u32>(i);
+        scratch[n * 2 + 1] = c | (flags << 8);
+        previous = c;
+        n += 1;
+        i += cp[1] as usize;
+    }
+    let chars = LineChars { s: scratch, n: truncate<i32>(n) };
+    for (k in 1..n) {
+        breaks[chars.s[k * 2] as usize] = chars.breakBefore(truncate<i32>(k));
+    }
+    return true;
+}

@@ -135,13 +135,14 @@ fn wrapText<M: TextMetrics>(l: borrow mut LayoutTree, index: usize, metrics: bor
         let last = l.lines.items[lastSlot];
         let dots = [46u8, 46u8, 46u8];
         let ellipsisWidth = metrics.measure(dots[..], config).w;
+        // Trimmed a grapheme cluster at a time (a byte at a time for ASCII), never inside a character.
         var keep = last.length;
         while (keep > 0) {
             let measured = metrics.measure(l.bytes.items[last.start..last.start + keep], config).w;
             if (measured + ellipsisWidth <= width) {
                 break;
             }
-            keep -= 1;
+            keep = graphemeBefore(l.bytes.items[last.start..last.start + last.length], keep);
         }
         let newStart = l.bytes.length();
         for (k in 0..keep) {
