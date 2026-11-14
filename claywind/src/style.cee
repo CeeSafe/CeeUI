@@ -421,7 +421,8 @@ fn applyProps(d: borrow mut Decl, p: Props) {
             let anchorRight = p.right != 0.0 || p.insetRight;
             let anchorBottom = p.bottom != 0.0 || p.insetBottom;
             let point =
-                if (anchorRight) (if (anchorBottom) AttachPoint.RightBottom else AttachPoint.RightTop) else (if (anchorBottom) AttachPoint.LeftBottom else AttachPoint.LeftTop);
+                if (anchorRight) (if (anchorBottom) AttachPoint.RightBottom else AttachPoint.RightTop)
+                    else (if (anchorBottom) AttachPoint.LeftBottom else AttachPoint.LeftTop);
             d.floating.element = point;
             d.floating.parent = point;
             d.floating.offset = Vec2 {
