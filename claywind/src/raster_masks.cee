@@ -1,20 +1,7 @@
 // SPDX-License-Identifier: MIT
-// What a GPU backend needs from the software renderer: where a text run's characters go, coverage masks of glyphs
-// and icons drawn exactly as `Raster` draws them, to keep in a texture atlas, and the registered images' pixels.
-
-/// What `Raster.placeRun` placed: the ascent in pixels (the baseline's distance below the run's top) and how many
-/// characters it wrote.
-public struct PlacedRun {
-    public ascent: f32;
-    public count: usize;
-}
-
-/// A character of a text run, placed by `Raster.placeRun`.
-public struct PlacedChar {
-    public codepoint: u32;
-    /// The pen's x for this character, in pixels at the run's size, from the run's left edge.
-    public x: f32;
-}
+// What a GPU backend needs from the software renderer: coverage masks of icons drawn exactly as `Raster` draws them,
+// to keep in a texture atlas, the polygon of a path, and the registered images' pixels (a text run's glyphs are
+// raster_text.cee's shapeRun and rasterizeGlyph).
 
 /// A registered image's size, from `Raster.imageSize`.
 public struct ImageSize {
@@ -99,60 +86,6 @@ impl<region r> Raster<r> {
             }
             null => { return null; }
         }
-    }
-
-    /// Places the characters of `utf8` as `Command.Text` draws them at `fontSize` pixels per em: kerning, and
-    /// `letterSpacing` spread over the run as `drawText` spreads it. Newlines and characters the font lacks are left
-    /// out, and so are characters past `out`'s length. Null without a font.
-    public fn placeRun(
-        borrow this,
-        utf8: Slice<u8>,
-        fontId: u32,
-        fontSize: f32,
-        letterSpacing: f32,
-        out: SliceMut<PlacedChar>,
-    ) -> PlacedRun? {
-        var count: usize = 0;
-        let slot = match (this.fontSlot(fontId)) {
-            Some(s) => s,
-            null => { return null; }
-        };
-        let size = if (fontSize > 0.0) fontSize else 16.0;
-        let scale = size / slot.info.unitsPerEm;
-        var spacing: f32 = 1.0;
-        if (letterSpacing > 0.0) {
-            let natural = this.measureWidth(utf8, fontId, size, 0.0);
-            if (natural > 0.0) {
-                spacing = (natural + letterSpacing * round<f32>(utf8.length)) / natural;
-            }
-        }
-        let d = this.fontPool[slot.offset..slot.offset + slot.size];
-        var cursor: f32 = 0.0;
-        var previous: u32 = INVALID_GLYPH;
-        var i: usize = 0;
-        while (i < utf8.length) {
-            let cp = decodeUtf8(utf8, i);
-            i += cp[1] as usize;
-            if (cp[0] == 10) {
-                continue;
-            }
-            let glyph = glyphIndex(d, slot.info, cp[0]);
-            if (glyph == INVALID_GLYPH) {
-                continue;
-            }
-            var kernX: f32 = 0.0;
-            if (previous != INVALID_GLYPH) {
-                kernX = kerning(d, slot.info, previous, glyph);
-            }
-            let advance = glyphAdvance(d, slot.info, glyph);
-            if (count < out.length) {
-                out[count] = PlacedChar { codepoint: cp[0], x: (cursor + kernX) * scale };
-                count += 1;
-            }
-            cursor += (advance + kernX) * spacing;
-            previous = glyph;
-        }
-        return PlacedRun { ascent: slot.info.ascent * scale, count: count };
     }
 
     /// Draws `command` (with `text` for a `Command.Text`) at one pixel per point into a transparent `width` ×

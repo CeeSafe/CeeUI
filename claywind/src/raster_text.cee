@@ -1,0 +1,337 @@
+// SPDX-License-Identifier: MIT
+// Text as glyphs: a run's UTF-8 becomes positioned glyphs, each from the run's font or, for a character it lacks,
+// the first font of the fallback chain that has it (Raster.setFallbacks). Measuring, drawing and a GPU backend
+// (Raster.shapeRun) walk the same glyphs, so what is measured is what is drawn.
+//
+// The pen moves in the run's own font's units: a fallback glyph's advance is converted to them. A run in one font
+// is therefore placed by the same arithmetic as before fallbacks existed, which is ThorVG's.
+
+/// A glyph of a shaped run (Raster.shapeRun).
+public struct ShapedGlyph {
+    /// The loaded font it is drawn from (an index for Raster.rasterizeGlyph), and its glyph id there.
+    public font: u32;
+    public glyph: u32;
+    /// Where its origin goes: pixels right of the run's start, kerning and letter spacing applied.
+    public x: f32;
+    /// The byte offset in the run's UTF-8 of the character it draws.
+    public cluster: usize;
+}
+
+/// What Raster.shapeRun shaped.
+public struct ShapedRun {
+    /// The baseline's distance below the run's top, in pixels: the run's own font's ascent.
+    public ascent: f32;
+    /// The pen after the last glyph, in pixels: the run's width.
+    public width: f32;
+    /// How many glyphs it wrote (more glyphs than `out` holds are left out, but still measured).
+    public count: usize;
+}
+
+/// Where the shaper is in a run.
+struct ShapeCursor {
+    at: usize;
+    /// The pen, in the run's font's units.
+    pen: f32;
+    previousSlot: usize;
+    previousGlyph: u32;
+    hasPrevious: bool;
+}
+
+/// One glyph as the shaper places it.
+struct StepGlyph {
+    slot: usize;
+    glyph: u32;
+    /// The pen at the glyph's origin (kerning applied), in the run's font's units.
+    pen: f32;
+    cluster: usize;
+}
+
+/// Characters with no glyph and no width: zero-width spaces and joiners, directional marks, variation selectors,
+/// the byte order mark, the soft hyphen, and C0 controls (a newline ends nothing here: lines are split before).
+fn ignorable(cp: u32) -> bool =>
+    cp < 0x20 || cp == 0x7F || cp == 0xAD || cp == 0x34F || (cp >= 0x180B && cp <= 0x180F) ||
+        (cp >= 0x200B && cp <= 0x200F) || (cp >= 0x202A && cp <= 0x202E) || (cp >= 0x2060 && cp <= 0x206F) ||
+        cp == 0xFEFF || (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0xE0000 && cp <= 0xE0FFF);
+
+/// Combining marks, which stay in the font of the character they mark when it has them (until Unicode's
+/// categories are in: the combining diacritical blocks).
+fn combining(cp: u32) -> bool =>
+    (cp >= 0x300 && cp <= 0x36F) || (cp >= 0x1AB0 && cp <= 0x1AFF) || (cp >= 0x1DC0 && cp <= 0x1DFF) ||
+        (cp >= 0x20D0 && cp <= 0x20FF) || (cp >= 0xFE20 && cp <= 0xFE2F);
+
+impl<region r> Raster<r> {
+    /// The fonts tried, in order, for a character a run's font lacks (font ids, as `loadFont` took them); up to 8.
+    /// A character no font has is drawn as the run's font's missing-glyph box.
+    public fn setFallbacks(borrow mut this, ids: Slice<u32>) {
+        this.fallbackCount = 0;
+        for (id in ids) {
+            if (this.fallbackCount < 8) {
+                this.fallbacks[this.fallbackCount] = id;
+                this.fallbackCount += 1;
+            }
+        }
+    }
+
+    /// The index of the loaded font `id`, falling back to font 0's (thorvg_backend.c's cw_fontFor).
+    fn slotIndex(borrow this, id: u32) -> usize? {
+        var fallback: usize? = null;
+        for (k in 0..this.fonts.length()) {
+            let slot = this.fonts.get(k);
+            if (slot.id == id) {
+                return k;
+            }
+            if (slot.id == 0) {
+                fallback = k;
+            }
+        }
+        return fallback;
+    }
+
+    /// The glyph of `cp` in loaded font `k`, or 0 when it has none.
+    fn glyphIn(borrow this, k: usize, cp: u32) -> u32 {
+        let slot = this.fonts.get(k);
+        let g = glyphIndex(this.fontPool[slot.offset..slot.offset + slot.size], slot.info, cp);
+        return if (g == INVALID_GLYPH) 0 else g;
+    }
+
+    /// The font and glyph for `cp` in a run in font `primary`: a mark stays in the font of the glyph before it if
+    /// that font has it; otherwise the run's font, then the fallback chain; the run's missing-glyph box when none
+    /// has it.
+    fn fontFor(borrow this, primary: usize, cur: borrow ShapeCursor, cp: u32) -> [u32; 2] {
+        if (combining(cp) && cur.hasPrevious) {
+            let g = this.glyphIn(cur.previousSlot, cp);
+            if (g != 0) {
+                return [truncate<u32>(cur.previousSlot), g];
+            }
+        }
+        let g = this.glyphIn(primary, cp);
+        if (g != 0) {
+            return [truncate<u32>(primary), g];
+        }
+        for (f in 0..this.fallbackCount) {
+            for (k in 0..this.fonts.length()) {
+                if (this.fonts.get(k).id == this.fallbacks[f] && k != primary) {
+                    let fg = this.glyphIn(k, cp);
+                    if (fg != 0) {
+                        return [truncate<u32>(k), fg];
+                    }
+                }
+            }
+        }
+        return [truncate<u32>(primary), 0];
+    }
+
+    /// The next glyph of `utf8` in a run in font `primary`, or null at its end; `spacing` scales every advance
+    /// (letter spacing). Ignorable characters and newlines take no glyph.
+    fn nextGlyph(
+        borrow this,
+        primary: usize,
+        utf8: Slice<u8>,
+        cur: borrow mut ShapeCursor,
+        spacing: f32,
+    ) -> StepGlyph? {
+        while (cur.at < utf8.length) {
+            let start = cur.at;
+            let cp = decodeUtf8(utf8, cur.at);
+            cur.at += cp[1] as usize;
+            if (ignorable(cp[0])) {
+                continue;
+            }
+            let pick = this.fontFor(primary, cur, cp[0]);
+            let k = pick[0] as usize;
+            let glyph = pick[1];
+            let slot = this.fonts.get(k);
+            let d = this.fontPool[slot.offset..slot.offset + slot.size];
+            // Advances and kerning in the run's font's units.
+            let units = if (k == primary) 1.0 else this.fonts.get(primary).info.unitsPerEm / slot.info.unitsPerEm;
+            var kernX: f32 = 0.0;
+            if (cur.hasPrevious && cur.previousSlot == k) {
+                kernX = kerning(d, slot.info, cur.previousGlyph, glyph) * units;
+            }
+            let advance = glyphAdvance(d, slot.info, glyph) * units;
+            let placed = StepGlyph { slot: k, glyph: glyph, pen: cur.pen + kernX, cluster: start };
+            cur.pen += (advance + kernX) * spacing;
+            cur.previousSlot = k;
+            cur.previousGlyph = glyph;
+            cur.hasPrevious = true;
+            return placed;
+        }
+        return null;
+    }
+
+    /// The natural width of one line of `utf8` (no newlines) in font `primary`, in its units, and its glyph count.
+    fn lineUnits(borrow this, primary: usize, utf8: Slice<u8>) -> [f32; 2] {
+        var cur = ShapeCursor { at: 0, pen: 0.0, previousSlot: 0, previousGlyph: 0, hasPrevious: false };
+        var count: f32 = 0.0;
+        loop {
+            match (this.nextGlyph(primary, utf8, mut cur, 1.0)) {
+                Some(_) => { count += 1.0; }
+                null => { break; }
+            }
+        }
+        return [cur.pen, count];
+    }
+
+    /// Letter spacing as a factor on every advance (ThorVG's): the natural width plus `letterSpacing` per glyph,
+    /// over the natural width.
+    fn spacingFactor(borrow this, primary: usize, utf8: Slice<u8>, size: f32, letterSpacing: f32) -> f32 {
+        if (letterSpacing <= 0.0) {
+            return 1.0;
+        }
+        let line = this.lineUnits(primary, utf8);
+        let natural = line[0] * size / this.fonts.get(primary).info.unitsPerEm;
+        return if (natural > 0.0) (natural + letterSpacing * line[1]) / natural else 1.0;
+    }
+
+    /// The width of `utf8` in `config`'s font at its size (ClayWind_Thorvg_MeasureText): its glyphs' advances and
+    /// kerning, as drawn, plus letter spacing after every glyph; a newline starts a new line, and the widest counts.
+    /// Without a font, half an em per byte.
+    fn measureWidth(borrow this, utf8: Slice<u8>, fontId: u32, fontSize: f32, letterSpacing: f32) -> f32 {
+        let size = if (fontSize > 0.0) fontSize else 16.0;
+        let primary = match (this.slotIndex(fontId)) {
+            Some(k) => k,
+            null => { return 0.5 * size * round<f32>(utf8.length); }
+        };
+        let scale = size / this.fonts.get(primary).info.unitsPerEm;
+        var widest: f32 = 0.0;
+        var start: usize = 0;
+        for (i in 0..utf8.length + 1) {
+            if (i == utf8.length || utf8[i] == '\n') {
+                let line = this.lineUnits(primary, utf8[start..i]);
+                widest = widest.max(line[0] * scale + letterSpacing * line[1]);
+                start = i + 1;
+            }
+        }
+        return widest;
+    }
+
+    /// Shapes one line of `utf8` in font `fontId` at `fontSize` pixels per em, as `Command.Text` draws it: its glyphs
+    /// into `out` (the font each is from, its id, where it goes), with `letterSpacing` spread as `drawText` spreads
+    /// it. Null without a font.
+    public fn shapeRun(
+        borrow this,
+        utf8: Slice<u8>,
+        fontId: u32,
+        fontSize: f32,
+        letterSpacing: f32,
+        out: SliceMut<ShapedGlyph>,
+    ) -> ShapedRun? {
+        let primary = match (this.slotIndex(fontId)) {
+            Some(k) => k,
+            null => { return null; }
+        };
+        let size = if (fontSize > 0.0) fontSize else 16.0;
+        let info = this.fonts.get(primary).info;
+        let scale = size / info.unitsPerEm;
+        let spacing = this.spacingFactor(primary, utf8, size, letterSpacing);
+        var cur = ShapeCursor { at: 0, pen: 0.0, previousSlot: 0, previousGlyph: 0, hasPrevious: false };
+        var count: usize = 0;
+        loop {
+            match (this.nextGlyph(primary, utf8, mut cur, spacing)) {
+                Some(g) => {
+                    if (count < out.length) {
+                        out[count] = ShapedGlyph {
+                            font: truncate<u32>(g.slot),
+                            glyph: g.glyph,
+                            x: g.pen * scale,
+                            cluster: g.cluster,
+                        };
+                        count += 1;
+                    }
+                }
+                null => { break; }
+            }
+        }
+        return ShapedRun { ascent: info.ascent * scale, width: cur.pen * scale, count: count };
+    }
+
+    /// Glyph `glyph` of loaded font `font` (a ShapedGlyph's) at `size` pixels per em, alone in a `width` × `height`
+    /// cell with its origin at (`x`, `baseline`), as coverage bytes into `out`: what `drawText` draws for it. False
+    /// when there is no such font or `out` is too small.
+    public fn rasterizeGlyph(
+        borrow mut this,
+        font: u32,
+        glyph: u32,
+        size: f32,
+        x: f32,
+        baseline: f32,
+        width: usize,
+        height: usize,
+        out: SliceMut<u8>,
+    ) -> bool {
+        let k = font as usize;
+        if (k >= this.fonts.length() || out.length < width * height) {
+            return false;
+        }
+        var outline = emptyOutline();
+        let slot = this.fonts.get(k);
+        let scale = size / slot.info.unitsPerEm;
+        {
+            let d = this.fontPool[slot.offset..slot.offset + slot.size];
+            let decoded = decodeGlyph(d, slot.info, glyph, 0.0, 0.0, 1, mut outline);
+        }
+        let savedRatio = this.ratio;
+        let savedWidth = idx(this.width);
+        let savedHeight = idx(this.height);
+        if (!this.resize(width, height)) {
+            return false;
+        }
+        this.ratio = 1.0;
+        this.begin(Color.rgba(0, 0, 0, 0));
+        beginPath(mut this);
+        appendOutline(mut this, outline, x, baseline, scale);
+        fillPath(mut this, solidPaint(Color.rgba(255, 255, 255, 255)), FillTarget.Layer);
+        this.finish();
+        for (p in 0..width * height) {
+            out[p] = truncate<u8>(this.pool[p] >> 24);
+        }
+        this.ratio = savedRatio;
+        let restored = this.resize(savedWidth, savedHeight);
+        return true;
+    }
+}
+
+/// Command.Text (tvgb_text): the run's glyphs filled as one path, on the baseline at the run's font's ascent below
+/// the box's top; a newline takes no glyph (lines are split before).
+fn drawText(r: borrow mut Raster, area: Rect, run: TextRun, utf8: Slice<u8>) {
+    if (utf8.length == 0 || run.color.a == 0) {
+        return;
+    }
+    let primary = match (r.slotIndex(run.fontId)) {
+        Some(k) => k,
+        null => { return; }
+    };
+    let size = if (run.fontSize > 0.0) run.fontSize else 16.0;
+    let info = r.fonts.get(primary).info;
+    let scale = size / info.unitsPerEm;
+    let spacing = r.spacingFactor(primary, utf8, size, run.letterSpacing);
+    let originX = area.x;
+    let originY = area.y + info.ascent * scale;
+    beginPath(mut r);
+    var cur = ShapeCursor { at: 0, pen: 0.0, previousSlot: 0, previousGlyph: 0, hasPrevious: false };
+    loop {
+        let g = match (r.nextGlyph(primary, utf8, mut cur, spacing)) {
+            Some(g) => g,
+            null => { break; }
+        };
+        let slot = r.fonts.get(g.slot);
+        var outline = emptyOutline();
+        {
+            let d = r.fontPool[slot.offset..slot.offset + slot.size];
+            // The run's own glyphs are offset in font units, as they always were; a fallback's by its origin.
+            let ox = if (g.slot == primary) g.pen else 0.0;
+            let decoded = decodeGlyph(d, slot.info, g.glyph, ox, 0.0, 1, mut outline);
+        }
+        // Flush a long run before the path buffer fills.
+        if (r.pointCount + outline.ptCount * 24 > r.points.length) {
+            fillPath(mut r, solidPaint(run.color), FillTarget.Layer);
+            beginPath(mut r);
+        }
+        if (g.slot == primary) {
+            appendOutline(mut r, outline, originX, originY, scale);
+        } else {
+            appendOutline(mut r, outline, originX + g.pen * scale, originY, size / slot.info.unitsPerEm);
+        }
+    }
+    fillPath(mut r, solidPaint(run.color), FillTarget.Layer);
+}

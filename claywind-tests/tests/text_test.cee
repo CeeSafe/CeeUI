@@ -1,0 +1,111 @@
+// SPDX-License-Identifier: MIT
+// Text as glyphs (raster_text.cee): strict UTF-8, font collections, the fallback chain, and measuring what is drawn.
+// The font checks skip themselves where macOS's Arial and Arial Unicode are missing.
+
+import claywind;
+
+fn arialUnicodePath() -> StringView => "/System/Library/Fonts/Supplemental/Arial Unicode.ttf";
+
+fn collectionPath() -> StringView => "/System/Library/Fonts/STHeiti Light.ttc";
+
+@test
+fn malformedUtf8IsOneReplacementPerByte() -> Result<void, TestFailure> {
+    let stray = [0x80u8, 0x41];
+    Check.equalU64(0xFFFD, decodeUtf8(stray[..], 0)[0] as u64)?;
+    Check.equalU64(1, decodeUtf8(stray[..], 0)[1] as u64)?;
+    let overlong = [0xC0u8, 0xAF];
+    Check.equalU64(0xFFFD, decodeUtf8(overlong[..], 0)[0] as u64)?;
+    let surrogate = [0xEDu8, 0xA0, 0x80];
+    Check.equalU64(0xFFFD, decodeUtf8(surrogate[..], 0)[0] as u64)?;
+    let cut = [0xE4u8, 0xB8];
+    Check.equalU64(0xFFFD, decodeUtf8(cut[..], 0)[0] as u64)?;
+    let beyond = [0xF4u8, 0x90, 0x80, 0x80];
+    Check.equalU64(0xFFFD, decodeUtf8(beyond[..], 0)[0] as u64)?;
+    let han = "中".bytes();
+    Check.equalU64(0x4E2D, decodeUtf8(han, 0)[0] as u64)?;
+    return Check.equalU64(3, decodeUtf8(han, 0)[1] as u64);
+}
+
+@test
+fn collectionFacesParse() -> Result<void, TestFailure> {
+    let file = readFile(collectionPath());
+    if (file.length == 0) {
+        Console.writeLine("  (STHeiti not found: skipped)");
+        return Ok();
+    }
+    let d = file.view();
+    Check.equalU64(2, fontFaceCount(d) as u64)?;
+    let first = parseFontFace(d, 0)!;
+    Check.isTrue(glyphIndex(d, first, 0x4E2D) != 0, "the first face maps 中")?;
+    Check.isTrue(parseFontFace(d, 1) != null, "the second face parses")?;
+    return Check.isTrue(parseFontFace(d, 2) == null, "there is no third face");
+}
+
+@test
+fn fallbackGlyphsAreShapedMeasuredAndDrawn() -> Result<void, TestFailure> {
+    let arial = readFile(arialPath());
+    let wide = readFile(arialUnicodePath());
+    if (arial.length == 0 || wide.length == 0) {
+        Console.writeLine("  (Arial or Arial Unicode not found: skipped)");
+        return Ok();
+    }
+    var storage = heap(67108864);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(200, 60);
+    c.imagePixels = 4;
+    c.fontBytes = 33554432;
+    var ras = Raster.create(memory, c)!;
+    Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
+    Check.isTrue(ras.loadFont(16, wide.view()), "Arial Unicode loads")?;
+    let chain = [16u32];
+    ras.setFallbacks(chain[..]);
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, cluster: 0 }; 8];
+    // "A中": the A from Arial, 中 from the fallback, after the A's advance (0.667 em at 20px = 13.34).
+    let run = ras.shapeRun("A中".bytes(), 0, 20.0, 0.0, mut out[..])!;
+    Check.equalU64(2, run.count as u64)?;
+    Check.equalU64(0, out[0].font as u64)?;
+    Check.equalU64(1, out[1].font as u64)?;
+    Check.equalU64(1, out[1].cluster as u64)?;
+    expect("中 after A", out[1].x, 13.33984375)?;
+    // Measured as shaped: the width is the pen after the last glyph.
+    let measured = ras.measure("A中".bytes(), TextConfig.of(20.0));
+    expect("measure is the shaped width", measured.w, run.width)?;
+    // Kerning is measured too: AV is narrower than A plus V.
+    let av = ras.measure("AV".bytes(), TextConfig.of(20.0)).w;
+    let a = ras.measure("A".bytes(), TextConfig.of(20.0)).w;
+    let v = ras.measure("V".bytes(), TextConfig.of(20.0)).w;
+    expect("A-V kerned by -152 units", av, a + v - 152.0 * 20.0 / 2048.0)?;
+    // Letter spacing is per glyph, not per byte: 2 glyphs in 4 bytes.
+    var spaced = TextConfig.of(20.0);
+    spaced.letterSpacing = 3.0;
+    expect("spacing per glyph", ras.measure("A中".bytes(), spaced).w, measured.w + 6.0)?;
+    // Zero-width characters take no glyph; a character no font has is the run's missing-glyph box.
+    let hidden = ras.shapeRun("a\u{200B}b".bytes(), 0, 20.0, 0.0, mut out[..])!;
+    Check.equalU64(2, hidden.count as u64)?;
+    let missing = ras.shapeRun("\u{E000}".bytes(), 0, 20.0, 0.0, mut out[..])!;
+    Check.equalU64(1, missing.count as u64)?;
+    Check.equalU64(0, out[0].glyph as u64)?;
+    Check.equalU64(0, out[0].font as u64)?;
+    // And the fallback glyph is drawn: ink where 中 is.
+    ras.begin(Color.rgb(0, 0, 0));
+    let run16 = TextRun {
+        start: 0,
+        length: 4,
+        color: Color.rgb(255, 255, 255),
+        fontId: 0,
+        fontSize: 20.0,
+        letterSpacing: 0.0,
+        lineHeight: 0.0,
+    };
+    ras.draw(Command.Text(Rect { x: 0.0, y: 0.0, w: 100.0, h: 30.0 }, run16), "A中".bytes());
+    ras.finish();
+    var ink: u32 = 0;
+    for (y in 0..30usize) {
+        for (x in 14..34usize) {
+            if (ras.pixelAt(x, y).r > 128) {
+                ink += 1;
+            }
+        }
+    }
+    return Check.isTrue(ink > 30, "中 is drawn from the fallback font");
+}

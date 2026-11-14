@@ -338,68 +338,6 @@ fn pushClipShape(r: borrow mut Raster, area: Rect, radius: Corners) {
     r.clips.push(ClipState { x0: mx0, y0: my0, x1: mx1, y1: my1, hasMask: true, maskOffset: offset, maskTop: saved });
 }
 
-/// tvgb_text: the run as one filled path. Glyphs advance by (advance + kerning) font units, scaled to `fontSize`
-/// pixels per em; the ascender line sits at the box top; letter spacing scales every advance so the run's width is
-/// the measured natural width plus `letterSpacing` per byte (as ThorVG's text spacing does).
-fn drawText(r: borrow mut Raster, area: Rect, run: TextRun, utf8: Slice<u8>) {
-    if (utf8.length == 0 || run.color.a == 0) {
-        return;
-    }
-    let slot = match (r.fontSlot(run.fontId)) {
-        Some(s) => s,
-        null => { return; }
-    };
-    let size = if (run.fontSize > 0.0) run.fontSize else 16.0;
-    let scale = size / slot.info.unitsPerEm;
-    var spacing: f32 = 1.0;
-    if (run.letterSpacing > 0.0) {
-        let natural = r.measureWidth(utf8, run.fontId, size, 0.0);
-        if (natural > 0.0) {
-            spacing = (natural + run.letterSpacing * round<f32>(utf8.length)) / natural;
-        }
-    }
-    let originX = area.x;
-    let originY = area.y + slot.info.ascent * scale;
-    beginPath(mut r);
-    var cursor: f32 = 0.0;
-    var previous: u32 = INVALID_GLYPH;
-    var i: usize = 0;
-    while (i < utf8.length) {
-        let cp = decodeUtf8(utf8, i);
-        i += cp[1] as usize;
-        if (cp[0] == 10) {
-            continue;
-        }
-        var outline = emptyOutline();
-        var glyph: u32 = INVALID_GLYPH;
-        var kernX: f32 = 0.0;
-        var advance: f32 = 0.0;
-        {
-            let d = r.fontPool[slot.offset..slot.offset + slot.size];
-            glyph = glyphIndex(d, slot.info, cp[0]);
-            if (glyph != INVALID_GLYPH) {
-                if (previous != INVALID_GLYPH) {
-                    kernX = kerning(d, slot.info, previous, glyph);
-                }
-                advance = glyphAdvance(d, slot.info, glyph);
-                let decoded = decodeGlyph(d, slot.info, glyph, cursor + kernX, 0.0, 1, mut outline);
-            }
-        }
-        if (glyph == INVALID_GLYPH) {
-            continue;
-        }
-        // Flush a long run before the path buffer fills.
-        if (r.pointCount + outline.ptCount * 24 > r.points.length) {
-            fillPath(mut r, solidPaint(run.color), FillTarget.Layer);
-            beginPath(mut r);
-        }
-        appendOutline(mut r, outline, originX, originY, scale);
-        cursor += (advance + kernX) * spacing;
-        previous = glyph;
-    }
-    fillPath(mut r, solidPaint(run.color), FillTarget.Layer);
-}
-
 /// Adds a decoded glyph outline (font units, y down) to the current path at `origin`, scaled.
 fn appendOutline(r: borrow mut Raster, o: borrow GlyphOutline, ox: f32, oy: f32, scale: f32) {
     var p: usize = 0;

@@ -228,7 +228,7 @@ public struct GpuBackend<region r> {
     dirtyY0: usize;
     dirtyX1: usize;
     dirtyY1: usize;
-    placed: Vector<PlacedChar>;
+    shaped: Vector<ShapedGlyph>;
     scratch: Vector<u8>;
     /// The images in the image atlas, by handle, packed on shelves as masks are.
     images: HashMap<u32, ImageEntry>;
@@ -349,9 +349,9 @@ fn column(x: f32, left: f32, columns: usize) -> usize {
 impl<region r> GpuBackend<r> {
     /// A backend over `raster`, whose fonts it uses; the raster needs a capacity of `CELL` × `CELL`.
     public fn create(raster: Raster<r>) -> GpuBackend<r> {
-        var placed = Vector<PlacedChar>.withCapacity(4096)!;
+        var shaped = Vector<ShapedGlyph>.withCapacity(4096)!;
         for (i in 0..4096) {
-            placed.push(PlacedChar { codepoint: 0, x: 0.0 })!;
+            shaped.push(ShapedGlyph { font: 0, glyph: 0, x: 0.0, cluster: 0 })!;
         }
         return GpuBackend {
             raster: raster,
@@ -384,7 +384,7 @@ impl<region r> GpuBackend<r> {
             dirtyY0: ATLAS,
             dirtyX1: 0,
             dirtyY1: 0,
-            placed: placed,
+            shaped: shaped,
             scratch: zeroBytes(CELL * CELL),
             images: HashMap<u32, ImageEntry>.create(),
             imageX: 0,
@@ -1080,19 +1080,20 @@ impl<region r> GpuBackend<r> {
         this.emit(v);
     }
 
-    /// tvgb_text: each character's mask at its pen position, to a sixteenth of a pixel across and a quarter down.
+    /// tvgb_text: each glyph's mask (Raster.shapeRun's glyphs, fallback fonts' included) at its pen position, to a
+    /// sixteenth of a pixel across and a quarter down.
     fn text(borrow mut this, area: Rect, run: TextRun, utf8: Slice<u8>) {
         if (utf8.length == 0 || run.color.a == 0) {
             return;
         }
         let s = this.ratio;
         let size = (if (run.fontSize > 0.0) run.fontSize else 16.0) * s;
-        let placed = match (this.raster.placeRun(
+        let shaped = match (this.raster.shapeRun(
             utf8,
             run.fontId,
             size,
             run.letterSpacing * s,
-            mut this.placed.viewMut(),
+            mut this.shaped.viewMut(),
         )) {
             Some(p) => p,
             null => { return; }
@@ -1100,21 +1101,24 @@ impl<region r> GpuBackend<r> {
         let top = area.y * s;
         let iy = top.floor();
         let by = step(top - iy, STEPS_Y);
-        for (k in 0..placed.count) {
-            let pc = this.placed[k];
-            let x = area.x * s + pc.x;
+        for (k in 0..shaped.count) {
+            let g = this.shaped[k];
+            let x = area.x * s + g.x;
             let ix = x.floor();
             let bx = step(x - ix, STEPS_X);
-            match (this.glyphMask(run.fontId, pc.codepoint, size, bx, by)) {
+            match (this.glyphMask(g.font, g.glyph, size, shaped.ascent, bx, by)) {
                 Some(e) => { this.emitMask(e, ix, iy, run.color); }
                 null => {}
             }
         }
     }
 
-    fn glyphMask(borrow mut this, fontId: u32, codepoint: u32, size: f32, bx: u32, by: u32) -> MaskEntry? {
-        let key = (1u64 << 62) | ((fontId as u64) & 0xff) << 52 | ((codepoint as u64) & 0x1fffff) << 31 |
-            (quantized(size, 8.0) & 0xffff) << 15 | (bx as u64) << 11 | (by as u64) << 9;
+    /// Glyph `glyph` of loaded font `font` at `size` pixels, its baseline `ascent` below the run's top, at sub-pixel
+    /// step (`bx`, `by`): cached by all of them.
+    fn glyphMask(borrow mut this, font: u32, glyph: u32, size: f32, ascent: f32, bx: u32, by: u32) -> MaskEntry? {
+        let key = (1u64 << 62) | ((font as u64) & 0x3f) << 56 | ((glyph as u64) & 0xffff) << 40 |
+            (quantized(size, 8.0) & 0xffff) << 24 | (quantized(ascent, 8.0) & 0xffff) << 8 | (bx as u64) << 4 |
+            (by as u64) << 2;
         match (this.masks.get(key)) {
             Some(e) => { return MaskEntry { u: e.u, v: e.v, w: e.w, h: e.h, ox: e.ox, oy: e.oy }; }
             null => {}
@@ -1124,28 +1128,21 @@ impl<region r> GpuBackend<r> {
         if (cell > CELL) {
             return null;
         }
-        var bytes = [0u8; 4];
-        let length = utf8Encode(codepoint, mut bytes);
         let padF = round<f32>(pad);
-        let command = Command.Text(
-            Rect {
-                x: padF + round<f32>(bx) / STEPS_X,
-                y: padF + round<f32>(by) / STEPS_Y,
-                w: round<f32>(cell),
-                h: round<f32>(cell),
-            },
-            TextRun {
-                start: 0,
-                length: length,
-                color: Color.rgba(255, 255, 255, 255),
-                fontId: fontId,
-                fontSize: size,
-                letterSpacing: 0.0,
-                lineHeight: 0.0,
-            },
-        );
+        if (!this.raster.rasterizeGlyph(
+            font,
+            glyph,
+            size,
+            padF + round<f32>(bx) / STEPS_X,
+            padF + round<f32>(by) / STEPS_Y + ascent,
+            cell,
+            cell,
+            mut this.scratch.viewMut(),
+        )) {
+            return null;
+        }
         let origin = 0 - truncate<i32>(pad);
-        return this.addMask(key, command, bytes[0..length], cell, cell, origin, origin);
+        return this.packMask(key, cell, cell, origin, origin);
     }
 
     /// tvgb_icon: the icon's mask at its box, to the same sub-pixel steps as text.
@@ -1201,6 +1198,12 @@ impl<region r> GpuBackend<r> {
         if (!this.raster.rasterizeMask(command, text, w, h, mut this.scratch.viewMut())) {
             return null;
         }
+        return this.packMask(key, w, h, ox, oy);
+    }
+
+    /// The `w` × `h` coverage in `scratch`, cropped to its ink and packed into the atlas under `key`. `ox`, `oy`: the
+    /// cell's top-left relative to the integer pen position.
+    fn packMask(borrow mut this, key: u64, w: usize, h: usize, ox: i32, oy: i32) -> MaskEntry? {
         var x0 = w;
         var y0 = h;
         var x1: usize = 0;
@@ -1769,30 +1772,6 @@ fn transformMatrix(t: TransformData) -> Affine2 {
     let px = t.pivot.x;
     let py = t.pivot.y;
     return Affine2 { a: e11, b: e21, c: e12, d: e22, e: px - (e11 * px + e12 * py), f: py - (e21 * px + e22 * py) };
-}
-
-/// `codepoint` as UTF-8 in `out`; its length.
-fn utf8Encode(codepoint: u32, out: borrow mut [u8; 4]) -> usize {
-    if (codepoint < 0x80) {
-        out[0] = truncate<u8>(codepoint);
-        return 1;
-    }
-    if (codepoint < 0x800) {
-        out[0] = truncate<u8>(0xc0 | (codepoint >> 6));
-        out[1] = truncate<u8>(0x80 | (codepoint & 0x3f));
-        return 2;
-    }
-    if (codepoint < 0x10000) {
-        out[0] = truncate<u8>(0xe0 | (codepoint >> 12));
-        out[1] = truncate<u8>(0x80 | ((codepoint >> 6) & 0x3f));
-        out[2] = truncate<u8>(0x80 | (codepoint & 0x3f));
-        return 3;
-    }
-    out[0] = truncate<u8>(0xf0 | (codepoint >> 18));
-    out[1] = truncate<u8>(0x80 | ((codepoint >> 12) & 0x3f));
-    out[2] = truncate<u8>(0x80 | ((codepoint >> 6) & 0x3f));
-    out[3] = truncate<u8>(0x80 | (codepoint & 0x3f));
-    return 4;
 }
 
 impl<region r> Backend for GpuBackend<r> {

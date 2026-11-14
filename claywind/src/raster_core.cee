@@ -111,6 +111,9 @@ public struct Raster<region r> {
     fontPool: SliceMut<r, u8>;
     fontTop: usize;
     fonts: FixedList<r, FontSlot>;
+    /// The fallback chain (raster_text.cee): font ids tried for a character a run's font lacks.
+    fallbacks: [u32; 8];
+    fallbackCount: usize;
     width: i32;
     height: i32;
     /// The largest frame `create` made room for; `resize` stays within it.
@@ -180,6 +183,8 @@ public struct Raster<region r> {
             fontPool: fontPool,
             fontTop: 0,
             fonts: FixedList<FontSlot>.over(fonts),
+            fallbacks: [0u32; 8],
+            fallbackCount: 0,
             width: truncate<i32>(capacity.width),
             height: truncate<i32>(capacity.height),
             capacityWidth: truncate<i32>(capacity.width),
@@ -329,8 +334,11 @@ public struct Raster<region r> {
 
     /// Loads a TrueType font under `id` (FONT_* ids; renderer.h's FONT_18..FONT_MONO), copying its bytes into the
     /// font pool. False when it does not parse or does not fit. A font id with nothing loaded uses font 0.
-    public fn loadFont(borrow mut this, id: u32, bytes: Slice<u8>) -> bool {
-        let info = match (parseFont(bytes)) {
+    public fn loadFont(borrow mut this, id: u32, bytes: Slice<u8>) -> bool => this.loadFontFace(id, bytes, 0);
+
+    /// `loadFont` for face `face` of a font collection (.ttc): the whole file is copied, as its faces share tables.
+    public fn loadFontFace(borrow mut this, id: u32, bytes: Slice<u8>, face: u32) -> bool {
+        let info = match (parseFontFace(bytes, face)) {
             Some(i) => i,
             null => { return false; }
         };
@@ -359,40 +367,6 @@ public struct Raster<region r> {
             }
         }
         return fallback;
-    }
-
-    /// The width of `utf8` in `config`'s font at its size (ClayWind_Thorvg_MeasureText): advances without kerning,
-    /// plus letter spacing after every glyph; a newline starts a new line; without a font, half an em per byte.
-    fn measureWidth(borrow this, utf8: Slice<u8>, fontId: u32, fontSize: f32, letterSpacing: f32) -> f32 {
-        let size = if (fontSize > 0.0) fontSize else 16.0;
-        let slot = match (this.fontSlot(fontId)) {
-            Some(s) => s,
-            null => { return 0.5 * size * round<f32>(utf8.length); }
-        };
-        let d = this.fontPool[slot.offset..slot.offset + slot.size];
-        let scale = size / slot.info.unitsPerEm;
-        var line: f32 = 0.0;
-        var widest: f32 = 0.0;
-        var i: usize = 0;
-        while (i < utf8.length) {
-            if (utf8[i] == '\n') {
-                widest = widest.max(line);
-                line = 0.0;
-                i += 1;
-                continue;
-            }
-            let cp = decodeUtf8(utf8, i);
-            let glyph = glyphIndex(d, slot.info, cp[0]);
-            if (glyph == INVALID_GLYPH) {
-                line += 0.5 * size;
-                i += 1;
-            } else {
-                line += glyphAdvance(d, slot.info, glyph) * scale;
-                i += cp[1] as usize;
-            }
-            line += letterSpacing;
-        }
-        return widest.max(line);
     }
 
     fn imageIndex(borrow this, handle: u32) -> usize? {

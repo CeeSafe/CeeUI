@@ -27,7 +27,9 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   - Anti-aliased paths, rounded rectangles, borders and rings, linear and radial gradients, and images (PNG and BMP
     decoding included).
   - Shadows, blur, grayscale and brightness filters, opacity, and all CSS blend modes.
-- **TrueType fonts:** glyphs read and rendered by the toolkit itself.
+- **TrueType fonts:** glyphs read and rendered by the toolkit itself, from single fonts and collections (.ttc). Text
+  is shaped into glyphs that measuring and drawing share, and a character the run's font lacks comes from a
+  fallback chain (`Raster.setFallbacks`), so CJK, Hangul, Greek and Cyrillic draw in a Latin run.
 - **Retina output.** `Raster.setPixelRatio` draws at the display's pixel ratio while layout stays in points.
 - **Incremental rendering.** `Damage` works out what changed between frames, and the raster redraws only those
   boxes. The result is byte-identical to a full redraw.

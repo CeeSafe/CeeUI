@@ -94,13 +94,15 @@ fn u32at(d: Slice<u8>, o: usize) -> u32 => (u16at(d, o) << 16) | u16at(d, o + 2)
 
 fn tagValue(t: [u8; 4]) -> u32 => ((t[0] as u32) << 24) | ((t[1] as u32) << 16) | ((t[2] as u32) << 8) | (t[3] as u32);
 
-/// SfntReader::table: the offset of table `tag`, or 0 (bsearch over the sorted 16-byte directory records).
-fn tableOffset(d: Slice<u8>, tag: [u8; 4]) -> usize {
-    if (!valid(d, 0, 12)) {
+/// SfntReader::table: the offset of table `tag` in the face whose table directory is at `dir` (0 for a single font;
+/// a collection's faces each have one), or 0 (bsearch over the sorted 16-byte directory records). Offsets are from
+/// the file's start in a collection too.
+fn tableOffset(d: Slice<u8>, dir: usize, tag: [u8; 4]) -> usize {
+    if (!valid(d, dir, 12)) {
         return 0;
     }
-    let count = u16at(d, 4) as usize;
-    if (!valid(d, 12, count * 16)) {
+    let count = u16at(d, dir + 4) as usize;
+    if (!valid(d, dir + 12, count * 16)) {
         return 0;
     }
     let key = tagValue(tag);
@@ -108,9 +110,9 @@ fn tableOffset(d: Slice<u8>, tag: [u8; 4]) -> usize {
     var hi = count;
     while (lo < hi) {
         let mid = lo + (hi - lo) / 2;
-        let v = u32at(d, 12 + mid * 16);
+        let v = u32at(d, dir + 12 + mid * 16);
         if (v == key) {
-            return u32at(d, 12 + mid * 16 + 8) as usize;
+            return u32at(d, dir + 12 + mid * 16 + 8) as usize;
         }
         if (v < key) {
             lo = mid + 1;
@@ -121,24 +123,53 @@ fn tableOffset(d: Slice<u8>, tag: [u8; 4]) -> usize {
     return 0;
 }
 
-/// SfntReader::header + TtfReader::header: null if this is not a usable TrueType font.
-public fn parseFont(d: Slice<u8>) -> FontInfo? {
+/// SfntReader::header + TtfReader::header: null if this is not a usable TrueType font (the first face of a
+/// collection).
+public fn parseFont(d: Slice<u8>) -> FontInfo? => parseFontFace(d, 0);
+
+/// How many faces a font file holds: a collection's count ('ttcf'), 1 for a single font, 0 for neither.
+public fn fontFaceCount(d: Slice<u8>) -> u32 {
+    if (!valid(d, 0, 12)) {
+        return 0;
+    }
+    if (u32at(d, 0) == 0x74746366) {
+        return u32at(d, 8);
+    }
+    return 1;
+}
+
+/// Face `face` of a font file (a TrueType collection's faces in order; 0 for a single font): null if there is no
+/// such face or it is not a usable TrueType font (CFF outlines are not read).
+public fn parseFontFace(d: Slice<u8>, face: u32) -> FontInfo? {
     if (!valid(d, 0, 12)) {
         return null;
     }
-    let kind = u32at(d, 0);
+    var dir: usize = 0;
+    if (u32at(d, 0) == 0x74746366) {
+        let faces = u32at(d, 8);
+        if (face >= faces || !valid(d, 12, (faces as usize) * 4)) {
+            return null;
+        }
+        dir = u32at(d, 12 + (face as usize) * 4) as usize;
+        if (!valid(d, dir, 12)) {
+            return null;
+        }
+    } else if (face != 0) {
+        return null;
+    }
+    let kind = u32at(d, dir);
     if (kind != 0x00010000 && kind != 0x74727565) {
         return null;
     }
-    let head = tableOffset(d, ['h', 'e', 'a', 'd']);
+    let head = tableOffset(d, dir, ['h', 'e', 'a', 'd']);
     if (head == 0 || !valid(d, head, 54)) {
         return null;
     }
-    let hhea = tableOffset(d, ['h', 'h', 'e', 'a']);
+    let hhea = tableOffset(d, dir, ['h', 'h', 'e', 'a']);
     if (hhea == 0 || !valid(d, hhea, 36)) {
         return null;
     }
-    let maxp = tableOffset(d, ['m', 'a', 'x', 'p']);
+    let maxp = tableOffset(d, dir, ['m', 'a', 'x', 'p']);
     if (maxp == 0 || !valid(d, maxp, 6)) {
         return null;
     }
@@ -147,20 +178,20 @@ public fn parseFont(d: Slice<u8>) -> FontInfo? {
     if (glyphs == 0 || hmtxs == 0 || hmtxs > glyphs) {
         return null;
     }
-    let cmap = tableOffset(d, ['c', 'm', 'a', 'p']);
+    let cmap = tableOffset(d, dir, ['c', 'm', 'a', 'p']);
     if (cmap == 0 || !valid(d, cmap, 4)) {
         return null;
     }
-    let hmtx = tableOffset(d, ['h', 'm', 't', 'x']);
+    let hmtx = tableOffset(d, dir, ['h', 'm', 't', 'x']);
     if (!valid(d, hmtx, (hmtxs as usize) * 4)) {
         return null;
     }
-    let kern = tableOffset(d, ['k', 'e', 'r', 'n']);
+    let kern = tableOffset(d, dir, ['k', 'e', 'r', 'n']);
     if (kern != 0 && (!valid(d, kern, 4) || u16at(d, kern) != 0)) {
         return null;
     }
-    let loca = tableOffset(d, ['l', 'o', 'c', 'a']);
-    let glyf = tableOffset(d, ['g', 'l', 'y', 'f']);
+    let loca = tableOffset(d, dir, ['l', 'o', 'c', 'a']);
+    let glyf = tableOffset(d, dir, ['g', 'l', 'y', 'f']);
     if (loca == 0 || glyf == 0) {
         return null;
     }
@@ -628,21 +659,51 @@ fn decodeComposite(
     }
 }
 
-/// Decodes one UTF-8 code point at `i`; returns it and the bytes it used (invalid bytes are one byte each).
+/// Decodes one UTF-8 code point at `i`; returns it and the bytes it used. Malformed input (a stray continuation
+/// byte, a missing one, an overlong form, a surrogate, past U+10FFFF) is U+FFFD for one byte, as the WHATWG decoder
+/// replaces it.
 public fn decodeUtf8(s: Slice<u8>, i: usize) -> [u32; 2] {
     let b0 = s[i] as u32;
     if (b0 < 0x80) {
         return [b0, 1];
     }
-    if (b0 >= 0xC0 && b0 < 0xE0 && i + 1 < s.length) {
-        return [((b0 & 0x1F) << 6) | ((s[i + 1] as u32) & 0x3F), 2];
+    var need: usize = 0;
+    var cp: u32 = 0;
+    var low: u32 = 0x80;
+    var high: u32 = 0xBF;
+    if (b0 >= 0xC2 && b0 <= 0xDF) {
+        need = 1;
+        cp = b0 & 0x1F;
+    } else if (b0 >= 0xE0 && b0 <= 0xEF) {
+        need = 2;
+        cp = b0 & 0x0F;
+        if (b0 == 0xE0) {
+            low = 0xA0; // not overlong
+        } else if (b0 == 0xED) {
+            high = 0x9F; // not a surrogate
+        }
+    } else if (b0 >= 0xF0 && b0 <= 0xF4) {
+        need = 3;
+        cp = b0 & 0x07;
+        if (b0 == 0xF0) {
+            low = 0x90; // not overlong
+        } else if (b0 == 0xF4) {
+            high = 0x8F; // not past U+10FFFF
+        }
+    } else {
+        return [0xFFFD, 1];
     }
-    if (b0 >= 0xE0 && b0 < 0xF0 && i + 2 < s.length) {
-        return [((b0 & 0x0F) << 12) | (((s[i + 1] as u32) & 0x3F) << 6) | ((s[i + 2] as u32) & 0x3F), 3];
+    if (i + need >= s.length) {
+        return [0xFFFD, 1];
     }
-    if (b0 >= 0xF0 && i + 3 < s.length) {
-        return [((b0 & 0x07) << 18) | (((s[i + 1] as u32) & 0x3F) << 12) | (((s[i + 2] as u32) & 0x3F) << 6) |
-            ((s[i + 3] as u32) & 0x3F), 4];
+    for (k in 1..need + 1) {
+        let b = s[i + k] as u32;
+        let lo = if (k == 1) low else 0x80;
+        let hi = if (k == 1) high else 0xBF;
+        if (b < lo || b > hi) {
+            return [0xFFFD, 1];
+        }
+        cp = (cp << 6) | (b & 0x3F);
     }
-    return [b0, 1];
+    return [cp, truncate<u32>(need + 1)];
 }

@@ -78,6 +78,42 @@ fn loadFont(raster: borrow mut Raster, id: u32, dir: StringView, file: StringVie
     return bytes.length > 0 && raster.loadFont(id, bytes.view());
 }
 
+/// Room for the fallback fonts too: a CJK font is tens of megabytes.
+fn withFonts(capacity: RasterCapacity) -> RasterCapacity {
+    var c = capacity;
+    c.fontBytes = 67108864;
+    return c;
+}
+
+/// The first font id of the fallback chain.
+const FALLBACK: u32 = 16;
+
+/// Fonts for the characters the regular ones lack (CJK, Hangul, Greek, Cyrillic and more), tried in order: Arial
+/// Unicode on macOS, Microsoft YaHei then Malgun Gothic (Hangul) on Windows, Droid Sans Fallback on Linux, whichever
+/// are there. (Until the system's fonts are searched by what they cover.)
+fn loadFallbacks(raster: borrow mut Raster) {
+    let candidates: [StringView; 8] = [
+        "/System/Library/Fonts/Supplemental",
+        "Arial Unicode.ttf",
+        "C:/Windows/Fonts",
+        "msyh.ttc",
+        "C:/Windows/Fonts",
+        "malgun.ttf",
+        "/usr/share/fonts/truetype/droid",
+        "DroidSansFallbackFull.ttf",
+    ];
+    var ids = [0u32; 4];
+    var n: usize = 0;
+    for (k in 0usize..4) {
+        let id = FALLBACK + truncate<u32>(n);
+        if (loadFont(mut raster, id, candidates[k * 2], candidates[k * 2 + 1])) {
+            ids[n] = id;
+            n += 1;
+        }
+    }
+    raster.setFallbacks(ids[0..n]);
+}
+
 /// The regular, bold and monospaced faces, from CLAYWIND_FONT_DIR or the system's fonts: Arial and Courier New
 /// under macOS's names, Windows's, or Linux's Microsoft core fonts, or else DejaVu.
 fn loadFonts(raster: borrow mut Raster) -> bool {
@@ -128,7 +164,7 @@ fn ms(from: u64, to: u64) -> f64 => round<f64>(to - from) / 1000000.0;
 /// Safety: metal.c's init only reads its two sizes.
 fn main() -> i32 {
     var uiStorage = zeros(16777216);
-    var gpuStorage = zeros(33554432);
+    var gpuStorage = zeros(134217728);
     let uiMemory = FixedBufferAllocator.over(mut uiStorage.viewMut());
     let gpuMemory = FixedBufferAllocator.over(mut gpuStorage.viewMut());
     var ui = match (Ui.create(uiMemory, UiCapacity.of(4096))) {
@@ -138,7 +174,7 @@ fn main() -> i32 {
             return 1;
         }
     };
-    var masks = match (Raster.create(gpuMemory, RasterCapacity.of(CELL, CELL))) {
+    var masks = match (Raster.create(gpuMemory, withFonts(RasterCapacity.of(CELL, CELL)))) {
         Ok(r) => r,
         Err(_) => {
             Console.writeErrorLine("gpu: not enough memory for the mask renderer");
@@ -148,6 +184,7 @@ fn main() -> i32 {
     if (!loadFonts(mut masks)) {
         return 1;
     }
+    loadFallbacks(mut masks);
     var gpu = GpuBackend.create(masks);
     let started = unsafe { cw_gpu_init(truncate<u32>(ATLAS), truncate<u32>(ATLAS), truncate<u32>(IMAGES)) };
     if (started != 0) {
@@ -326,7 +363,7 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
     let height: u32 = points * 2;
     var storage = zeros(335544320);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var reference = match (Raster.create(memory, RasterCapacity.of(width as usize, height as usize))) {
+    var reference = match (Raster.create(memory, withFonts(RasterCapacity.of(width as usize, height as usize)))) {
         Ok(r) => r,
         Err(_) => {
             Console.writeErrorLine("gpu: not enough memory for the reference renderer");
@@ -336,6 +373,7 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
     if (!loadFonts(mut reference) || !makeImages(mut reference) || !makeImages(mut gpu.raster)) {
         return 1;
     }
+    loadFallbacks(mut reference);
     reference.setPixelRatio(ratio);
     var pixels = Vector<u32>.withCapacity((width * height) as usize)!;
     for (i in 0..width * height) {
@@ -343,7 +381,7 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
     }
     Console.writeLine("tab        instances  skipped  raster ms  gpu ms  mean diff  >8 %     >32 %    max");
     var worst: f64 = 0.0;
-    for (tab in 0usize..NAV_COUNT + 3) {
+    for (tab in 0usize..NAV_COUNT + 4) {
         var clear = Color.rgb(2, 6, 23);
         var r0 = nanos();
         var r1 = r0;
@@ -690,8 +728,10 @@ fn drawSynthetic<B: Backend>(b: borrow mut B, scene: usize) {
         drawScene(mut b);
     } else if (scene == 1) {
         drawImages(mut b);
-    } else {
+    } else if (scene == 2) {
         drawPaths(mut b);
+    } else {
+        drawText(mut b);
     }
 }
 
@@ -883,6 +923,33 @@ fn drawPaths<B: Backend>(b: borrow mut B) {
 /// Where the comparison's partial frames (one per demo tab) are numbered from.
 const PARTIAL: usize = 10;
 
+fn line<B: Backend>(b: borrow mut B, y: f32, size: f32, spacing: f32, font: u32, text: StringView) {
+    let run = TextRun {
+        start: 0,
+        length: text.length,
+        color: Color.hex(0xf1f5f9ff),
+        fontId: font,
+        fontSize: size,
+        letterSpacing: spacing,
+        lineHeight: 0.0,
+    };
+    b.draw(Command.Text(Rect { x: 40.0, y: y, w: 940.0, h: size * 1.3 }, run), text.bytes());
+}
+
+/// Text the demo never draws: kerning, precomposed and combining accents, Greek and Cyrillic, CJK and Hangul from
+/// the fallback font (and in the bold and monospaced runs), letter spacing across fallback glyphs, and a character
+/// no font has (the run's missing-glyph box). In points, 1024 × 640.
+fn drawText<B: Backend>(b: borrow mut B) {
+    line(mut b, 30.0, 28.0, 0.0, FONT_18, "AVATAR Wave Tokyo  café naïve  cafe\u{301} n\u{303}");
+    line(mut b, 80.0, 28.0, 0.0, FONT_18, "Ωμέγα  Привет, мир  你好，世界  漢字かなカナ  한국어");
+    line(mut b, 130.0, 22.0, 0.0, FONT_BOLD, "Bold 東京タワー and 서울 in one run");
+    line(mut b, 175.0, 20.0, 0.0, FONT_MONO, "mono: let 名前 = \"値\";");
+    line(mut b, 220.0, 24.0, 6.0, FONT_18, "spaced 中文字 out");
+    line(mut b, 270.0, 16.0, 0.0, FONT_18, "small: 春眠不覺曉，處處聞啼鳥。夜來風雨聲，花落知多少。");
+    line(mut b, 310.0, 48.0, 0.0, FONT_18, "大 Big 字");
+    line(mut b, 390.0, 28.0, 0.0, FONT_18, "missing: [\u{E000}] zero\u{200B}width\u{FEFF}joined");
+}
+
 fn tabName(tab: usize) -> StringView => match (tab) {
     0 => "dashboard",
     1 => "controls ",
@@ -893,6 +960,7 @@ fn tabName(tab: usize) -> StringView => match (tab) {
     6 => "clips    ",
     7 => "images   ",
     8 => "paths    ",
+    9 => "text     ",
     10 => "dashboard, a frame later, redrawn in part",
     11 => "controls, a frame later, redrawn in part",
     12 => "effects, a frame later, redrawn in part",
