@@ -11,7 +11,8 @@
  * fetch. One frame is in flight: a frame waits for the last one's fence before it reuses anything.
  *
  * libvulkan is loaded with dlopen (vulkan-1.dll with LoadLibrary), so the package needs no link flags; the Vulkan
- * headers are needed to build. macOS draws with metal.c, and this file compiles to nothing there (a manifest cannot
+ * headers are needed to build. On Windows, Direct3D 12 (d3d12.c) is the default and this is the fallback
+ * (CLAYWIND_GPU=vulkan chooses it). macOS draws with metal.c, and this file compiles to nothing there (a manifest cannot
  * name a C file per system).
  */
 #if !defined(__APPLE__)
@@ -42,21 +43,29 @@ static void trace(const char *what, long long value) {
     }
 }
 
+/* On Windows, d3d12.c answers the cw_gpu_* calls and hands them to these (cw_vk_*) when Vulkan is chosen; elsewhere
+   these are the cw_gpu_* calls. */
+#if defined(_WIN32)
+#define CW_VK(name) cw_vk_##name
+#else
+#define CW_VK(name) cw_gpu_##name
+#endif
+
 /* The calls gpu.cee and main.cee make (metal.c's). */
-int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height);
-int32_t cw_gpu_attach(int32_t kind, uint64_t first, uint64_t second);
-void cw_gpu_atlas(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1);
-int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
+int32_t CW_VK(init)(uint32_t atlas_width, uint32_t atlas_height);
+int32_t CW_VK(attach)(int32_t kind, uint64_t first, uint64_t second);
+void CW_VK(atlas)(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1);
+int32_t CW_VK(present)(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
                        const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r, float g,
                        float b);
-int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
+int32_t CW_VK(render_to)(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
                          const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r, float g,
                          float b, uint32_t *out);
-int32_t cw_gpu_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
+int32_t CW_VK(render_only)(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
                            const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r,
                            float g, float b);
-double cw_gpu_gpu_ms(void);
-void cw_gpu_finish(void);
+double CW_VK(gpu_ms)(void);
+void CW_VK(finish)(void);
 
 #define CW_FLOATS 52 /* gpu.cee's FLOATS: 13 vec4s per instance */
 #define CW_SHAPE 20  /* gpu.cee's SHAPE: 5 vec4s per clip shape */
@@ -644,7 +653,7 @@ static int create_device(void) {
     return 1;
 }
 
-int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height) {
+int32_t CW_VK(init)(uint32_t atlas_width, uint32_t atlas_height) {
     if (g.ready) {
         return 0;
     }
@@ -759,7 +768,7 @@ int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height) {
 }
 
 /* The window to draw into: WindowHandle's kind and handles; Vulkan takes Win32's (2) and Xlib's (3). */
-int32_t cw_gpu_attach(int32_t kind, uint64_t first, uint64_t second) {
+int32_t CW_VK(attach)(int32_t kind, uint64_t first, uint64_t second) {
     if (!g.ready || !g.has_swapchain) {
         return 1;
     }
@@ -894,7 +903,7 @@ static int ensure_swapchain(uint32_t width, uint32_t height) {
 /* ---- frames ------------------------------------------------------------------------------------------------- */
 
 /* Waits for the GPU to finish the last frame, and records its time. */
-void cw_gpu_finish(void) {
+void CW_VK(finish)(void) {
     if (!g.pending) {
         return;
     }
@@ -910,14 +919,14 @@ void cw_gpu_finish(void) {
     }
 }
 
-double cw_gpu_gpu_ms(void) { return g.gpu_ms; }
+double CW_VK(gpu_ms)(void) { return g.gpu_ms; }
 
 /* Copies the atlas rows [y0, y1) and columns [x0, x1) to the staging buffer; the next frame uploads them. */
-void cw_gpu_atlas(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {
+void CW_VK(atlas)(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {
     if (!g.ready || x1 <= x0 || y1 <= y0) {
         return;
     }
-    cw_gpu_finish(); /* the last frame may still copy from the staging buffer */
+    CW_VK(finish)(); /* the last frame may still copy from the staging buffer */
     uint8_t *staging = (uint8_t *)g.staging.mapped;
     for (uint32_t y = y0; y < y1; y++) {
         memcpy(staging + (size_t)y * g.atlas_width + x0, pixels + (size_t)y * stride + x0, x1 - x0);
@@ -1220,13 +1229,13 @@ static void end_and_submit(int present) {
 }
 
 /* Draws the frame into the window's next swapchain image, `width` × `height` pixels, and presents it. */
-int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
+int32_t CW_VK(present)(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
                        const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r, float g_,
                        float b) {
     if (g.surface == VK_NULL_HANDLE) {
         return 1;
     }
-    cw_gpu_finish();
+    CW_VK(finish)();
     if (!ensure_swapchain(width, height)) {
         return 2;
     }
@@ -1273,13 +1282,13 @@ int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, 
 }
 
 /* Draws the frame into an offscreen image and copies its pixels to `out` (RGBA bytes, Raster's order). */
-int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
+int32_t CW_VK(render_to)(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
                          const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r,
                          float g_, float b, uint32_t *out) {
     if (!g.ready) {
         return 1;
     }
-    cw_gpu_finish();
+    CW_VK(finish)();
     cw_texture *o = &g.offscreen;
     if (o->image == VK_NULL_HANDLE || o->width != width || o->height != height) {
         if (o->image != VK_NULL_HANDLE) {
@@ -1313,7 +1322,7 @@ int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers
         vkCmdCopyImageToBuffer(g.cmd, o->image, VK_IMAGE_LAYOUT_GENERAL, g.readback.buffer, 1, &copy);
     }
     end_and_submit(0);
-    cw_gpu_finish();
+    CW_VK(finish)();
     if (out != NULL) {
         memcpy(out, g.readback.mapped, (size_t)width * height * 4);
     }
@@ -1321,10 +1330,10 @@ int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers
 }
 
 /* Draws the frame offscreen and waits for it, reading nothing back: for timing the GPU. */
-int32_t cw_gpu_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
+int32_t CW_VK(render_only)(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
                            const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, uint32_t width, uint32_t height, float r,
                            float g_, float b) {
-    return cw_gpu_render_to(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, width, height, r, g_, b,
+    return CW_VK(render_to)(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, width, height, r, g_, b,
                             NULL);
 }
 #else

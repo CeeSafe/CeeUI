@@ -182,8 +182,8 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
 
 - **J1. A manifest cannot name a C file per system.** `[target.linux]`, `[target.macos]` and `[target.windows]` take
   only `links`, `lib-dirs` and `include-dirs` (spec/tooling.md §4.1, ADR 0047). `claywind-hosts/gpu` needs `metal.c`
-  on macOS and `vulkan.c` elsewhere. It lists both in `c`, and each file wraps itself in `#if` so it compiles to
-  nothing on the others. That works, but every file has to know which systems it is for, and a file meant for
+  on macOS, `vulkan.c` on Linux and Windows, and `d3d12.c` on Windows only. It lists all three in `c`, and each file
+  wraps itself in `#if` so it compiles to nothing on the others. That works, but every file has to know which systems it is for, and a file meant for
   one system still has to compile on all of them. **Proposed:** let a `[target.OS]` table take `c` too, added after
   `[package]`'s, as its other fields are.
 - **J2. With GCC on Windows (MinGW), a program that uses the runtime's sockets or windows does not link.** The
