@@ -57,13 +57,13 @@ int32_t CW_VK(attach)(int32_t kind, uint64_t first, uint64_t second);
 void CW_VK(atlas)(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1);
 void CW_VK(image)(const uint32_t *pixels, uint32_t stride, uint32_t w, uint32_t h, uint32_t u, uint32_t v);
 int32_t CW_VK(present)(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                       const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height, float r, float g,
+                       const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, const float *boxes, uint32_t box_count, uint32_t width, uint32_t height, float r, float g,
                        float b);
 int32_t CW_VK(render_to)(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height, float r, float g,
+                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, const float *boxes, uint32_t box_count, uint32_t width, uint32_t height, float r, float g,
                          float b, uint32_t *out);
 int32_t CW_VK(render_only)(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height, float r,
+                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, const float *boxes, uint32_t box_count, uint32_t width, uint32_t height, float r,
                            float g, float b);
 double CW_VK(gpu_ms)(void);
 void CW_VK(finish)(void);
@@ -142,6 +142,7 @@ void CW_VK(finish)(void);
     X(vkCmdPipelineBarrier)                                                                                          \
     X(vkCmdCopyBufferToImage)                                                                                        \
     X(vkCmdCopyImageToBuffer)                                                                                        \
+    X(vkCmdCopyImage)                                                                                        \
     X(vkCmdWriteTimestamp)                                                                                           \
     X(vkCmdResetQueryPool)                                                                                           \
     X(vkCmdSetViewport)                                                                                              \
@@ -214,6 +215,14 @@ static struct {
     VkDescriptorPool descriptors;
     VkShaderModule modules[6];
     VkRenderPass rp_clear, rp_load, rp_present; /* RGBA8 cleared, RGBA8 overwritten, the swapchain's */
+    /* Partial frames: RGBA8 kept (the offscreen image), and the window's retained frame in the swapchain's format,
+       cleared or kept; all compatible with rp_clear's or rp_present's pipelines and framebuffers. */
+    VkRenderPass rp_keep, rp_retained_clear, rp_retained_keep;
+    /* The window's frame for partial frames, in the swapchain's format: drawn here in part, then copied to the
+       swapchain image. A whole frame goes straight to the swapchain image, which leaves this out of date. */
+    cw_texture retained;
+    int retained_valid;
+    int can_copy_to_swapchain;
     VkPipeline shapes_rgba, fills_rgba, composite_rgba, box;
     VkPipeline shapes_present, fills_present, composite_present;
     VkSampler linear, nearest;
@@ -419,18 +428,27 @@ static cw_texture *pooled(uint32_t width, uint32_t height) {
 
 /* ---- render passes and pipelines ---------------------------------------------------------------------------- */
 
+static VkRenderPass make_render_pass_from(VkFormat format, VkAttachmentLoadOp load, VkImageLayout initial,
+                                          VkImageLayout final_layout);
+
 /* One subpass whose colour attachment is also its input attachment, in the GENERAL layout, with the dependencies a
    layer's texture and a composite need: what earlier passes wrote is visible to this one's sampling and blending;
    a draw's writes are visible to a later composite's input reads (the self-dependency, with a barrier per
    composite); this pass's writes are visible to later sampling, copies and presentation. */
 static VkRenderPass make_render_pass(VkFormat format, VkAttachmentLoadOp load, VkImageLayout final_layout) {
+    return make_render_pass_from(format, load, VK_IMAGE_LAYOUT_UNDEFINED, final_layout);
+}
+
+/* make_render_pass from a known layout: a pass that loads an image's pixels (a partial frame) must start from them. */
+static VkRenderPass make_render_pass_from(VkFormat format, VkAttachmentLoadOp load, VkImageLayout initial,
+                                          VkImageLayout final_layout) {
     VkAttachmentDescription attachment = {.format = format,
                                           .samples = VK_SAMPLE_COUNT_1_BIT,
                                           .loadOp = load,
                                           .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
                                           .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
                                           .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-                                          .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                                          .initialLayout = initial,
                                           .finalLayout = final_layout};
     VkAttachmentReference ref = {0, VK_IMAGE_LAYOUT_GENERAL};
     VkSubpassDescription subpass = {.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -732,6 +750,8 @@ int32_t CW_VK(init)(uint32_t atlas_width, uint32_t atlas_height, uint32_t images
     g.modules[5] = make_module(cw_spv_box_frag, sizeof cw_spv_box_frag);
     g.rp_clear = make_render_pass(VK_FORMAT_R8G8B8A8_UNORM, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_IMAGE_LAYOUT_GENERAL);
     g.rp_load = make_render_pass(VK_FORMAT_R8G8B8A8_UNORM, VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_IMAGE_LAYOUT_GENERAL);
+    g.rp_keep = make_render_pass_from(VK_FORMAT_R8G8B8A8_UNORM, VK_ATTACHMENT_LOAD_OP_LOAD, VK_IMAGE_LAYOUT_GENERAL,
+                                      VK_IMAGE_LAYOUT_GENERAL);
     g.shapes_rgba = make_pipeline(g.rp_clear, g.modules[0], g.modules[1], 1);
     g.fills_rgba = make_pipeline(g.rp_clear, g.modules[0], g.modules[2], 1);
     g.composite_rgba = make_pipeline(g.rp_clear, g.modules[0], g.modules[3], 0);
@@ -836,6 +856,9 @@ int32_t CW_VK(attach)(int32_t kind, uint64_t first, uint64_t second) {
         return 4;
     }
     g.rp_present = make_render_pass(g.present_format, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    g.rp_retained_clear = make_render_pass(g.present_format, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_IMAGE_LAYOUT_GENERAL);
+    g.rp_retained_keep = make_render_pass_from(g.present_format, VK_ATTACHMENT_LOAD_OP_LOAD, VK_IMAGE_LAYOUT_GENERAL,
+                                               VK_IMAGE_LAYOUT_GENERAL);
     g.shapes_present = make_pipeline(g.rp_present, g.modules[0], g.modules[1], 1);
     g.fills_present = make_pipeline(g.rp_present, g.modules[0], g.modules[2], 1);
     g.composite_present = make_pipeline(g.rp_present, g.modules[0], g.modules[3], 0);
@@ -881,7 +904,8 @@ static int ensure_swapchain(uint32_t width, uint32_t height) {
                                      .imageExtent = extent,
                                      .imageArrayLayers = 1,
                                      .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                                                   VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT,
+                                                   VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
+                                                   (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT),
                                      .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
                                      .preTransform = caps.currentTransform,
                                      .compositeAlpha = alpha,
@@ -891,6 +915,7 @@ static int ensure_swapchain(uint32_t width, uint32_t height) {
     trace("swapchain usage supported", (long long)caps.supportedUsageFlags);
     trace("swapchain width", extent.width);
     trace("swapchain height", extent.height);
+    g.can_copy_to_swapchain = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) != 0;
     VkResult created = vkCreateSwapchainKHR(g.device, &info, NULL, &g.swapchain);
     trace("swapchain created", created);
     if (created != VK_SUCCESS) {
@@ -1134,7 +1159,7 @@ static void box_pass(cw_texture *from, cw_texture *to, int axis, int d, uint32_t
    `target` through `pass`. */
 static int record(VkRenderPass pass, VkFramebuffer target, VkImageView target_view, int present, const float *frame,
                   uint32_t count, const float *layers, uint32_t layer_instances, const float *records,
-                  uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height,
+                  uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, const float *boxes, uint32_t box_count, uint32_t width, uint32_t height,
                   float r, float gr, float b) {
     for (int k = 0; k < CW_POOL; k++) {
         g.pool[k].used = 0;
@@ -1294,18 +1319,37 @@ static int record(VkRenderPass pass, VkFramebuffer target, VkImageView target_vi
     }
     float whole[4] = {0.0f, 0.0f, (float)width, (float)height};
     begin_pass(pass, target, width, height, r, gr, b, 1.0f);
-    draw_target(present ? g.shapes_present : g.shapes_rgba, present ? g.fills_present : g.fills_rgba,
-                present ? g.composite_present : g.composite_rgba, frame, 0, count, whole, target_view, textures, set0);
+    /* A partial frame (`pass` keeps the target's pixels) draws the whole frame once per box, cut to the box: only
+       the boxes' fragments run, and each gives the pixels a full frame would. */
+    uint32_t passes = box_count > 0 ? box_count : 1;
+    for (uint32_t k = 0; k < passes; k++) {
+        if (box_count > 0) {
+            const float *bx = boxes + (size_t)k * 4;
+            uint32_t x0 = (uint32_t)bx[0], y0 = (uint32_t)bx[1];
+            uint32_t x1 = (uint32_t)bx[2] < width ? (uint32_t)bx[2] : width;
+            uint32_t y1 = (uint32_t)bx[3] < height ? (uint32_t)bx[3] : height;
+            if (x1 <= x0 || y1 <= y0) {
+                continue;
+            }
+            VkRect2D scissor = {{(int32_t)x0, (int32_t)y0}, {x1 - x0, y1 - y0}};
+            vkCmdSetScissor(g.cmd, 0, 1, &scissor);
+        }
+        draw_target(present ? g.shapes_present : g.shapes_rgba, present ? g.fills_present : g.fills_rgba,
+                    present ? g.composite_present : g.composite_rgba, frame, 0, count, whole, target_view, textures,
+                    set0);
+    }
     vkCmdEndRenderPass(g.cmd);
     return 1;
 }
 
-static void end_and_submit(int present) {
+/* Submits the frame; a presented one waits for its swapchain image before `stages` (colour output, and the copy of
+   a partial frame). */
+static void end_and_submit(int present, VkPipelineStageFlags stages) {
     if (g.queries != VK_NULL_HANDLE) {
         vkCmdWriteTimestamp(g.cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g.queries, 1);
     }
     vkEndCommandBuffer(g.cmd);
-    VkPipelineStageFlags wait = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkPipelineStageFlags wait = stages;
     VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
                            .waitSemaphoreCount = present ? 1u : 0u,
                            .pWaitSemaphores = &g.acquired,
@@ -1320,7 +1364,7 @@ static void end_and_submit(int present) {
 
 /* Draws the frame into the window's next swapchain image, `width` × `height` pixels, and presents it. */
 int32_t CW_VK(present)(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                       const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height, float r, float g_,
+                       const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, const float *boxes, uint32_t box_count, uint32_t width, uint32_t height, float r, float g_,
                        float b) {
     if (g.surface == VK_NULL_HANDLE) {
         return 1;
@@ -1350,11 +1394,50 @@ int32_t CW_VK(present)(const float *frame, uint32_t count, const float *layers, 
     /* The surface decides the extent; the frame keeps its own size and the scissor clips it. */
     uint32_t w = g.swap_width < width ? g.swap_width : width;
     uint32_t h = g.swap_height < height ? g.swap_height : height;
-    if (!record(g.rp_present, g.swap_framebuffers[index], g.swap_views[index], 1, frame, count, layers,
-                layer_instances, records, layer_count, clips, clip_count, segments, segment_count, w, h, r, g_, b)) {
-        return 3;
+    if (box_count == 0 || !g.can_copy_to_swapchain) { /* a whole frame: straight to the swapchain image */
+        g.retained_valid = 0;
+        if (!record(g.rp_present, g.swap_framebuffers[index], g.swap_views[index], 1, frame, count, layers,
+                    layer_instances, records, layer_count, clips, clip_count, segments, segment_count, boxes, 0, w, h,
+                    r, g_, b)) {
+            return 3;
+        }
+        end_and_submit(1, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+    } else { /* a partial frame: into the retained frame, which is then copied to the swapchain image */
+        cw_texture *t = &g.retained;
+        if (t->image == VK_NULL_HANDLE || t->width != w || t->height != h) {
+            if (t->image != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(g.device, t->framebuffer, NULL);
+                vkDestroyImageView(g.device, t->view, NULL);
+                vkDestroyImage(g.device, t->image, NULL);
+                vkFreeMemory(g.device, t->memory, NULL);
+                memset(t, 0, sizeof *t);
+            }
+            if (!make_image(w, h, g.present_format, cw_target_usage, &t->image, &t->memory, &t->view)) {
+                return 3;
+            }
+            t->framebuffer = make_framebuffer(g.rp_retained_clear, t->view, w, h);
+            t->width = w;
+            t->height = h;
+            g.retained_valid = 0;
+        }
+        uint32_t n = g.retained_valid ? box_count : 0; /* no last frame here: this one is drawn whole */
+        if (!record(n > 0 ? g.rp_retained_keep : g.rp_retained_clear, t->framebuffer, t->view, 1, frame, count, layers,
+                    layer_instances, records, layer_count, clips, clip_count, segments, segment_count, boxes, n, w, h,
+                    r, g_, b)) {
+            return 3;
+        }
+        g.retained_valid = 1;
+        image_barrier(g.swap_images[index], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                      VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkImageCopy region = {{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                              {0, 0, 0}, {w, h, 1}};
+        vkCmdCopyImage(g.cmd, t->image, VK_IMAGE_LAYOUT_GENERAL, g.swap_images[index],
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        image_barrier(g.swap_images[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                      VK_ACCESS_TRANSFER_WRITE_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                      VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        end_and_submit(1, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT);
     }
-    end_and_submit(1);
     VkPresentInfoKHR info = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
                              .waitSemaphoreCount = 1,
                              .pWaitSemaphores = &g.rendered,
@@ -1373,7 +1456,7 @@ int32_t CW_VK(present)(const float *frame, uint32_t count, const float *layers, 
 
 /* Draws the frame into an offscreen image and copies its pixels to `out` (RGBA bytes, Raster's order). */
 int32_t CW_VK(render_to)(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height, float r,
+                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, const float *boxes, uint32_t box_count, uint32_t width, uint32_t height, float r,
                          float g_, float b, uint32_t *out) {
     if (!g.ready) {
         return 1;
@@ -1394,12 +1477,13 @@ int32_t CW_VK(render_to)(const float *frame, uint32_t count, const float *layers
         o->framebuffer = make_framebuffer(g.rp_clear, o->view, width, height);
         o->width = width;
         o->height = height;
+        box_count = 0; /* no last frame of this size */
     }
     if (out != NULL && !ensure_buffer(&g.readback, (VkDeviceSize)width * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT)) {
         return 3;
     }
-    if (!record(g.rp_clear, o->framebuffer, o->view, 0, frame, count, layers, layer_instances, records, layer_count,
-                clips, clip_count, segments, segment_count, width, height, r, g_, b)) {
+    if (!record(box_count > 0 ? g.rp_keep : g.rp_clear, o->framebuffer, o->view, 0, frame, count, layers, layer_instances, records, layer_count,
+                clips, clip_count, segments, segment_count, boxes, box_count, width, height, r, g_, b)) {
         return 4;
     }
     if (out != NULL) {
@@ -1411,7 +1495,7 @@ int32_t CW_VK(render_to)(const float *frame, uint32_t count, const float *layers
                                   .imageExtent = {width, height, 1}};
         vkCmdCopyImageToBuffer(g.cmd, o->image, VK_IMAGE_LAYOUT_GENERAL, g.readback.buffer, 1, &copy);
     }
-    end_and_submit(0);
+    end_and_submit(0, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
     CW_VK(finish)();
     if (out != NULL) {
         memcpy(out, g.readback.mapped, (size_t)width * height * 4);
@@ -1421,9 +1505,9 @@ int32_t CW_VK(render_to)(const float *frame, uint32_t count, const float *layers
 
 /* Draws the frame offscreen and waits for it, reading nothing back: for timing the GPU. */
 int32_t CW_VK(render_only)(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height, float r,
+                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, const float *boxes, uint32_t box_count, uint32_t width, uint32_t height, float r,
                            float g_, float b) {
-    return CW_VK(render_to)(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count, width, height, r, g_, b,
+    return CW_VK(render_to)(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count, boxes, box_count, width, height, r, g_, b,
                             NULL);
 }
 #else

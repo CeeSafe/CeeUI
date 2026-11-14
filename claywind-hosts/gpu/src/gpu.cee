@@ -78,6 +78,8 @@ extern "C" {
         clipCount: u32,
         segments: *f32,
         segmentCount: u32,
+        boxes: *f32,
+        boxCount: u32,
         width: u32,
         height: u32,
         r: f32,
@@ -96,6 +98,8 @@ extern "C" {
         clipCount: u32,
         segments: *f32,
         segmentCount: u32,
+        boxes: *f32,
+        boxCount: u32,
         width: u32,
         height: u32,
         r: f32,
@@ -115,6 +119,8 @@ extern "C" {
         clipCount: u32,
         segments: *f32,
         segmentCount: u32,
+        boxes: *f32,
+        boxCount: u32,
         width: u32,
         height: u32,
         r: f32,
@@ -237,6 +243,10 @@ public struct GpuBackend<region r> {
     public approximated: u32;
     /// Whether a mask did not fit the atlas.
     public atlasFull: bool;
+    /// The pixel boxes this frame redraws (x0 y0 x1 y1 each), the rest kept from the last frame; none for the whole
+    /// frame (`limitTo`).
+    boxes: [f32; 16];
+    boxCount: u32;
 }
 
 fn zeroFloats(count: usize) -> Vector<f32> {
@@ -384,6 +394,8 @@ impl<region r> GpuBackend<r> {
             unsupported: 0,
             approximated: 0,
             atlasFull: false,
+            boxes: [0.0f32; 16],
+            boxCount: 0,
         };
     }
 
@@ -409,9 +421,56 @@ impl<region r> GpuBackend<r> {
         )!;
         this.clipShapes.clear();
         this.segments.clear();
+        this.boxCount = 0;
         this.ratio = ratio;
         this.unsupported = 0;
         this.approximated = 0;
+    }
+
+    /// Redraws only what `damage` found changed, after its `plan` for this frame: its pixel boxes, the rest of the
+    /// frame kept from the last one drawn; the whole frame when the plan is (or when there is nothing to redraw).
+    /// A backend redraws the whole frame anyway when it has no last frame of this size.
+    public fn limitTo(borrow mut this, damage: borrow Damage) {
+        this.boxCount = 0;
+        if (damage.isWhole()) {
+            return;
+        }
+        for (k in 0..damage.redrawnCount().min(4)) {
+            let b = damage.redrawn(k);
+            let at = (this.boxCount as usize) * 4;
+            this.boxes[at] = b.x;
+            this.boxes[at + 1] = b.y;
+            this.boxes[at + 2] = b.x + b.w;
+            this.boxes[at + 3] = b.y + b.h;
+            this.boxCount += 1;
+        }
+    }
+
+    /// A partial frame starts with an opaque fill of the clear colour over the whole frame, which each box's pass
+    /// cuts to the box: its old pixels are cleared as a full frame's are.
+    fn clearBoxes(borrow mut this, clear: Color) {
+        if (this.boxCount == 0) {
+            return;
+        }
+        var v = [0.0f32; 52];
+        putRect(mut v, RECT, Rect { x: 0.0, y: 0.0, w: this.width, h: this.height });
+        v[CLIP + 2] = this.width;
+        v[CLIP + 3] = this.height;
+        v[MISC] = KIND_FILL;
+        v[MISC + 1] = 1.0;
+        v[MISC + 3] = -1.0;
+        putPremultiplied(mut v, C0, Color.rgb(clear.r, clear.g, clear.b));
+        this.culled.clear();
+        for (k in 0..FLOATS) {
+            this.culled.push(v[k])!;
+        }
+        for (k in 0..this.stream.length) {
+            this.culled.push(this.stream[k])!;
+        }
+        this.stream.clear();
+        for (k in 0..this.culled.length) {
+            this.stream.push(this.culled[k])!;
+        }
     }
 
     /// The frame's instance count, its layers' included.
@@ -510,12 +569,14 @@ impl<region r> GpuBackend<r> {
     public fn present(borrow mut this, width: u32, height: u32, clear: Color) -> i32 {
         this.closeAll();
         this.cull(clear);
+        this.clearBoxes(clear);
         this.upload();
         let frame = this.stream.view();
         let layers = this.layerData.view();
         let records = this.records.view();
         let shapes = this.clipShapes.view();
         let edges = this.segments.view();
+        let boxes = this.boxes[0..16];
         return unsafe { cw_gpu_present(
             frame.ptr,
             truncate<u32>(frame.length / FLOATS),
@@ -527,6 +588,8 @@ impl<region r> GpuBackend<r> {
             truncate<u32>(shapes.length / SHAPE),
             edges.ptr,
             truncate<u32>(edges.length / 4),
+            boxes.ptr,
+            this.boxCount,
             width,
             height,
             unit(clear.r),
@@ -544,12 +607,14 @@ impl<region r> GpuBackend<r> {
         }
         this.closeAll();
         this.cull(clear);
+        this.clearBoxes(clear);
         this.upload();
         let frame = this.stream.view();
         let layers = this.layerData.view();
         let records = this.records.view();
         let shapes = this.clipShapes.view();
         let edges = this.segments.view();
+        let boxes = this.boxes[0..16];
         return unsafe { cw_gpu_render_to(
             frame.ptr,
             truncate<u32>(frame.length / FLOATS),
@@ -561,6 +626,8 @@ impl<region r> GpuBackend<r> {
             truncate<u32>(shapes.length / SHAPE),
             edges.ptr,
             truncate<u32>(edges.length / 4),
+            boxes.ptr,
+            this.boxCount,
             width,
             height,
             unit(clear.r),
@@ -575,12 +642,14 @@ impl<region r> GpuBackend<r> {
     public fn renderOnly(borrow mut this, width: u32, height: u32, clear: Color) -> i32 {
         this.closeAll();
         this.cull(clear);
+        this.clearBoxes(clear);
         this.upload();
         let frame = this.stream.view();
         let layers = this.layerData.view();
         let records = this.records.view();
         let shapes = this.clipShapes.view();
         let edges = this.segments.view();
+        let boxes = this.boxes[0..16];
         return unsafe { cw_gpu_render_only(
             frame.ptr,
             truncate<u32>(frame.length / FLOATS),
@@ -592,6 +661,8 @@ impl<region r> GpuBackend<r> {
             truncate<u32>(shapes.length / SHAPE),
             edges.ptr,
             truncate<u32>(edges.length / 4),
+            boxes.ptr,
+            this.boxCount,
             width,
             height,
             unit(clear.r),

@@ -33,13 +33,13 @@ int32_t cw_gpu_attach(int32_t kind, uint64_t first, uint64_t second);
 void cw_gpu_atlas(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1);
 void cw_gpu_image(const uint32_t *pixels, uint32_t stride, uint32_t w, uint32_t h, uint32_t u, uint32_t v);
 int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                       const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
+                       const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, const float *boxes, uint32_t box_count,
                        uint32_t width, uint32_t height, float r, float g, float b);
 int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
+                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, const float *boxes, uint32_t box_count,
                          uint32_t width, uint32_t height, float r, float g, float b, uint32_t *out);
 int32_t cw_gpu_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
+                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, const float *boxes, uint32_t box_count,
                            uint32_t width, uint32_t height, float r, float g, float b);
 double cw_gpu_gpu_ms(void);
 void cw_gpu_finish(void);
@@ -50,13 +50,13 @@ int32_t cw_vk_attach(int32_t kind, uint64_t first, uint64_t second);
 void cw_vk_atlas(const uint8_t *pixels, uint32_t stride, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1);
 void cw_vk_image(const uint32_t *pixels, uint32_t stride, uint32_t w, uint32_t h, uint32_t u, uint32_t v);
 int32_t cw_vk_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                      const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
+                      const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, const float *boxes, uint32_t box_count,
                       uint32_t width, uint32_t height, float r, float g, float b);
 int32_t cw_vk_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                        const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
+                        const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, const float *boxes, uint32_t box_count,
                         uint32_t width, uint32_t height, float r, float g, float b, uint32_t *out);
 int32_t cw_vk_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                          const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
+                          const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, const float *boxes, uint32_t box_count,
                           uint32_t width, uint32_t height, float r, float g, float b);
 double cw_vk_gpu_ms(void);
 void cw_vk_finish(void);
@@ -528,6 +528,10 @@ static struct {
     cw_buffer staging, instances, clips, readback;
     cw_texture pool[CW_POOL];
     cw_texture offscreen;
+    /* The window's frame for partial frames: drawn here in part, then copied to the back buffer. A whole frame goes
+       straight to the back buffer, which leaves this out of date (retained_valid 0). */
+    cw_texture retained;
+    int retained_valid;
     IDXGISwapChain3 *swapchain;
     cw_texture swap[2];
     uint32_t swap_width, swap_height;
@@ -893,7 +897,7 @@ static int32_t d3d_init(uint32_t atlas_width, uint32_t atlas_height, uint32_t im
     }
     d.rtv_size = ID3D12Device_GetDescriptorHandleIncrementSize(d.device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
     d.srv_size = ID3D12Device_GetDescriptorHandleIncrementSize(d.device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    d.rtv_next = 3; /* 0 and 1: the swap chain's buffers; 2: the offscreen texture */
+    d.rtv_next = 4; /* 0 and 1: the swap chain's buffers; 2: the offscreen texture; 3: the retained frame */
     if (!make_root_signature()) {
         return 4;
     }
@@ -1204,7 +1208,7 @@ static void box_pass(cw_texture *from, cw_texture *to, int axis, int dist, uint3
    then the frame into `target`. */
 static int record(cw_texture *target, const float *frame, uint32_t count, const float *layers,
                   uint32_t layer_instances, const float *records, uint32_t layer_count, const float *clips,
-                  uint32_t clip_count, const float *segments, uint32_t segment_count, uint32_t width, uint32_t height,
+                  uint32_t clip_count, const float *segments, uint32_t segment_count, const float *boxes, uint32_t box_count, uint32_t width, uint32_t height,
                   float r, float g, float b) {
     for (int k = 0; k < CW_POOL; k++) {
         d.pool[k].used = 0;
@@ -1329,8 +1333,23 @@ static int record(cw_texture *target, const float *frame, uint32_t count, const 
         textures[l] = t;
     }
     float whole[4] = {0.0f, 0.0f, (float)width, (float)height};
-    begin_target(target, whole, 1, r, g, b, 1.0f);
-    draw_target(target, frame, 0, count, whole, textures, atlas);
+    begin_target(target, whole, box_count == 0, r, g, b, 1.0f);
+    /* A partial frame keeps the target's pixels and draws the whole frame once per box, cut to the box: only the
+       boxes' fragments run, and each gives the pixels a full frame would. */
+    uint32_t passes = box_count > 0 ? box_count : 1;
+    for (uint32_t k = 0; k < passes; k++) {
+        if (box_count > 0) {
+            const float *bx = boxes + (size_t)k * 4;
+            LONG x1 = (LONG)bx[2] < (LONG)width ? (LONG)bx[2] : (LONG)width;
+            LONG y1 = (LONG)bx[3] < (LONG)height ? (LONG)bx[3] : (LONG)height;
+            D3D12_RECT scissor = {(LONG)bx[0], (LONG)bx[1], x1, y1};
+            if (scissor.right <= scissor.left || scissor.bottom <= scissor.top) {
+                continue;
+            }
+            ID3D12GraphicsCommandList_RSSetScissorRects(d.list, 1, &scissor);
+        }
+        draw_target(target, frame, 0, count, whole, textures, atlas);
+    }
     return 1;
 }
 
@@ -1349,7 +1368,7 @@ static void submit(void) {
 }
 
 static int32_t d3d_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
+                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, const float *boxes, uint32_t box_count,
                            uint32_t width, uint32_t height, float r, float g, float b) {
     if (d.swapchain == NULL) {
         return 1;
@@ -1359,9 +1378,38 @@ static int32_t d3d_present(const float *frame, uint32_t count, const float *laye
         return 2;
     }
     cw_texture *target = &d.swap[IDXGISwapChain3_GetCurrentBackBufferIndex(d.swapchain)];
-    if (!record(target, frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count, width, height,
-                r, g, b)) {
-        return 3;
+    if (box_count == 0) { /* a whole frame: straight to the back buffer */
+        d.retained_valid = 0;
+        if (!record(target, frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments,
+                    segment_count, boxes, 0, width, height, r, g, b)) {
+            return 3;
+        }
+    } else { /* a partial frame: into the retained frame, which is then copied to the back buffer */
+        cw_texture *t = &d.retained;
+        if (t->resource == NULL || t->width != width || t->height != height) {
+            if (t->resource != NULL) {
+                ID3D12Resource_Release(t->resource);
+            }
+            t->resource = make_texture(width, height, CW_FORMAT, 1, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            if (t->resource == NULL) {
+                return 3;
+            }
+            t->state = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            t->rtv = 3;
+            t->width = width;
+            t->height = height;
+            ID3D12Device_CreateRenderTargetView(d.device, t->resource, NULL, rtv_handle(3));
+            d.retained_valid = 0;
+        }
+        uint32_t n = d.retained_valid ? box_count : 0; /* no last frame here: this one is drawn whole */
+        if (!record(t, frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments,
+                    segment_count, boxes, n, width, height, r, g, b)) {
+            return 3;
+        }
+        d.retained_valid = 1;
+        transition(t->resource, &t->state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        transition(target->resource, &target->state, D3D12_RESOURCE_STATE_COPY_DEST);
+        ID3D12GraphicsCommandList_CopyResource(d.list, target->resource, t->resource);
     }
     transition(target->resource, &target->state, D3D12_RESOURCE_STATE_PRESENT);
     submit();
@@ -1374,7 +1422,7 @@ static int32_t d3d_present(const float *frame, uint32_t count, const float *laye
 }
 
 static int32_t d3d_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                             const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
+                             const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, const float *boxes, uint32_t box_count,
                              uint32_t width, uint32_t height, float r, float g, float b, uint32_t *out) {
     if (!d.ready) {
         return 1;
@@ -1394,12 +1442,13 @@ static int32_t d3d_render_to(const float *frame, uint32_t count, const float *la
         o->width = width;
         o->height = height;
         ID3D12Device_CreateRenderTargetView(d.device, o->resource, NULL, rtv_handle(2));
+        box_count = 0; /* no last frame of this size */
     }
     UINT pitch = (width * 4 + 255) & ~255u;
     if (out != NULL && !ensure_buffer(&d.readback, (UINT64)pitch * height, D3D12_HEAP_TYPE_READBACK)) {
         return 3;
     }
-    if (!record(o, frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count, width, height, r, g,
+    if (!record(o, frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count, boxes, box_count, width, height, r, g,
                 b)) {
         return 4;
     }
@@ -1467,27 +1516,27 @@ void cw_gpu_image(const uint32_t *pixels, uint32_t stride, uint32_t w, uint32_t 
 }
 
 int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                       const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
+                       const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, const float *boxes, uint32_t box_count,
                        uint32_t width, uint32_t height, float r, float g, float b) {
-    return use_vulkan ? cw_vk_present(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count,
+    return use_vulkan ? cw_vk_present(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count, boxes, box_count,
                                       width, height, r, g, b)
-                      : d3d_present(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count,
+                      : d3d_present(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count, boxes, box_count,
                                     width, height, r, g, b);
 }
 
 int32_t cw_gpu_render_to(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
+                         const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, const float *boxes, uint32_t box_count,
                          uint32_t width, uint32_t height, float r, float g, float b, uint32_t *out) {
     return use_vulkan ? cw_vk_render_to(frame, count, layers, layer_instances, records, layer_count, clips,
-                                        clip_count, segments, segment_count, width, height, r, g, b, out)
-                      : d3d_render_to(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count,
+                                        clip_count, segments, segment_count, boxes, box_count, width, height, r, g, b, out)
+                      : d3d_render_to(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count, boxes, box_count,
                                       width, height, r, g, b, out);
 }
 
 int32_t cw_gpu_render_only(const float *frame, uint32_t count, const float *layers, uint32_t layer_instances,
-                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count,
+                           const float *records, uint32_t layer_count, const float *clips, uint32_t clip_count, const float *segments, uint32_t segment_count, const float *boxes, uint32_t box_count,
                            uint32_t width, uint32_t height, float r, float g, float b) {
-    return cw_gpu_render_to(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count, width,
+    return cw_gpu_render_to(frame, count, layers, layer_instances, records, layer_count, clips, clip_count, segments, segment_count, boxes, box_count, width,
                             height, r, g, b, NULL);
 }
 

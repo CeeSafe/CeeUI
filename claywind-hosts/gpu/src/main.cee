@@ -205,12 +205,22 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
     var platform = DesktopPlatform.create(Dims { w: round<f32>(size.width), h: round<f32>(size.height) });
     var app = DemoApp.create();
     var last = Timer.now();
-    var lastWidth: u32 = 0;
-    var lastHeight: u32 = 0;
     var shown: u64 = 0;
     var cpuTotal: f64 = 0.0;
     var gpuTotal: f64 = 0.0;
     var reported = nanos();
+    // What changed since the last frame shown: nothing (no frame), or boxes that are all a frame redraws.
+    let whole = Environment.variable("CLAYWIND_WHOLE") != null;
+    var damageStorage = zeros(4194304);
+    let damageMemory = FixedBufferAllocator.over(mut damageStorage.viewMut());
+    var damage = match (Damage.create(damageMemory, 16384)) {
+        Ok(d) => d,
+        Err(_) => {
+            Console.writeErrorLine("gpu: not enough memory for the damage tracker");
+            return 1;
+        }
+    };
+    var redrawn: f64 = 0.0;
     loop {
         loop {
             match (window.nextEvent()) {
@@ -237,14 +247,21 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
             }
         }
         window.setCursor(windowCursor(platform.cursor));
-        gpu.begin(width, height, scale);
-        ui.renderInto(mut gpu);
-        if (gpu.changed() || width != lastWidth || height != lastHeight) {
-            if (gpu.present(width, height, Color.hex(pageBg(ui))) != 0) {
+        let clear = Color.hex(pageBg(ui));
+        let boxes = damage.plan(ui, clear, width as usize, height as usize, scale);
+        if (boxes > 0) {
+            gpu.begin(width, height, scale);
+            ui.renderInto(mut gpu);
+            if (!whole) {
+                gpu.limitTo(damage);
+            }
+            if (gpu.present(width, height, clear) != 0) {
                 Console.writeErrorLine("gpu: no frame to draw into");
             }
-            lastWidth = width;
-            lastHeight = height;
+            for (k in 0..boxes) {
+                let b = damage.redrawn(k);
+                redrawn += round<f64>(b.w * b.h) / (round<f64>(width) * round<f64>(height));
+            }
             shown += 1;
             cpuTotal += ms(t0, nanos());
             gpuTotal += unsafe { cw_gpu_gpu_ms() };
@@ -263,10 +280,14 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
                 Console.write(cpuTotal / round<f64>(shown));
                 Console.write(", gpu ms ");
                 Console.write(gpuTotal / round<f64>(shown));
+                Console.write(", redrawn ");
+                Console.write(redrawn * 100.0 / round<f64>(shown));
+                Console.write(" % of the frame");
             }
             Console.writeLine("");
             Console.flush(); // a file is block-buffered; flushed now, the line survives the window being killed
             shown = 0;
+            redrawn = 0.0;
             cpuTotal = 0.0;
             gpuTotal = 0.0;
             reported = nanos();
@@ -383,6 +404,90 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
             r3 = nanos();
         }
         report(dir, tab, reference.pixels(), pixels.view(), width, height, gpu, ms(r0, r1), ms(r2, r3));
+    }
+    // Partial frames: each tab drawn whole, then one frame later only what Damage found changed, into the frame
+    // kept from before. The result must still match Raster's whole frame.
+    var damageStorage = zeros(4194304);
+    let damageMemory = FixedBufferAllocator.over(mut damageStorage.viewMut());
+    var damage = match (Damage.create(damageMemory, 16384)) {
+        Ok(d) => d,
+        Err(_) => {
+            Console.writeErrorLine("gpu: not enough memory for the damage tracker");
+            return 1;
+        }
+    };
+    var full = Vector<u32>.withCapacity((width * height) as usize)!;
+    for (i in 0..width * height) {
+        full.push(0)!;
+    }
+    var mismatched = false;
+    for (tab in 0usize..NAV_COUNT) {
+        var app = DemoApp.create();
+        app.selectTab(tab);
+        let none = [0u8; 1];
+        var platform = ScriptPlatform.create(none[0..0], Dims { w: 1024.0, h: round<f32>(points) });
+        settle(mut ui, mut app, gpu, mut platform, 28);
+        let before = Color.hex(pageBg(ui));
+        damage.invalidate();
+        let whole = damage.plan(ui, before, width as usize, height as usize, ratio);
+        gpu.begin(width, height, ratio);
+        ui.renderInto(mut gpu);
+        if (gpu.renderTo(width, height, before, mut pixels.viewMut()) != 0) {
+            Console.writeErrorLine("gpu: the offscreen frame failed");
+            return 1;
+        }
+        settle(mut ui, mut app, gpu, mut platform, 1);
+        let clear = Color.hex(pageBg(ui));
+        let boxes = damage.plan(ui, clear, width as usize, height as usize, ratio);
+        var area: f32 = 0.0;
+        for (k in 0..boxes) {
+            let b = damage.redrawn(k);
+            area += b.w * b.h;
+        }
+        let r0 = nanos();
+        reference.begin(clear);
+        ui.renderInto(mut reference);
+        reference.finish();
+        let r1 = nanos();
+        gpu.begin(width, height, ratio);
+        ui.renderInto(mut gpu);
+        gpu.limitTo(damage);
+        if (gpu.renderTo(width, height, clear, mut pixels.viewMut()) != 0) {
+            Console.writeErrorLine("gpu: the offscreen frame failed");
+            return 1;
+        }
+        let r2 = nanos();
+        report(dir, PARTIAL + tab, reference.pixels(), pixels.view(), width, height, gpu, ms(r0, r1), ms(r1, r2));
+        // The same frame redrawn whole: a partial frame must give its pixels exactly.
+        gpu.begin(width, height, ratio);
+        ui.renderInto(mut gpu);
+        if (gpu.renderTo(width, height, clear, mut full.viewMut()) != 0) {
+            Console.writeErrorLine("gpu: the offscreen frame failed");
+            return 1;
+        }
+        var differing: u64 = 0;
+        for (k in 0..pixels.length) {
+            if (pixels[k] != full[k]) {
+                differing += 1;
+            }
+        }
+        if (differing > 0) {
+            mismatched = true;
+        }
+        Console.write("           ");
+        Console.write(differing);
+        Console.write(" pixels differ from the whole frame; ");
+        Console.write(boxes);
+        Console.write(if (damage.isWhole()) " box (the whole frame)" else " boxes, ");
+        if (!damage.isWhole()) {
+            Console.write(round<f64>(area) * 100.0 / (round<f64>(width) * round<f64>(height)));
+            Console.write(" % of the frame");
+        }
+        Console.writeLine("");
+        let ignored = whole;
+    }
+    if (mismatched) {
+        Console.writeLine("a partial frame differs from its whole frame");
     }
     if (gpu.atlasFull) {
         Console.writeLine("the atlas filled up");
@@ -775,6 +880,9 @@ fn drawPaths<B: Backend>(b: borrow mut B) {
     label(mut b, 800.0, 480.0, "paths");
 }
 
+/// Where the comparison's partial frames (one per demo tab) are numbered from.
+const PARTIAL: usize = 10;
+
 fn tabName(tab: usize) -> StringView => match (tab) {
     0 => "dashboard",
     1 => "controls ",
@@ -784,7 +892,13 @@ fn tabName(tab: usize) -> StringView => match (tab) {
     5 => "settings ",
     6 => "clips    ",
     7 => "images   ",
-    _ => "paths    ",
+    8 => "paths    ",
+    10 => "dashboard, a frame later, redrawn in part",
+    11 => "controls, a frame later, redrawn in part",
+    12 => "effects, a frame later, redrawn in part",
+    13 => "projects, a frame later, redrawn in part",
+    14 => "activity, a frame later, redrawn in part",
+    _ => "settings, a frame later, redrawn in part",
 };
 
 /// The largest difference between two pixels' channels.
@@ -913,5 +1027,46 @@ fn bench(ui: borrow mut Ui, gpu: borrow mut GpuBackend, frames: u64) -> i32 {
     Console.writeLine(gpuMs / count);
     Console.write("  total  ");
     Console.writeLine(total / count);
+    // The same frames redrawn only where Damage finds them changed (the uptime and the frame rate, as time passes),
+    // into the frame kept from before.
+    var damageStorage = zeros(4194304);
+    let damageMemory = FixedBufferAllocator.over(mut damageStorage.viewMut());
+    var damage = match (Damage.create(damageMemory, 16384)) {
+        Ok(d) => d,
+        Err(_) => { return 1; }
+    };
+    var partialGpu: f64 = 0.0;
+    var partialTotal: f64 = 0.0;
+    var covered: f64 = 0.0;
+    for (f in 0..n + 1) {
+        let t0 = nanos();
+        platform.beginFrame();
+        ui.begin(mut platform);
+        demoFrame(mut ui, mut app, gpu.raster);
+        ui.endFrame(mut platform, gpu.raster)!;
+        platform.endFrame();
+        let clear = Color.hex(pageBg(ui));
+        let boxes = damage.plan(ui, clear, width as usize, height as usize, ratio);
+        gpu.begin(width, height, ratio);
+        ui.renderInto(mut gpu);
+        gpu.limitTo(damage);
+        let ignored = gpu.renderOnly(width, height, clear);
+        let t1 = nanos();
+        if (f > 0) { // the first frame is whole
+            partialGpu += unsafe { cw_gpu_gpu_ms() };
+            partialTotal += ms(t0, t1);
+            for (k in 0..boxes) {
+                let b = damage.redrawn(k);
+                covered += round<f64>(b.w * b.h);
+            }
+        }
+    }
+    Console.write("  redrawn in part (");
+    Console.write(covered * 100.0 / (count * round<f64>(width) * round<f64>(height)));
+    Console.writeLine(" % of the frame): gpu, total");
+    Console.write("    ");
+    Console.write(partialGpu / count);
+    Console.write(", ");
+    Console.writeLine(partialTotal / count);
     return 0;
 }
