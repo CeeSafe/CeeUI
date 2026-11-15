@@ -82,7 +82,7 @@ fn encodeFrame(pixels: Slice<u32>, w: usize, h: usize, bmp: bool) -> Result<Vect
         pushLe(mut out, 122, 4)?;
         pushLe(mut out, 108, 4)?;
         pushLe(mut out, truncate<u32>(w), 4)?;
-        pushLe(mut out, truncate<u32>(h) ^ 0xFFFFFFFF + 1, 4)?; // negative height: top-down rows
+        pushLe(mut out, 0u32.wrappingSub(truncate<u32>(h)), 4)?; // negative height: top-down rows
         pushLe(mut out, 1, 2)?;
         pushLe(mut out, 32, 2)?;
         pushLe(mut out, 3, 4)?; // BI_BITFIELDS
