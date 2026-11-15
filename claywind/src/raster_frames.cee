@@ -1,0 +1,63 @@
+// SPDX-License-Identifier: MIT
+// One Raster for several windows. A Raster keeps one frame, the one it drew last, which the next frame's Damage
+// redraws only in part; it also holds the fonts and their caches, most of its memory. A program with several windows
+// keeps one Raster and gives each window a RasterFrame: before the Raster draws another window, the frame it holds is
+// kept in its window's RasterFrame (`keepFrame`), and that window's frame is put back (`takeFrame`) before it is drawn
+// again, so each window's next frame is still redrawn only where it changed.
+
+/// A window's frame while the Raster draws another's: its pixels, and the size and ratio they were drawn at.
+public struct RasterFrame<region r> {
+    pixels: SliceMut<r, u32>;
+    width: usize;
+    height: usize;
+    ratio: f32;
+    kept: bool;
+
+    /// Room for a frame of up to `pixels` pixels (width × height at the window's ratio).
+    public fn create(memory: borrow(r) FixedBufferAllocator, pixels: usize) -> Result<RasterFrame<r>, AllocError> {
+        return Ok(
+            RasterFrame { pixels: memory.allocArray(pixels, 0u32)?, width: 0, height: 0, ratio: 1.0, kept: false },
+        );
+    }
+
+    /// Whether it holds a frame (`keepFrame` kept one, and `takeFrame` has not taken it since).
+    public fn isKept(borrow this) -> bool => this.kept;
+
+    /// Forgets the frame it holds (the window closed or lost its pixels).
+    public fn clear(borrow mut this) {
+        this.kept = false;
+    }
+}
+
+impl<region r> Raster<r> {
+    /// Keeps the frame this raster holds, its pixels, size and ratio, in `frame`, before the raster draws another
+    /// window's. False, and nothing kept, when the frame does not fit: that window's next frame is then drawn whole
+    /// (its Damage `invalidate`d).
+    public fn keepFrame(borrow this, frame: borrow mut RasterFrame) -> bool {
+        let w = idx(this.width);
+        let h = idx(this.height);
+        frame.kept = false;
+        if (w * h > frame.pixels.length) {
+            return false;
+        }
+        frame.pixels[0..w * h].copyFrom(this.pool[0..w * h]);
+        frame.width = w;
+        frame.height = h;
+        frame.ratio = this.ratio;
+        frame.kept = true;
+        return true;
+    }
+
+    /// Puts back a frame `keepFrame` kept: the raster holds it again, at its size and ratio, and `frame` no longer
+    /// holds it. False, and no change, when it holds none (or no longer fits): its window is then drawn whole.
+    public fn takeFrame(borrow mut this, frame: borrow mut RasterFrame) -> bool {
+        if (!frame.kept || !this.resize(frame.width, frame.height)) {
+            return false;
+        }
+        let n = frame.width * frame.height;
+        this.pool[0..n].copyFrom(frame.pixels[0..n]);
+        this.ratio = frame.ratio;
+        frame.kept = false;
+        return true;
+    }
+}

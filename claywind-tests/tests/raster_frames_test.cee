@@ -1,0 +1,78 @@
+// SPDX-License-Identifier: MIT
+// One Raster for two windows (RasterFrame): each window's frame is kept while the raster draws the other's and put
+// back before its own next frame, which Damage then redraws only in part. The result must be the pixels of that frame
+// drawn whole, and a window whose frame did not change draws nothing.
+
+import claywind;
+
+/// One frame of a "window": a dark panel with a square at `x`, in `color`.
+fn squareFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, x: f32, color: u32) -> Result<void, TestFailure> {
+    ui.begin(mut platform);
+    ui.open(Style.box().w(Size.fixed(120.0)).h(Size.fixed(60.0)).bg(0x0F172AFF));
+    ui.open(Style.box().absolute().left(x).top(10.0).w(Size.fixed(20.0)).h(Size.fixed(20.0)).bg(color).rounded(Radius.Md));
+    ui.close();
+    ui.close();
+    return finish(mut ui, mut platform);
+}
+
+/// Whether `a` and `b` hold the same pixels.
+fn samePixels(a: Slice<u32>, b: Slice<u32>) -> bool {
+    if (a.length != b.length) {
+        return false;
+    }
+    for (i in 0..a.length) {
+        if (a[i] != b[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+@test
+fn twoWindowsShareOneRaster() -> Result<void, TestFailure> {
+    var storage = heap(33554432);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ras = Raster.create(memory, capacity())!;
+    var uiA = Ui.create(memory, UiCapacity.of(32))!;
+    var uiB = Ui.create(memory, UiCapacity.of(32))!;
+    var damageA = Damage.create(memory, 64)!;
+    var damageB = Damage.create(memory, 64)!;
+    var frameA = RasterFrame.create(memory, 240 * 120)!;
+    var frameB = RasterFrame.create(memory, 240 * 120)!;
+    var whole = Vector<u32>.create();
+    var pa = platformAt(120.0, 60.0, -1.0, -1.0);
+    var pb = platformAt(120.0, 60.0, -1.0, -1.0);
+    let clear = Color.hex(0x000000FF);
+    ras.setPixelRatio(2.0);
+    // Window A, then window B (A's frame kept meanwhile).
+    Check.isTrue(ras.resize(240, 120), "fits")?;
+    squareFrame(mut uiA, mut pa, 10.0, 0x3B82F6FF)?;
+    Check.isTrue(damageA.plan(uiA, clear, 240, 120, 2.0) == 1 && damageA.isWhole(), "A's first frame is whole")?;
+    damageA.draw(mut ras, uiA, clear);
+    Check.isTrue(ras.keepFrame(mut frameA), "A's frame is kept")?;
+    squareFrame(mut uiB, mut pb, 50.0, 0xF59E0BFF)?;
+    Check.isTrue(damageB.plan(uiB, clear, 240, 120, 2.0) == 1, "B's first frame is whole")?;
+    damageB.draw(mut ras, uiB, clear);
+    Check.isTrue(ras.keepFrame(mut frameB), "B's frame is kept")?;
+    // A again, unchanged: nothing to draw, so its frame need not even come back.
+    squareFrame(mut uiA, mut pa, 10.0, 0x3B82F6FF)?;
+    Check.equalU64(0, damageA.plan(uiA, clear, 240, 120, 2.0) as u64)?;
+    // A's square moves: its frame comes back and only the change is redrawn.
+    squareFrame(mut uiA, mut pa, 70.0, 0x3B82F6FF)?;
+    let boxes = damageA.plan(uiA, clear, 240, 120, 2.0);
+    Check.isTrue(boxes > 0 && !damageA.isWhole(), "a part of A is redrawn")?;
+    Check.isTrue(ras.takeFrame(mut frameA), "A's frame comes back")?;
+    damageA.draw(mut ras, uiA, clear);
+    for (p in ras.pixels()) {
+        whole.push(p)!;
+    }
+    // The same frame of A drawn whole gives the same pixels.
+    damageA.invalidate();
+    Check.isTrue(damageA.plan(uiA, clear, 240, 120, 2.0) == 1 && damageA.isWhole(), "whole")?;
+    damageA.draw(mut ras, uiA, clear);
+    Check.isTrue(samePixels(whole.view(), ras.pixels()), "A's partial frame equals its whole frame")?;
+    // B comes back as it was.
+    Check.isTrue(ras.takeFrame(mut frameB), "B's frame comes back")?;
+    Check.isTrue(ras.pixelAt(120, 40).r > 200, "B's amber square is there")?;
+    return Check.isTrue(!frameB.isKept() && !ras.takeFrame(mut frameB), "a frame comes back once");
+}

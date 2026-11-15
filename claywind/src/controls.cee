@@ -32,7 +32,9 @@ public struct Controls {
             Style.box().idHash(h).px(space(4.0)).py(space(2.0)).bg(SLATE_700).rounded(Radius.Md).cursor(Cursor.Pointer)
                 .hover(Style.of().bg(SLATE_600)).active(Style.of().bg(SLATE_500)),
         );
-        let hit = ui.pressedOn(h);
+        // A click: the pointer went down and came back up over the button, as a native button acts (a press dragged
+        // off it does nothing, and a window the button opens is not sent behind by the release).
+        let hit = ui.clickedHash(h);
         ui.label(label, Text.of().color(SLATE_100));
         ui.close();
         return hit;

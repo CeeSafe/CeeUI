@@ -86,7 +86,7 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 | `claywind-tasks/` | Background work for a UI (hosted): a `Task` runs jobs on threads of their own, whose results wake the window (`Window.waitEvent`) and reach the frame through `poll`; a new job cancels the one before |
 | `claywind-demo/` | The demo app (the C version's `main.c`) and `ScriptPlatform`, a scripted input source for tests |
 | `claywind-demo-tasks/` | The demo's background jobs on threads (`claywind-tasks`), for the desktop and GPU hosts: the Controls page's Tasks tab counts primes on one |
-| `claywind-hosts/desktop/` | The demo in a native window: AppKit, Win32 or X11, through CeeSafe's `Window` |
+| `claywind-hosts/desktop/` | The demo in a native window: AppKit, Win32 or X11, through CeeSafe's `Window`. The Controls page's Live state panel opens in a second window that shares the app's state and the renderer |
 | `claywind-hosts/headless/` | The demo rendered to files: screenshots, golden tests and benchmarks |
 | `claywind-hosts/browser/` | An HTTP + WebSocket server streaming the demo to a `<canvas>` page |
 | `claywind-hosts/terminal/` | A small dashboard drawn in a terminal, with mouse and keyboard |
@@ -97,7 +97,7 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 
 ## Getting started
 
-Install the CeeSafe compiler, **ceesafec 0.50.2 or later** (the hosts use its window text input and clipboard, ADR 0141, and sleep on `Window.waitEvent` while nothing changes, ADR 0142; ClayWind's array sizes are constant expressions, ADR 0143; 0.50.2 links with MinGW's gcc on Windows):
+Install the CeeSafe compiler, **ceesafec 0.51.0 or later** (the hosts use its window text input and clipboard, ADR 0141, and sleep while nothing changes, ADRs 0142 and 0145; ClayWind's array sizes are constant expressions, ADR 0143; 0.50.2 links with MinGW's gcc on Windows):
 
 ```sh
 curl -fsSL https://ceesafe.github.io/CeeSafe/install.sh | sh          # macOS and Linux
@@ -171,6 +171,10 @@ ClayWind is immediate mode. Every frame:
 A frame runs only when something changed: `Ui.needsFrame` and `Ui.frameDelayMs` tell the host whether to run the
 next frame at the display's pace or to sleep on `Window.waitEvent` until input, a caret blink, a timer the app asked
 for (`Ui.requestFrameAfter`), or a background job's result (`claywind-tasks`) wakes it. An idle window uses no CPU.
+
+Several windows: each has its own `Ui` and `Damage`, and they can share one `Raster`, its fonts and caches, which
+keeps each window's last frame in a `RasterFrame` while it draws another's, so every window is still redrawn only
+where it changed. The host sleeps on `Window.waitAny` until any of them needs a frame.
 
 The demo (`claywind-demo/src/demo.cee`) uses most of the API. `claywind-hosts/desktop/src/main.cee` is a complete
 host loop in about 250 lines: window events, layout, incremental rendering, presenting only the changed boxes, and

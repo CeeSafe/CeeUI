@@ -158,6 +158,10 @@ public struct DemoApp {
     primes: PrimeCount;
     primesStarted: f64;
     primesTook: f64;
+    /// The Live state panel in a window of its own (inspectorFrame): asked for, until the host reports it closed.
+    inspectorWanted: bool;
+    /// Whether the host opens windows of its own (setOpensWindows): only then does the panel offer one.
+    opensWindows: bool;
 
     /// main.c's initial state (and `ClayWind_darkMode = true`, which the host sets on the Ui).
     public fn create() -> DemoApp => DemoApp {
@@ -192,7 +196,23 @@ public struct DemoApp {
         primes: PrimeCount { below: 0, checked: 0, found: 0 },
         primesStarted: 0.0,
         primesTook: 0.0,
+        inspectorWanted: false,
+        opensWindows: false,
     };
+
+    /// The host can open more windows: the Live state panel offers to open in one.
+    public fn setOpensWindows(borrow mut this, opens: bool) {
+        this.opensWindows = opens;
+    }
+
+    /// Whether the app wants the Live state panel in a window of its own (a host with windows opens one and draws it
+    /// with inspectorFrame).
+    public fn wantsInspector(this) -> bool => this.inspectorWanted;
+
+    /// The host closed the inspector window (its user did): the panel's button offers it again.
+    public fn inspectorClosed(borrow mut this) {
+        this.inspectorWanted = false;
+    }
 
     /// Opens nav tab `index` (CLAYWIND_SCREENSHOT_TAB).
     public fn selectTab(borrow mut this, index: usize) {
@@ -214,7 +234,7 @@ fn muteCol(ui: borrow Ui) -> u32 => ui.theme(SLATE_500, SLATE_500);
 fn lineCol(ui: borrow Ui) -> u32 => ui.theme(SLATE_700, SLATE_300);
 
 /// main.c's clicked(): hovered and the button went down this frame.
-fn clicked(ui: borrow Ui, id: StringView) -> bool => ui.pressedOn(hashId(id));
+fn clicked(ui: borrow Ui, id: StringView) -> bool => ui.clickedHash(hashId(id));
 
 /// Hash of `prefix` + `n` (main.c's F("tag-%d", t) ids).
 fn numberedId(prefix: StringView, n: i64) -> u32 {
@@ -740,7 +760,16 @@ fn tasksSection<J: DemoJobs>(ui: borrow mut Ui, app: borrow mut DemoApp, jobs: b
     ui.labelBytes(lw.written(), Text.of().color(inkCol(ui)));
 }
 
-fn statePanel(ui: borrow mut Ui, app: borrow DemoApp) {
+/// A second window's frame: the Live state panel on its own, sharing the app's state with the main window, and a
+/// button that changes it (the main window's click counter follows).
+public fn inspectorFrame(ui: borrow mut Ui, app: borrow mut DemoApp) {
+    ui.open(Style.column().id("inspector").w(Size.grow()).h(Size.grow()).bg(pageBg(ui)).p(space(4.0)));
+    statePanel(mut ui, mut app, true);
+    ui.close();
+}
+
+/// The Live state panel: beside the Controls page's panel, or filling a window of its own (`inWindow`).
+fn statePanel(ui: borrow mut Ui, app: borrow mut DemoApp, inWindow: bool) {
     var staged: i64 = 0;
     for (i in 0usize..6) {
         if (app.filesChecked[i]) {
@@ -748,9 +777,9 @@ fn statePanel(ui: borrow mut Ui, app: borrow DemoApp) {
         }
     }
     ui.open(
-        Style.column().id("ci-state").w(
-            Size.fixed(260.0),
-        ).bg(panelBg(ui)).p(space(5.0)).gap(space(2.0)).rounded(Radius.Lg),
+        Style.column().id("ci-state").w(if (inWindow) Size.grow() else Size.fixed(260.0)).bg(panelBg(ui)).p(
+            space(5.0),
+        ).gap(space(2.0)).rounded(Radius.Lg),
     );
     ui.label("Live state", Text.of().color(inkCol(ui)).bold());
     ui.open(Style.box().h(Size.fixed(4.0)));
@@ -796,6 +825,22 @@ fn statePanel(ui: borrow mut Ui, app: borrow DemoApp) {
     w8.signed(staged);
     w8.text(if (staged == 1) " file" else " files");
     stateRow(mut ui, "staged", w8.written());
+    ui.open(Style.box().h(Size.fixed(8.0)));
+    ui.close();
+    if (inWindow) {
+        // A change made here shows in the main window too: both draw the same state.
+        var b9 = [0u8; 32];
+        var w9 = TextWriter.create(mut b9[..]);
+        w9.signed(app.clicks as i64);
+        stateRow(mut ui, "clicks", w9.written());
+        if (Controls.button(mut ui, "ci-insp-click", "Click")) {
+            app.clicks += 1;
+        }
+    } else if (app.inspectorWanted) {
+        caption(mut ui, "Shown in its own window too.");
+    } else if (app.opensWindows && Controls.button(mut ui, "ci-pop", "Open in a window")) {
+        app.inspectorWanted = true;
+    }
     ui.close();
 }
 
@@ -825,7 +870,7 @@ fn controlsPage<M: TextMetrics, J: DemoJobs>(
         tasksSection(mut ui, mut app, mut jobs);
     }
     ui.close();
-    statePanel(mut ui, app);
+    statePanel(mut ui, mut app, false);
     ui.close();
     ui.close();
 }

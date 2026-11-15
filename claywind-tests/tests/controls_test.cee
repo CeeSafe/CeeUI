@@ -132,15 +132,27 @@ fn controlsDrivenByAScriptedPlatform() -> Result<void, TestFailure> {
     Check.isTrue(isCursor(platform.cursor, true), "hovering a cursor-pointer element sets the pointer cursor")?;
     Check.isTrue(!app.saveHit, "button not hit without a click")?;
 
-    // Click the button.
+    // Click the button: it acts when the pointer comes back up over it, as a native button does.
     platform.pointerState.pressed = true;
     platform.pointerState.down = true;
     step(mut ui, mut platform, mut app)?;
-    Check.isTrue(app.saveHit, "the button reports the click")?;
+    Check.isTrue(!app.saveHit, "the press alone does not act")?;
     platform.pointerState.down = false;
     platform.pointerState.released = true;
     step(mut ui, mut platform, mut app)?;
+    Check.isTrue(app.saveHit, "the button reports the click")?;
+    step(mut ui, mut platform, mut app)?;
     Check.isTrue(!app.saveHit, "a button hit is a one-frame event")?;
+    // A press dragged off the button before it comes up does nothing.
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    step(mut ui, mut platform, mut app)?;
+    platform.pointerState.position = Vec2 { x: 790.0, y: 590.0 };
+    step(mut ui, mut platform, mut app)?;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    step(mut ui, mut platform, mut app)?;
+    Check.isTrue(!app.saveHit, "a press dragged off the button is no click")?;
 
     // Click into the text field, type, edit at the caret.
     platform.pointerState.position = centerOf(ui, "name");

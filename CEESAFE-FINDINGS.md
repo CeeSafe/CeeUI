@@ -245,13 +245,14 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
 
 ## L. Found while adding a second window (roadmap P3 step 4, 2026-11-15, ceesafec 0.50.2)
 
-- **L1. A program cannot sleep until any of its windows needs it.** `Window.waitEvent` (ADR 0142) returns for its own
+- **L1 (fixed in ceesafec 0.51.0, ADR 0145). A program cannot sleep until any of its windows needs it.** `Window.waitEvent` (ADR 0142) returns for its own
   window's events and wakes only, so with two windows open the input of the one not waited on stays queued until the
-  other's timeout. Being fixed at the source: ADR 0145, `Window.waitAny(timeoutMs)`, which returns when any open
+  other's timeout. Fixed at the source: ADR 0145, `Window.waitAny(timeoutMs)`, which returns when any open
   window has an event or a wake (the owner chose it over widening `waitEvent` or polling in turn). ClayWind's desktop
-  host waits on it with the inspector window open.
-- **L2. On macOS, one window's poll swallows another's input.** `cee_native_pump` passes every AppKit event to
+  host waits on it with the inspector window open: two idle windows use no CPU but the dashboard's clock.
+- **L2 (fixed in ceesafec 0.51.0, ADR 0145). On macOS, one window's poll swallows another's input.** `cee_native_pump` passes every AppKit event to
   `cee_mac_translate(w, …)` for the window being polled, which queues only the events whose `NSWindow` is that
   window's and lets AppKit dispatch the rest: a click in window B, taken from AppKit's queue while window A's
-  `nextEvent` or wait pumps, never reaches B's queue. Being fixed in the same ADR: each event goes to the window it is
-  for.
+  `nextEvent` or wait pumps, never reaches B's queue. Fixed in the same ADR: each event goes to the window it is
+  for. Also met: macOS keeps at most 16 windows open (`CEE_MAC_WINDOWS`; the 17th `open` is `Resources`), which
+  type-system.md §26.13 does not say yet.

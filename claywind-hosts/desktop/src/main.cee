@@ -11,6 +11,11 @@
 // display, Raster.setPixelRatio), up to MAX_PIXELS_WIDTH × MAX_PIXELS_HEIGHT pixels: a window too large for that at
 // its ratio is drawn at a lower one, which the window scales up. Each frame redraws only what changed (Damage), and
 // the window is given only those boxes (Window.presentChanged, ceesafec 0.14.0); nothing, when nothing changed.
+//
+// The Controls page's Live state panel opens in a window of its own (the inspector), which shares the app's state:
+// each window has its own Ui, Damage and platform, and the two share one Raster (and its fonts), which keeps each
+// window's last frame while it draws the other's (RasterFrame). While nothing changes, the program sleeps until either
+// window has an event or is woken (Window.waitAny, CeeSafe ADR 0145).
 
 import claywind;
 import claywind_demo;
@@ -19,6 +24,12 @@ import claywind_demo_tasks;
 
 const START_WIDTH: u32 = 1024;
 const START_HEIGHT: u32 = 640;
+const INSPECTOR_WIDTH: u32 = 340;
+const INSPECTOR_HEIGHT: u32 = 600;
+/// Which window's frame the Raster holds: the main window's, the inspector's, or neither's.
+const MAIN: usize = 0;
+const INSPECTOR: usize = 1;
+const NEITHER: usize = 2;
 /// How long an idle window sleeps for want of an event (a wake or an event ends it sooner).
 const IDLE_MS: u32 = 0xFFFFFFFF;
 const MAX_PIXELS_WIDTH: usize = 2880;
@@ -119,29 +130,134 @@ fn ratioFor(size: WindowSize, scale: f32) -> f32 {
     return wanted.min(fitW).min(fitH);
 }
 
-/// Sizes the raster's frame for the window: its points times the ratio, in pixels.
-fn fitRaster(raster: borrow mut Raster, size: WindowSize, scale: f32) {
+/// The pixel size and ratio `size` points at `scale` are drawn at (fitRaster's).
+fn pixelsFor(size: WindowSize, scale: f32) -> [usize; 2] {
     let ratio = ratioFor(size, scale);
     let w = saturatingTruncate<usize>(Math.round(round<f32>(size.width) * ratio));
     let h = saturatingTruncate<usize>(Math.round(round<f32>(size.height) * ratio));
-    raster.setPixelRatio(ratio);
-    raster.resize(
-        if (w < 1) 1 else if (w > MAX_PIXELS_WIDTH) MAX_PIXELS_WIDTH else w,
-        if (h < 1) 1 else if (h > MAX_PIXELS_HEIGHT) MAX_PIXELS_HEIGHT else h,
-    );
+    return [w.max(1).min(MAX_PIXELS_WIDTH), h.max(1).min(MAX_PIXELS_HEIGHT)];
 }
+
+/// One window's part of the host: its Ui, the Damage of its frames, its last frame while the Raster draws the other
+/// window's, its input, and its clock.
+struct Pane<region r> {
+    ui: Ui<r>;
+    damage: Damage<r>;
+    frame: RasterFrame<r>;
+    platform: DesktopPlatform;
+    last: u64;
+
+    fn create(
+        memory: borrow(r) FixedBufferAllocator,
+        elements: usize,
+        commands: usize,
+        pixels: usize,
+        size: WindowSize,
+    ) -> Result<Pane<r>, AllocError> {
+        return Ok(Pane {
+            ui: Ui.create(memory, UiCapacity.of(elements))?,
+            damage: Damage.create(memory, commands)?,
+            frame: RasterFrame.create(memory, pixels)?,
+            platform: DesktopPlatform.create(Dims { w: round<f32>(size.width), h: round<f32>(size.height) }),
+            last: Timer.now(),
+        });
+    }
+
+    /// Takes the window's events into the platform; true when the window asks to close.
+    fn takeEvents(borrow mut this, window: borrow mut Window) -> bool {
+        loop {
+            match (window.nextEvent()) {
+                Some(WindowEvent.Closed) => { return true; }
+                Some(e) => { this.platform.apply(e); }
+                null => { return false; }
+            }
+        }
+    }
+
+    /// Starts a frame: the clock, the input, and the text the window's input method has.
+    fn begin(borrow mut this, window: borrow mut Window) {
+        let now = Timer.now();
+        this.platform.setFrameTime(round<f32>(now - this.last) / 1000.0);
+        this.last = now;
+        this.ui.begin(mut this.platform);
+        this.platform.editInto(mut this.ui, mut window);
+    }
+
+    /// Ends a frame: layout, the text input's place and the cursor. False when the frame does not fit the Ui.
+    fn end(borrow mut this, window: borrow mut Window, raster: borrow Raster) -> bool {
+        match (this.ui.endFrame(mut this.platform, raster)) {
+            Ok() => {}
+            Err(_) => { return false; }
+        }
+        this.platform.editFrom(this.ui, mut window);
+        window.setCursor(windowCursor(this.platform.cursor));
+        return true;
+    }
+}
+
+/// Draws `pane`'s frame into `raster` and shows what changed in `window`: the raster takes this window's last frame
+/// back first when it holds the other window's (`holds`), keeping that one in `other`. False when the window refused
+/// the frame.
+fn drawPane(
+    raster: borrow mut Raster,
+    holds: borrow mut usize,
+    me: usize,
+    pane: borrow mut Pane,
+    other: borrow mut Pane,
+    window: borrow mut Window,
+) -> bool {
+    let clear = Color.hex(pageBg(pane.ui));
+    let size = window.size();
+    let scale = window.scale();
+    let px = pixelsFor(size, scale);
+    let ratio = ratioFor(size, scale);
+    var boxes = pane.damage.plan(pane.ui, clear, px[0], px[1], ratio);
+    if (boxes == 0) {
+        return true;
+    }
+    if (holds != me) {
+        if (holds != NEITHER && !raster.keepFrame(mut other.frame)) {
+            other.damage.invalidate(); // its frame did not fit: drawn whole next time
+        }
+        if (!raster.takeFrame(mut pane.frame)) {
+            pane.damage.invalidate(); // no frame of its own to draw over: draw it whole
+            boxes = pane.damage.plan(pane.ui, clear, px[0], px[1], ratio);
+        }
+        holds = me;
+    }
+    raster.setPixelRatio(ratio);
+    raster.resize(px[0], px[1]);
+    pane.damage.draw(mut raster, pane.ui, clear);
+    // Only the boxes Damage redrew changed: the window shows just those (Window.presentChanged).
+    var shown = [WindowBox { x: 0, y: 0, width: 0, height: 0 }; 4];
+    for (k in 0..boxes) {
+        let r = pane.damage.redrawn(k);
+        shown[k] = WindowBox {
+            x: saturatingTruncate<u32>(r.x),
+            y: saturatingTruncate<u32>(r.y),
+            width: saturatingTruncate<u32>(r.w),
+            height: saturatingTruncate<u32>(r.h),
+        };
+    }
+    let width = truncate<u32>(raster.frameWidth());
+    let height = truncate<u32>(raster.frameHeight());
+    return window.presentChanged(raster.pixels(), width, height, shown[0..boxes]).isOk();
+}
+
+/// The message for a window that does not open.
+fn windowError(e: WindowError) -> StringView => match (e) {
+    WindowError.Unsupported => "this system has no window support",
+    WindowError.NoDisplay => "no display",
+    WindowError.NotMainThread => "not on the main thread",
+    WindowError.Resources => "the system refused",
+};
 
 fn main() -> i32 {
     var window = match (Window.open("ClayWind — CeeSafe", START_WIDTH, START_HEIGHT)) {
         Ok(w) => w,
         Err(e) => {
             Console.writeError("desktop: cannot open a window: ");
-            Console.writeErrorLine(match (e) {
-                WindowError.Unsupported => "this system has no window support",
-                WindowError.NoDisplay => "no display",
-                WindowError.NotMainThread => "not on the main thread",
-                WindowError.Resources => "the system refused",
-            });
+            Console.writeErrorLine(windowError(e));
             return 1;
         }
     };
@@ -153,14 +269,25 @@ fn main() -> i32 {
             return 1;
         }
     };
-    var uiStorage = zeros(16777216);
+    var mainStorage = zeros(67108864);
+    var inspectorStorage = zeros(33554432);
     var rasterStorage = zeros(301989888);
-    let uiMemory = FixedBufferAllocator.over(mut uiStorage.viewMut());
+    let mainMemory = FixedBufferAllocator.over(mut mainStorage.viewMut());
+    let inspectorMemory = FixedBufferAllocator.over(mut inspectorStorage.viewMut());
     let rasterMemory = FixedBufferAllocator.over(mut rasterStorage.viewMut());
-    var ui = match (Ui.create(uiMemory, UiCapacity.of(4096))) {
-        Ok(u) => u,
+    let full = MAX_PIXELS_WIDTH * MAX_PIXELS_HEIGHT;
+    var main = match (Pane.create(mainMemory, 4096, 16384, full, window.size())) {
+        Ok(p) => p,
         Err(_) => {
             Console.writeErrorLine("desktop: not enough memory for the UI");
+            return 1;
+        }
+    };
+    let small = WindowSize { width: INSPECTOR_WIDTH, height: INSPECTOR_HEIGHT };
+    var inspector = match (Pane.create(inspectorMemory, 512, 2048, full / 2, small)) {
+        Ok(p) => p,
+        Err(_) => {
+            Console.writeErrorLine("desktop: not enough memory for the inspector");
             return 1;
         }
     };
@@ -177,88 +304,97 @@ fn main() -> i32 {
         Console.writeErrorLine("desktop: no fonts found; set CLAYWIND_FONT_DIR");
         return 1;
     }
-    // Only what changed is redrawn each frame (Damage): an idle frame costs a layout and a comparison.
-    var damageStorage = zeros(4194304);
-    let damageMemory = FixedBufferAllocator.over(mut damageStorage.viewMut());
-    var damage = match (Damage.create(damageMemory, 16384)) {
-        Ok(d) => d,
-        Err(_) => {
-            Console.writeErrorLine("desktop: not enough memory for the damage tracker");
-            return 1;
-        }
-    };
-    let size = window.size();
-    var platform = DesktopPlatform.create(Dims { w: round<f32>(size.width), h: round<f32>(size.height) });
     var app = DemoApp.create();
-    ui.setDarkMode(Environment.variable("CLAYWIND_LIGHT") == null);
+    app.setOpensWindows(true);
+    let dark = Environment.variable("CLAYWIND_LIGHT") == null;
     // Shortcuts use Command on macOS (an AppKit window), Control elsewhere.
-    ui.setSecondaryIsCommand(match (window.nativeHandle()) {
+    let command = match (window.nativeHandle()) {
         WindowHandle.AppKit(_, _) => true,
         _ => false,
-    });
-    var last = Timer.now();
+    };
+    main.ui.setDarkMode(dark);
+    main.ui.setSecondaryIsCommand(command);
+    inspector.ui.setDarkMode(dark);
+    inspector.ui.setSecondaryIsCommand(command);
+    var second: Window? = null; // the inspector's window, while it is open
+    var holds = NEITHER;
     // Fonts from the system for characters the loaded ones lack, found as the frames need them.
     var systemFonts = SystemFonts.create();
     loop {
-        loop {
-            match (window.nextEvent()) {
-                Some(WindowEvent.Closed) => { return 0; }
-                Some(e) => {
-                    platform.apply(e);
+        if (main.takeEvents(mut window)) {
+            return 0;
+        }
+        var closeSecond = false;
+        match (borrow mut second) {
+            Some(w) => { closeSecond = inspector.takeEvents(mut w); }
+            null => {}
+        }
+        if (closeSecond) {
+            second = null; // the inspector's window closes
+            inspector.frame.clear();
+            inspector.damage.invalidate();
+            if (holds == INSPECTOR) {
+                holds = NEITHER;
+            }
+            app.inspectorClosed();
+        }
+        // Both windows draw the same state, so each frame runs in both: one whose frame did not change draws nothing.
+        main.begin(mut window);
+        demoFrameWith(mut main.ui, mut app, raster, mut jobs);
+        if (!main.end(mut window, raster)) {
+            Console.writeErrorLine("desktop: the frame does not fit the UI capacity");
+            return 1;
+        }
+        if (systemFonts.supplyFrame(mut raster, main.ui) > 0) {
+            main.damage.invalidate(); // the same commands draw other glyphs now (the next frame lays them out)
+            inspector.damage.invalidate();
+        }
+        if (!drawPane(mut raster, mut holds, MAIN, mut main, mut inspector, mut window)) {
+            Console.writeErrorLine("desktop: the window refused a frame");
+            return 1;
+        }
+        main.platform.endFrame();
+        if (app.wantsInspector() && second == null) {
+            match (Window.open("Live state", INSPECTOR_WIDTH, INSPECTOR_HEIGHT)) {
+                Ok(w) => {
+                    second = w;
+                    inspector.damage.invalidate();
                 }
-                null => { break; }
+                Err(e) => {
+                    Console.writeError("desktop: cannot open the inspector: ");
+                    Console.writeErrorLine(windowError(e));
+                    app.inspectorClosed();
+                }
             }
         }
-        // Every frame: a resize, or a move to a display of another scale, changes the frame's pixels.
-        fitRaster(mut raster, window.size(), window.scale());
-        let now = Timer.now();
-        platform.setFrameTime(round<f32>(now - last) / 1000.0);
-        last = now;
-        ui.begin(mut platform);
-        platform.editInto(mut ui, mut window);
-        demoFrameWith(mut ui, mut app, raster, mut jobs);
-        match (ui.endFrame(mut platform, raster)) {
-            Ok() => {}
-            Err(_) => {
-                Console.writeErrorLine("desktop: the frame does not fit the UI capacity");
-                return 1;
-            }
-        }
-        platform.editFrom(ui, mut window);
-        window.setCursor(windowCursor(platform.cursor));
-        if (systemFonts.supplyFrame(mut raster, ui) > 0) {
-            damage.invalidate(); // the same commands draw other glyphs now (the next frame lays them out)
-        }
-        if (damage.render(mut raster, ui, Color.hex(pageBg(ui)))) {
-            let width = truncate<u32>(raster.frameWidth());
-            let height = truncate<u32>(raster.frameHeight());
-            // Only the boxes Damage redrew changed: the window shows just those (Window.presentChanged).
-            var boxes = [WindowBox { x: 0, y: 0, width: 0, height: 0 }; 4];
-            let count = damage.redrawnCount();
-            for (k in 0..count) {
-                let r = damage.redrawn(k);
-                boxes[k] = WindowBox {
-                    x: saturatingTruncate<u32>(r.x),
-                    y: saturatingTruncate<u32>(r.y),
-                    width: saturatingTruncate<u32>(r.w),
-                    height: saturatingTruncate<u32>(r.h),
-                };
-            }
-            match (window.presentChanged(raster.pixels(), width, height, boxes[0..count])) {
-                Ok() => {}
-                Err(_) => {
-                    Console.writeErrorLine("desktop: the window refused a frame");
+        var inspectorBusy = false;
+        match (borrow mut second) {
+            Some(w) => {
+                inspector.begin(mut w);
+                inspectorFrame(mut inspector.ui, mut app);
+                if (!inspector.end(mut w, raster)) {
+                    Console.writeErrorLine("desktop: the inspector's frame does not fit its UI capacity");
                     return 1;
                 }
+                if (!drawPane(mut raster, mut holds, INSPECTOR, mut inspector, mut main, mut w)) {
+                    Console.writeErrorLine("desktop: the inspector's window refused a frame");
+                    return 1;
+                }
+                inspector.platform.endFrame();
+                inspectorBusy = inspector.ui.needsFrame();
             }
+            null => {}
         }
-        platform.endFrame();
-        // The next frame at the display's pace while something moves; otherwise sleep until an event, a wake, or
-        // what the frame asked for (a caret blink, a timer), using no CPU while idle.
-        if (ui.needsFrame()) {
+        // The next frame at the display's pace while something moves in either window; otherwise sleep until either
+        // window has an event or is woken, or what a frame asked for (a caret blink, a timer): no CPU while idle.
+        if (main.ui.needsFrame() || inspectorBusy) {
             window.waitFrame();
         } else {
-            window.waitEvent(ui.frameDelayMs(IDLE_MS));
+            var delay = main.ui.frameDelayMs(IDLE_MS);
+            if (second != null) {
+                delay = delay.min(inspector.ui.frameDelayMs(IDLE_MS));
+            }
+            Window.waitAny(delay);
         }
     }
 }

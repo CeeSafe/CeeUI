@@ -103,14 +103,26 @@ public struct Damage<region r> {
         if (boxes == 0) {
             return false;
         }
+        this.draw(mut raster, ui, clear);
+        return true;
+    }
+
+    /// Draws what the last `plan` found into `raster`, which holds this damage's previous frame at the planned size
+    /// and ratio: the whole frame, or each box alone, leaving the other pixels as they are; nothing when nothing
+    /// changed. A raster that draws several windows' frames plans each, and puts a window's own pixels back
+    /// (`Raster.takeFrame`) only when its plan has something to draw.
+    public fn draw(borrow this, raster: borrow mut Raster, ui: borrow Ui, clear: Color) {
+        if (this.drawnCount == 0) {
+            return;
+        }
         if (this.whole) {
             raster.begin(clear);
             ui.renderInto(mut raster);
             raster.finish();
-            return true;
+            return;
         }
         // One pass per box: each redraws only its pixels, and leaves the others' alone.
-        for (k in 0..boxes) {
+        for (k in 0..this.drawnCount) {
             let b = this.drawn[k];
             raster.beginRegion(
                 clear,
@@ -122,7 +134,6 @@ public struct Damage<region r> {
             ui.renderInto(mut raster);
             raster.finish();
         }
-        return true;
     }
 
     /// What a host that keeps its last frame (Raster, or a GPU's retained texture) must redraw of `ui`'s frame at
