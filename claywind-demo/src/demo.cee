@@ -64,7 +64,7 @@ public struct DemoApp {
     public focusedNav: usize;
     nameBuf: [u8; 64];
     nameLen: usize;
-    nameCaret: usize;
+    nameEdit: TextEdit;
     subscribe: bool;
     prioSel: usize;
     prioOpen: bool;
@@ -93,7 +93,7 @@ public struct DemoApp {
         focusedNav: 0,
         nameBuf: [0u8; 64],
         nameLen: 0,
-        nameCaret: 0,
+        nameEdit: TextEdit.at(0),
         subscribe: false,
         prioSel: 1,
         prioOpen: false,
@@ -473,7 +473,7 @@ fn stateRow(ui: borrow mut Ui, key: StringView, value: Slice<u8>) {
 fn inputsSection<M: TextMetrics>(ui: borrow mut Ui, app: borrow mut DemoApp, metrics: borrow M) {
     ui.open(Style.column().w(Size.grow()).gap(space(1.0)));
     caption(mut ui, "Name · caret editing (Left/Right/Home/End, Backspace/Delete)");
-    Controls.textInputEx(mut ui, metrics, "ci-name", mut app.nameBuf[..], mut app.nameLen, mut app.nameCaret);
+    Controls.textField(mut ui, metrics, "ci-name", mut app.nameBuf[..], mut app.nameLen, mut app.nameEdit);
     ui.close();
     ui.open(Style.column().w(Size.grow()).gap(space(1.0)));
     caption(mut ui, "Quick note · simple append-only input");
@@ -498,7 +498,7 @@ fn inputsSection<M: TextMetrics>(ui: borrow mut Ui, app: borrow mut DemoApp, met
     }
     if (Controls.button(mut ui, "ci-clear", "Clear")) {
         app.nameLen = 0;
-        app.nameCaret = 0;
+        app.nameEdit = TextEdit.at(0);
         app.noteLen = 0;
     }
     caption(mut ui, if (app.saves != 0) "Saved · see Live state" else "Hover Save for a tooltip");
@@ -573,7 +573,7 @@ fn statePanel(ui: borrow mut Ui, app: borrow DemoApp) {
     stateRow(mut ui, "name", w.written());
     var b2 = [0u8; 32];
     var w2 = TextWriter.create(mut b2[..]);
-    w2.signed(truncate<i64>(app.nameCaret));
+    w2.signed(truncate<i64>(app.nameEdit.caret));
     stateRow(mut ui, "caret", w2.written());
     var b3 = [0u8; 96];
     var w3 = TextWriter.create(mut b3[..]);
