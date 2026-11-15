@@ -186,12 +186,13 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   wraps itself in `#if` so it compiles to nothing on the others. That works, but every file has to know which systems it is for, and a file meant for
   one system still has to compile on all of them. **Proposed:** let a `[target.OS]` table take `c` too, added after
   `[package]`'s, as its other fields are.
-- **J2 (fixed on CeeSafe branch `fix/mingw-system-libs`, awaiting a release). With GCC on Windows (MinGW), a program
-  that uses the runtime's sockets or windows does not link.** Fixed at the source: ceesafec passes `-lws2_32 -lgdi32
-  -lbcrypt` to gcc on Windows (tooling.md §8.3), the runtime builds without gcc's warnings (the three below), and the
-  release workflow builds and runs a link check with MinGW's gcc. Met again with 0.50.0 building the desktop host on
-  the x64 laptop; a compiler built from the branch builds it with no manifest change. `claywind-hosts/gpu`'s
-  `[target.windows] links` goes once a release has it. The report as made: The
+- **J2 (fixed in ceesafec 0.50.2). With GCC on Windows (MinGW), a program that uses the runtime's sockets or windows
+  does not link.** Fixed at the source: ceesafec passes `-lws2_32 -lgdi32 -lbcrypt` to gcc on Windows (tooling.md
+  §8.3), the runtime builds without gcc's warnings (the first two below), and the release workflow builds and runs a
+  link check with MinGW's gcc (it printed "linked: Winsock, GDI and BCrypt" on the 0.50.2 release's win-x64 runner).
+  Met again with 0.50.0 building the desktop host on the x64 laptop; with 0.50.2 the desktop and GPU hosts build there
+  with WinLibs gcc 16 and no workaround, and `claywind-hosts/gpu`'s `[target.windows] links` is gone. The report as
+  made: The
   hosted runtime names its system libraries with `#pragma comment(lib, …)` (`ceesafe_rt_io.c`, `ceesafe_rt_async.c`,
   `ceesafe_rt_window.c`). MSVC and clang-cl honour that, but GCC ignores it ("ignoring '#pragma comment'"). With
   WinLibs GCC 16.2 on Windows 11 x64 and ceesafec 0.46.0, `ws2_32`, `gdi32` and `bcrypt` were missing:
@@ -202,7 +203,7 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   - The same build warns only in CeeSafe's C: `ceesafe_rt_async.c` converts an object pointer to a function pointer
     four times (`-Wpedantic`; `memcpy`, as `ceesafe_rt_window.c` does, avoids it); `ceesafe_rt_io.c:3655` has an
     unused parameter `s`; and the generated `main.c` has `'t_9' may be used uninitialized` (GCC 16,
-    `-Wmaybe-uninitialized`). The first two are fixed on the branch; the third is a false positive (a whole-struct
+    `-Wmaybe-uninitialized`). The first two are fixed in 0.50.2; the third is a false positive (a whole-struct
     copy of a `Result` literal whose other union member is unset; no value is read uninitialized) and stays.
 
 
@@ -241,3 +242,16 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   file order, and an `impl` block (which has no `public`) taken as it. ClayWind worked around it by naming the file
   `ui_state.cee`, until the fix. **Proposed:** an `impl` never decides its type's visibility; a test with the impl's file sorting
   before the type's.
+
+## L. Found while adding a second window (roadmap P3 step 4, 2026-11-15, ceesafec 0.50.2)
+
+- **L1. A program cannot sleep until any of its windows needs it.** `Window.waitEvent` (ADR 0142) returns for its own
+  window's events and wakes only, so with two windows open the input of the one not waited on stays queued until the
+  other's timeout. Being fixed at the source: ADR 0145, `Window.waitAny(timeoutMs)`, which returns when any open
+  window has an event or a wake (the owner chose it over widening `waitEvent` or polling in turn). ClayWind's desktop
+  host waits on it with the inspector window open.
+- **L2. On macOS, one window's poll swallows another's input.** `cee_native_pump` passes every AppKit event to
+  `cee_mac_translate(w, …)` for the window being polled, which queues only the events whose `NSWindow` is that
+  window's and lets AppKit dispatch the rest: a click in window B, taken from AppKit's queue while window A's
+  `nextEvent` or wait pumps, never reaches B's queue. Being fixed in the same ADR: each event goes to the window it is
+  for.
