@@ -243,6 +243,8 @@ public struct GpuBackend<region r> {
     public approximated: u32;
     /// Whether a mask did not fit the atlas.
     public atlasFull: bool;
+    /// How many times a full atlas or image atlas was emptied to start over (at the next frame's begin).
+    public atlasResets: u32;
     /// The pixel boxes this frame redraws (x0 y0 x1 y1 each), the rest kept from the last frame; none for the whole
     /// frame (`limitTo`).
     boxes: [f32; 16];
@@ -394,6 +396,7 @@ impl<region r> GpuBackend<r> {
             unsupported: 0,
             approximated: 0,
             atlasFull: false,
+            atlasResets: 0,
             boxes: [0.0f32; 16],
             boxCount: 0,
         };
@@ -403,6 +406,24 @@ impl<region r> GpuBackend<r> {
     public fn begin(borrow mut this, width: u32, height: u32, ratio: f32) {
         // The Raster shapes and measures for this backend: at the frame's ratio it names the emoji strikes drawn.
         this.raster.setPixelRatio(ratio);
+        // An atlas that filled last frame starts over: this frame packs what it draws (a frame's instances refer
+        // to atlas places, so it is never emptied mid-frame).
+        if (this.atlasFull) {
+            this.masks.clear();
+            this.shelfX = 0;
+            this.shelfY = 0;
+            this.shelfH = 0;
+            this.atlasFull = false;
+            this.atlasResets += 1;
+        }
+        if (this.imagesFull) {
+            this.images.clear();
+            this.imageX = 0;
+            this.imageY = 0;
+            this.imageH = 0;
+            this.imagesFull = false;
+            this.atlasResets += 1;
+        }
         this.stream.clear();
         this.layerData.clear();
         this.records.clear();
