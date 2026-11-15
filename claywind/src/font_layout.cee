@@ -35,6 +35,15 @@ struct LayoutGlyph {
     cursiveTo: i32;
     /// A joiner or selector (ZWJ, VS16) kept for an emoji sequence's ligature: drawn nowhere if it is left over.
     hidden: bool;
+    /// The character it came from, and what GSUB did to it (HarfBuzz's glyph props, which the Indic shaper reads).
+    cp: u32;
+    substituted: bool;
+    ligated: bool;
+    multiplied: bool;
+    /// The Indic shaper's view (indic.cee): category, position and syllable (serial << 4 | type).
+    indicCat: u32;
+    indicPos: u32;
+    syllable: u32;
     /// Where the shaper placed it: pen and rise, in the run's own font's units.
     placedX: f32;
     placedY: f32;
@@ -56,6 +65,13 @@ fn emptyLayoutGlyph() -> LayoutGlyph => LayoutGlyph {
     attachY: 0.0,
     cursiveTo: -1,
     hidden: false,
+    cp: 0,
+    substituted: false,
+    ligated: false,
+    multiplied: false,
+    indicCat: 0,
+    indicPos: 0,
+    syllable: 0,
     placedX: 0.0,
     placedY: 0.0,
 };
@@ -70,6 +86,10 @@ struct LayoutBuffer {
     nextLig: u32;
     /// Whether the run reads right to left (cursive attachment depends on it).
     rtl: bool;
+    /// Whether contexts stay within a syllable (the Indic shaper's GSUB).
+    perSyllable: bool;
+    /// Whether GPOS is running: it passes over hidden joiners.
+    positioning: bool;
     /// Each lookup's feature mask, while lookups are collected (collectLookups).
     masks: [u32; 2048];
     /// The lookups recent runs used, by font, script and kerning: 4 entries of each table's active lookups (index
@@ -79,6 +99,8 @@ struct LayoutBuffer {
     substIndex: [[u16; 192]; 4];
     substMask: [[u32; 192]; 4];
     substCount: [usize; 4];
+    /// Each active GSUB lookup's stage.
+    substStage: [[u8; 192]; 4];
     /// Each active lookup's glyph digest (lookupDigest), two words a lookup.
     substDigest: [[u64; 384]; 4];
     posIndex: [[u16; 192]; 4];
@@ -92,12 +114,15 @@ fn emptyLayoutBuffer() -> LayoutBuffer => LayoutBuffer {
     count: 0,
     nextLig: 1,
     rtl: false,
+    perSyllable: false,
+    positioning: false,
     masks: [0u32; 2048],
     cacheKeys: [0u64; 4],
     cacheNext: 0,
     substIndex: [[0u16; 192]; 4],
     substMask: [[0u32; 192]; 4],
     substCount: [0usize; 4],
+    substStage: [[0u8; 192]; 4],
     substDigest: [[0u64; 384]; 4],
     posIndex: [[0u16; 192]; 4],
     posMask: [[0u32; 192]; 4],
@@ -317,7 +342,8 @@ fn skipped(d: Slice<u8>, gdef: usize, l: Lookup, g: borrow LayoutGlyph) -> bool 
 fn nextUnskipped(d: Slice<u8>, gdef: usize, l: Lookup, b: borrow LayoutBuffer, i: i32) -> i32 {
     var j = i + 1;
     while (j < truncate<i32>(b.count)) {
-        if (!skipped(d, gdef, l, b.g[truncate<usize>(j)])) {
+        let g = b.g[truncate<usize>(j)];
+        if (!skipped(d, gdef, l, g) && !(b.positioning && g.hidden)) {
             return j;
         }
         j += 1;
@@ -329,7 +355,8 @@ fn nextUnskipped(d: Slice<u8>, gdef: usize, l: Lookup, b: borrow LayoutBuffer, i
 fn previousUnskipped(d: Slice<u8>, gdef: usize, l: Lookup, b: borrow LayoutBuffer, i: i32) -> i32 {
     var j = i - 1;
     while (j >= 0) {
-        if (!skipped(d, gdef, l, b.g[truncate<usize>(j)])) {
+        let g = b.g[truncate<usize>(j)];
+        if (!skipped(d, gdef, l, g) && !(b.positioning && g.hidden)) {
             return j;
         }
         j -= 1;
@@ -493,7 +520,8 @@ fn matchInput(
             !itemMatches(d, how, items, k - 1, classes, base, b.g[truncate<usize>(j)].glyph)) {
             j = nextUnskipped(d, gdef, l, b, j);
         }
-        if (j < 0 || !itemMatches(d, how, items, k - 1, classes, base, b.g[truncate<usize>(j)].glyph)) {
+        if (j < 0 || !itemMatches(d, how, items, k - 1, classes, base, b.g[truncate<usize>(j)].glyph) ||
+            (b.perSyllable && b.g[truncate<usize>(j)].syllable != b.g[truncate<usize>(i)].syllable)) {
             return false;
         }
         m.at[m.count] = j;
@@ -501,6 +529,10 @@ fn matchInput(
     }
     return true;
 }
+
+/// Whether a backtrack or lookahead passes over `g` when it is not the glyph wanted: a hidden joiner or selector,
+/// or a ZWJ, which HarfBuzz's context matching always ignores.
+fn contextSkippable(g: borrow LayoutGlyph) -> bool => g.hidden || g.cp == 0x200D;
 
 fn matchBacktrack(
     d: Slice<u8>,
@@ -517,11 +549,12 @@ fn matchBacktrack(
     var j = i;
     for (k in 0..count) {
         j = previousUnskipped(d, gdef, l, b, j);
-        while (j >= 0 && b.g[truncate<usize>(j)].hidden &&
+        while (j >= 0 && contextSkippable(b.g[truncate<usize>(j)]) &&
             !itemMatches(d, how, items, k, classes, base, b.g[truncate<usize>(j)].glyph)) {
             j = previousUnskipped(d, gdef, l, b, j);
         }
-        if (j < 0 || !itemMatches(d, how, items, k, classes, base, b.g[truncate<usize>(j)].glyph)) {
+        if (j < 0 || !itemMatches(d, how, items, k, classes, base, b.g[truncate<usize>(j)].glyph) ||
+            (b.perSyllable && b.g[truncate<usize>(j)].syllable != b.g[truncate<usize>(i)].syllable)) {
             return false;
         }
     }
@@ -543,11 +576,12 @@ fn matchLookahead(
     var j = last;
     for (k in 0..count) {
         j = nextUnskipped(d, gdef, l, b, j);
-        while (j >= 0 && b.g[truncate<usize>(j)].hidden &&
+        while (j >= 0 && contextSkippable(b.g[truncate<usize>(j)]) &&
             !itemMatches(d, how, items, k, classes, base, b.g[truncate<usize>(j)].glyph)) {
             j = nextUnskipped(d, gdef, l, b, j);
         }
-        if (j < 0 || !itemMatches(d, how, items, k, classes, base, b.g[truncate<usize>(j)].glyph)) {
+        if (j < 0 || !itemMatches(d, how, items, k, classes, base, b.g[truncate<usize>(j)].glyph) ||
+            (b.perSyllable && b.g[truncate<usize>(j)].syllable != b.g[truncate<usize>(last)].syllable)) {
             return false;
         }
     }
@@ -760,6 +794,8 @@ fn replaceWithSequence(d: Slice<u8>, gdef: usize, b: borrow mut LayoutBuffer, i:
     for (k in 0..n) {
         var g = source;
         g.glyph = u16at(d, at + k * 2);
+        g.substituted = true;
+        g.multiplied = g.multiplied || n > 1;
         refreshClass(d, gdef, mut g);
         b.g[i + k] = g;
     }
@@ -792,12 +828,14 @@ fn applySubst(
         }
         if (format == 1) {
             b.g[ui].glyph = (glyph + u16at(d, st + 4)) & 0xFFFF;
+            b.g[ui].substituted = true;
         } else {
             let at = st + 6 + truncate<usize>(ci) * 2;
             if (!valid(d, at, 2) || truncate<usize>(ci) >= (u16at(d, st + 4) as usize)) {
                 return -1;
             }
             b.g[ui].glyph = u16at(d, at);
+            b.g[ui].substituted = true;
         }
         refreshClass(d, gdef, mut b.g[ui]);
         return i + 1;
@@ -817,6 +855,7 @@ fn applySubst(
                 return -1;
             }
             b.g[ui].glyph = u16at(d, seq + 2);
+            b.g[ui].substituted = true;
             refreshClass(d, gdef, mut b.g[ui]);
             return i + 1;
         }
@@ -859,6 +898,8 @@ fn applySubst(
             }
             b.g[ui].hidden = hidden;
             b.g[ui].glyph = u16at(d, lig);
+            b.g[ui].substituted = true;
+            b.g[ui].ligated = true;
             b.g[ui].ligId = id;
             b.g[ui].ligComp = 0;
             refreshClass(d, gdef, mut b.g[ui]);
@@ -919,6 +960,7 @@ fn applySubst(
             return -1;
         }
         b.g[ui].glyph = u16at(d, q + 2 + truncate<usize>(ci) * 2);
+        b.g[ui].substituted = true;
         refreshClass(d, gdef, mut b.g[ui]);
         return i + 1;
     }
@@ -980,9 +1022,13 @@ fn markRecord(d: Slice<u8>, array: usize, mi: usize) -> [f32; 3]? {
 
 /// Attaches mark `i` to glyph `j`, the base's anchor at `base` minus the mark's.
 fn attachMark(b: borrow mut LayoutBuffer, i: usize, j: usize, base: [f32; 2], mark: [f32; 3]) {
+    // The base's own vertical offset as it is now goes with the mark (HarfBuzz's MarkArray); a later change to it
+    // does not.
+    let p = b.g[j];
+    let baseY = (if (p.attachTo >= 0) p.attachY else 0.0) + p.yOffset;
     b.g[i].attachTo = truncate<i32>(j);
     b.g[i].attachX = base[0] - mark[1];
-    b.g[i].attachY = base[1] - mark[2];
+    b.g[i].attachY = base[1] - mark[2] + baseY;
 }
 
 /// The glyph before mark `i` that a mark attaches to: the nearest that is not a mark (or, for mark-to-mark, the
@@ -991,8 +1037,25 @@ fn markBase(b: borrow LayoutBuffer, i: i32, onMark: bool) -> i32 {
     var j = i - 1;
     while (j >= 0) {
         let c = b.g[truncate<usize>(j)].glyphClass;
-        if (onMark || c != 3) {
+        // Positioning passes over hidden joiners, as HarfBuzz's GPOS does.
+        if (b.g[truncate<usize>(j)].hidden) {
+            j -= 1;
+            continue;
+        }
+        if (onMark) {
             return j;
+        }
+        if (c != 3) {
+            // A mark goes on the first glyph of a multiple substitution's sequence, not a later one (HarfBuzz).
+            let g = b.g[truncate<usize>(j)];
+            let first = !g.multiplied || g.ligComp == 0 || j == 0;
+            if (first) {
+                return j;
+            }
+            let p = b.g[truncate<usize>(j - 1)];
+            if (p.glyphClass == 3 || !p.multiplied || g.ligId != p.ligId || g.ligComp != p.ligComp + 1) {
+                return j;
+            }
         }
         j -= 1;
     }
@@ -1119,15 +1182,18 @@ fn applyPos(
             Some(a) => a,
             null => { return -1; }
         };
-        // The advances meet at the anchors (HarfBuzz's arithmetic, by direction).
+        // The advances meet at the anchors (HarfBuzz's arithmetic, by direction). A mark's offset there includes
+        // where it is attached, as HarfBuzz keeps it until the end.
+        let upOffset = b.g[up].xOffset + (if (b.g[up].attachTo >= 0) b.g[up].attachX else 0.0);
+        let uiOffset = b.g[ui].xOffset + (if (b.g[ui].attachTo >= 0) b.g[ui].attachX else 0.0);
         if (b.rtl) {
-            let dx = exit[0] + b.g[up].xOffset;
+            let dx = exit[0] + upOffset;
             b.g[up].xAdvance -= dx;
             b.g[up].xOffset -= dx;
-            b.g[ui].xAdvance = entry[0] + b.g[ui].xOffset;
+            b.g[ui].xAdvance = entry[0] + uiOffset;
         } else {
-            b.g[up].xAdvance = exit[0] + b.g[up].xOffset;
-            let dx = entry[0] + b.g[ui].xOffset;
+            b.g[up].xAdvance = exit[0] + upOffset;
+            let dx = entry[0] + uiOffset;
             b.g[ui].xAdvance -= dx;
             b.g[ui].xOffset -= dx;
         }
@@ -1157,8 +1223,19 @@ fn applyPos(
             return -1;
         }
         let uj = truncate<usize>(j);
-        if (kind == 6 && b.g[uj].glyphClass != 3) {
-            return -1;
+        if (kind == 6) {
+            if (b.g[uj].glyphClass != 3) {
+                return -1;
+            }
+            // Two marks of one base, or of one ligature component, or one of them a ligature itself (HarfBuzz).
+            let id1 = b.g[ui].ligId;
+            let id2 = b.g[uj].ligId;
+            let c1 = b.g[ui].ligComp;
+            let c2 = b.g[uj].ligComp;
+            let good = if (id1 == id2) id1 == 0 || c1 == c2 else (id1 > 0 && c1 == 0) || (id2 > 0 && c2 == 0);
+            if (!good) {
+                return -1;
+            }
         }
         let bi = coverageIndex(d, offset16(d, st, st + 4), b.g[uj].glyph);
         if (bi < 0) {
@@ -1422,6 +1499,21 @@ fn applyLookup(
     }
 }
 
+/// Whether the GSUB or GPOS table at `table` has script `tag`.
+fn hasScript(d: Slice<u8>, table: usize, tag: u32) -> bool {
+    let scripts = offset16(d, table, table + 4);
+    if (scripts == 0 || !valid(d, scripts, 2)) {
+        return false;
+    }
+    for (k in 0..(u16at(d, scripts) as usize)) {
+        let r = scripts + 2 + k * 6;
+        if (valid(d, r, 6) && u32at(d, r) == tag) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// How many lookups the GSUB or GPOS table at `table` has.
 fn lookupCount(d: Slice<u8>, table: usize) -> usize {
     let list = offset16(d, table, table + 8);
@@ -1429,12 +1521,13 @@ fn lookupCount(d: Slice<u8>, table: usize) -> usize {
 }
 
 /// Appends the GSUB lookups collectLookups marked (in lookup order) to cache entry `e`, with their digests.
-fn collectStage(d: Slice<u8>, gsub: usize, e: usize, b: borrow mut LayoutBuffer) {
+fn collectStage(d: Slice<u8>, gsub: usize, e: usize, stage: u32, b: borrow mut LayoutBuffer) {
     for (li in 0..lookupCount(d, gsub)) {
         let n = b.substCount[e];
         if (b.masks[li] != 0 && n < 192) {
             b.substIndex[e][n] = truncate<u16>(li);
             b.substMask[e][n] = b.masks[li];
+            b.substStage[e][n] = truncate<u8>(stage);
             let dg = match (lookupAt(d, gsub, li)) {
                 Some(l) => lookupDigest(d, l, true),
                 null => ALL_GLYPHS,
@@ -1488,7 +1581,7 @@ fn cachedLookups(
         }
         if (count > 0) {
             collectLookups(d, f.gsub, script, tags[0..count], tagMasks[0..count], stage == 0, mut b.masks);
-            collectStage(d, f.gsub, e, b);
+            collectStage(d, f.gsub, e, stage, b);
         }
         if (!later) {
             break;
@@ -1540,12 +1633,27 @@ fn layoutRun(
     if (f.gsub == 0 && f.morx != 0) {
         applyMorx(d, f, f.morx, b);
     }
+    substituteStages(d, f, e, 0, 255, b);
+    positionRun(d, f, e, true, b);
+}
+
+/// The GSUB lookups of cache entry `e` whose stage is `first` to `last`, in order.
+fn substituteStages(d: Slice<u8>, f: FontInfo, e: usize, first: u32, last: u32, b: borrow mut LayoutBuffer) {
     for (k in 0..b.substCount[e]) {
+        let stage = b.substStage[e][k] as u32;
+        if (stage < first || stage > last) {
+            continue;
+        }
         let li = b.substIndex[e][k] as usize;
         let mask = b.substMask[e][k];
         let dg = [b.substDigest[e][k * 2], b.substDigest[e][k * 2 + 1]];
         applyLookup(d, f.gsub, f.gdef, true, li, mask, dg, b);
     }
+}
+
+/// Advances from hmtx, then cache entry `e`'s GPOS lookups; marks GPOS attached take no advance when
+/// `zeroAttached` (the Indic shaper keeps theirs, as HarfBuzz's does).
+fn positionRun(d: Slice<u8>, f: FontInfo, e: usize, zeroAttached: bool, b: borrow mut LayoutBuffer) {
     for (i in 0..b.count) {
         b.g[i].xAdvance = glyphAdvance(d, f, b.g[i].glyph);
         b.g[i].xOffset = 0.0;
@@ -1553,12 +1661,14 @@ fn layoutRun(
         b.g[i].attachTo = -1;
         b.g[i].cursiveTo = -1;
     }
+    b.positioning = true;
     for (k in 0..b.posCount[e]) {
         let li = b.posIndex[e][k] as usize;
         let mask = b.posMask[e][k];
         let dg = [b.posDigest[e][k * 2], b.posDigest[e][k * 2 + 1]];
         applyLookup(d, f.gpos, f.gdef, false, li, mask, dg, b);
     }
+    b.positioning = false;
     // A cursive chain hangs each glyph off its parent: parents later in the run first, then those earlier.
     var i = b.count;
     while (i > 0) {
@@ -1574,9 +1684,11 @@ fn layoutRun(
             b.g[j].yOffset += b.g[truncate<usize>(p)].yOffset;
         }
     }
-    for (k in 0..b.count) {
-        if (b.g[k].attachTo >= 0) {
-            b.g[k].xAdvance = 0.0;
+    if (zeroAttached) {
+        for (k in 0..b.count) {
+            if (b.g[k].attachTo >= 0) {
+                b.g[k].xAdvance = 0.0;
+            }
         }
     }
 }

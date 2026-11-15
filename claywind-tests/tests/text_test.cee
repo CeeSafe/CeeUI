@@ -320,3 +320,37 @@ fn nastaliqHangsLettersByCursiveAttachment() -> Result<void, TestFailure> {
     Check.isTrue(raised, "cursive attachment raises the joined letters")?;
     return Ok();
 }
+
+@test
+fn devanagariAndTamilShapeAsHarfBuzzDoes() -> Result<void, TestFailure> {
+    let kohinoor = readFile("/System/Library/Fonts/Kohinoor.ttc");
+    let tamil = readFile("/System/Library/Fonts/Supplemental/Tamil Sangam MN.ttc");
+    if (kohinoor.length == 0 || tamil.length == 0) {
+        Console.writeLine("  (Kohinoor or Tamil Sangam MN not found: skipped)");
+        return Ok();
+    }
+    var storage = heap(67108864);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(16, 16);
+    c.imagePixels = 4;
+    c.fontBytes = 33554432;
+    var ras = Raster.create(memory, c)!;
+    Check.isTrue(ras.loadFont(0, kohinoor.view()), "Kohinoor loads")?;
+    Check.isTrue(ras.loadFont(1, tamil.view()), "Tamil Sangam MN loads")?;
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 16];
+    // हिन्दी: the i-matra moves before its consonant, न् takes its half form; hb-shape's glyphs.
+    let hindi = ras.shapeRun("हिन्दी".bytes(), 0, 1000.0, 0.0, mut out[..])!;
+    let hindiGlyphs = [780u32, 83, 577, 29];
+    Check.equalU64(4, hindi.count as u64)?;
+    for (k in 0usize..4) {
+        Check.equalU64(hindiGlyphs[k] as u64, out[k].glyph as u64)?;
+    }
+    // கொண்டு: the two-part o splits around its consonant (its left part first); hb-shape's glyphs.
+    let word = ras.shapeRun("கொண்டு".bytes(), 1, 1000.0, 0.0, mut out[..])!;
+    let tamilGlyphs = [1229u32, 445, 1225, 479, 517];
+    Check.equalU64(5, word.count as u64)?;
+    for (k in 0usize..5) {
+        Check.equalU64(tamilGlyphs[k] as u64, out[k].glyph as u64)?;
+    }
+    return Ok();
+}

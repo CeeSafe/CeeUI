@@ -107,8 +107,8 @@ fn scriptTag(cp: u32) -> u32 {
         (cp >= 0xFB50 && cp <= 0xFDFF) || (cp >= 0xFE70 && cp <= 0xFEFF)) {
         return 0x61726162; // arab
     }
-    if (cp >= 0x900 && cp <= 0x97F) {
-        return 0x64657632; // dev2
+    if (cp >= 0x900 && cp <= 0xD7F) {
+        return indicScriptTag(cp); // dev2, bng2, gur2, gjr2, ory2, tml2, tel2, knd2, mlm2
     }
     if (cp >= 0xE00 && cp <= 0xE7F) {
         return 0x74686169; // thai
@@ -551,6 +551,19 @@ impl<region r> Raster<r> {
                         }
                     }
                 }
+                // In Indic text a joiner or non-joiner stays, as a glyph: it decides half forms and conjuncts.
+                if ((cp[0] == 0x200C || cp[0] == 0x200D) && b.count > 0 && b.g[b.count - 1].cp >= 0x900 &&
+                    b.g[b.count - 1].cp <= 0xD7F) {
+                    var g = emptyLayoutGlyph();
+                    g.glyph = this.glyphIn(slot, cp[0]);
+                    g.cp = cp[0];
+                    g.cluster = cur.at;
+                    g.mask = FEAT_ALL;
+                    b.g[b.count] = g;
+                    b.count += 1;
+                    cur.at += cp[1] as usize;
+                    continue;
+                }
                 if (ignorable(cp[0])) {
                     // No glyph, but a joiner (ZWJ) or non-joiner (ZWNJ) still decides how its neighbours join.
                     join(mut joining, joiningType(cp[0]), -1, b);
@@ -569,6 +582,7 @@ impl<region r> Raster<r> {
                 }
                 var g = emptyLayoutGlyph();
                 g.glyph = pick[1];
+                g.cp = c;
                 g.cluster = cur.at;
                 g.mask = FEAT_ALL;
                 b.g[b.count] = g;
@@ -598,7 +612,9 @@ impl<region r> Raster<r> {
             let substTags = if (arabic) arabicTags[..] else plainTags[..];
             let substMasks = if (arabic) arabicMasks[..] else plainMasks[..];
             let substStages = if (arabic) arabicStages[..] else plainStages[..];
-            if (info.kern != 0) {
+            if (isIndicTag(script)) {
+                layoutRunIndic(d, info, key, script, b);
+            } else if (info.kern != 0) {
                 layoutRun(
                     d,
                     info,
@@ -644,8 +660,10 @@ impl<region r> Raster<r> {
                 var y = g.yOffset * units;
                 if (g.attachTo >= 0 && truncate<usize>(g.attachTo) < k) {
                     let base = b.g[truncate<usize>(g.attachTo)];
+                    // A mark follows its base across the line, not up and down (HarfBuzz propagates only the
+                    // offset along the line to attached marks).
                     x = base.placedX + g.attachX * units + g.xOffset * units;
-                    y = base.placedY + g.attachY * units + g.yOffset * units;
+                    y = g.attachY * units + g.yOffset * units;
                 }
                 b.g[k].placedX = x;
                 b.g[k].placedY = y;
