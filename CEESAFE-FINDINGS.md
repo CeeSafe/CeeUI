@@ -210,3 +210,18 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
 - **K2. `Slice<u8>` has no `trim`.** Parsing Unicode's test files (fields like ` 2 ` between semicolons) needs one;
   the slice methods are `copyFrom`, `fill`, `swap`, `sortBy`, `forEach`, `any`, `all`, `partitionPoint`, `splitAt`
   and `splitAtMut`, so the tests skip spaces by hand. **Proposed:** `trimmed()` (ASCII whitespace) on `Slice<u8>`.
+- **K3. An `impl` in a file that sorts before its type's file makes the type private to importers.** In package
+  `claywind`, `public struct Ui<region r>` is declared in `src/ui.cee`. Adding `src/state.cee` containing only
+
+  ```
+  impl<region r> Ui<r> {
+      public fn requestFrame(borrow mut this) { this.requested = true; }
+  }
+  ```
+
+  makes every other package's `import claywind.Ui;` fail with `error[N0312]: 'claywind.Ui' is not public: only its
+  own package can use it` (ceesafec 0.49.0). The same impl in `src/zz_state.cee` or `src/ui_edit.cee`, which sort
+  after `ui.cee`, is fine. So visibility seems to be decided from the first declaration-like item for the name in
+  file order, and an `impl` block (which has no `public`) taken as it. ClayWind works around it by naming the file
+  `ui_state.cee`. **Proposed:** an `impl` never decides its type's visibility; a test with the impl's file sorting
+  before the type's.
