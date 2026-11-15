@@ -7,10 +7,12 @@
 
 Each line: font path, face index, units per em, the text's code points (hex, space-separated), and HarfBuzz's
 glyphs as id:x:y;... (x the pen plus x offset, y the y offset, in font units; joiners HarfBuzz hides as a
-zero-width space are left out). Fonts missing on this machine are skipped.
+zero-width space are left out). Fonts missing on this machine are skipped. HB_CASES_FONTS adds fonts, as
+"path,face,first-code-point" entries separated by semicolons (say, a Noto font of a script no system font has).
 """
 
 import json
+import os
 import random
 import unicodedata
 import struct
@@ -40,6 +42,7 @@ WORDS = {
     0xB80: ["தமிழ்", "கொண்டு", "க்ஷ", "ஸ்ரீ", "கோவில்", "பௌத்தம்"],
     0xC00: ["తెలుగు", "క్ష", "ధర్మం", "ప్రేమ", "కొండ", "ర్క"],
     0xC80: ["ಕನ್ನಡ", "ಕ್ಷಮೆ", "ಧರ್ಮ", "ಪ್ರೀತಿ", "ಕೊಂಡ", "ರ್ಕ"],
+    0xD00: ["മലയാളം", "ക്ഷമ", "ധർമ്മം", "പ്രേമം", "കൊണ്ട്", "ര്ക", "ന്റെ", "ക്ക"],
 }
 
 # Offsets within a script's block: consonants, dependent vowels, the virama, the nukta, signs, independent vowels.
@@ -111,8 +114,12 @@ def main():
         sys.exit(__doc__)
     count = int(sys.argv[2]) if len(sys.argv) > 2 else 200
     rng = random.Random(int(sys.argv[3]) if len(sys.argv) > 3 else 1)
+    fonts = list(FONTS)
+    for entry in filter(None, os.environ.get("HB_CASES_FONTS", "").split(";")):
+        path, face, base = entry.split(",")
+        fonts.append((path, int(face), int(base, 16)))
     lines = []
-    for path, face, base in FONTS:
+    for path, face, base in fonts:
         try:
             upem = units_per_em(path, face)
         except OSError:

@@ -39,8 +39,8 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   attachment hangs Nastaliq's letters off one another.
 - **Indic scripts:** Devanagari, Bengali, Gurmukhi, Gujarati, Oriya, Tamil, Telugu, Kannada and Malayalam go
   through an Indic shaper ported from HarfBuzz's: syllables, reordering (pre-base matras, reph), half, below and
-  post-base forms, conjuncts, and decomposition of two-part vowels. Across 7,272 randomized and real words in nine
-  fonts, every glyph and position matches HarfBuzz's (`claywind-tests`' shaping test, with cases from
+  post-base forms, conjuncts, and decomposition of two-part vowels. Across 8,080 randomized and real words in ten
+  fonts (Noto Sans Malayalam among them), every glyph and position matches HarfBuzz's (`claywind-tests`' shaping test, with cases from
   `tools/shaping/hb_cases.py`).
 - **Colour emoji:** bitmap emoji fonts (sbix, as Apple Color Emoji; CBDT, as Noto Color Emoji) and layered ones
   (COLR version 0 with CPAL, as Segoe UI Emoji) draw in their own colours, in Raster and on the GPU (as images). A
