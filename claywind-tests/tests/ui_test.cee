@@ -441,3 +441,70 @@ fn runningOutOfRoomIsReported() -> Result<void, TestFailure> {
     };
     return Check.isTrue(failed, "too many elements for the capacity");
 }
+
+fn documentView(ui: borrow mut Ui, text: Slice<u8>, starts: Slice<u32>, count: usize) {
+    ui.open(Style.column().w(Size.fixed(400.0)).h(Size.fixed(300.0)));
+    Controls.textView(ui, "doc", text, starts, count, Text.of().size(16.0).leading(20.0), false);
+    ui.close();
+}
+
+@test
+fn aHundredThousandLinesCostAScreenful() -> Result<void, TestFailure> {
+    // "line 0" to "line 99999", one a line.
+    var text = heap(1300000);
+    var w = TextWriter.create(mut text.viewMut());
+    for (k in 0u64..100000) {
+        w.text("line ");
+        w.decimal(k);
+        w.byte('\n');
+    }
+    let length = w.written().length;
+    var starts = u32s(100001);
+    let count = indexLines(text.view()[0..length], mut starts.viewMut())!;
+    Check.equalU64(100001, count as u64)?; // the empty line after the last newline
+    let firstLine = lineOf(text.view()[0..length], starts.view(), count, 0);
+    Check.isTrue(firstLine.length == 6, "line 0 has no newline")?;
+    Check.equalU64(50000, lineAt(starts.view(), count, (starts[50000] as usize) + 3) as u64)?;
+    var storage = heap(4194304);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var platform = platformAt(400.0, 300.0, 10.0, 10.0);
+    for (f in 0..2) {
+        ui.begin(mut platform);
+        documentView(mut ui, text.view()[0..length], starts.view(), count);
+        finish(mut ui, mut platform)?;
+    }
+    // Scrolled to line 50000 (20 points a line).
+    ui.scrollBy("doc", 0.0, -1000000.0);
+    let started = Clock.monotonicNanos();
+    ui.begin(mut platform);
+    documentView(mut ui, text.view()[0..length], starts.view(), count);
+    finish(mut ui, mut platform)?;
+    let ms = round<f64>(Clock.monotonicNanos() - started) / 1000000.0;
+    Console.write("  a frame of the 100,000-line view: ");
+    Console.write(ms);
+    Console.writeLine(" ms");
+    expect("scrolled", ui.scrollOffset("doc").y, -1000000.0)?;
+    // Only a screenful of lines are elements, and the one at the top is line 50000.
+    let tree = ui.layout();
+    var texts: usize = 0;
+    var top = false;
+    for (i in 0..tree.commandCount()) {
+        let c = tree.command(i);
+        match (c) {
+            Command.Text(area, _) => {
+                texts += 1;
+                let bytes = ui.textOf(c);
+                if (area.y >= -1.0 && area.y < 19.0) {
+                    top = bytes.length == 10 && bytes[5] == '5' && bytes[9] == '0';
+                }
+            }
+            _ => {}
+        }
+    }
+    Check.isTrue(texts > 10 && texts < 40, "a screenful of lines is drawn")?;
+    // Laid out by the screenful, a frame takes well under a millisecond here; a frame that walked every line would
+    // take hundreds.
+    Check.isTrue(ms < 50.0, "a frame does not walk the whole document")?;
+    return Check.isTrue(top, "line 50000 is at the top");
+}

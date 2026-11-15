@@ -1,0 +1,115 @@
+// SPDX-License-Identifier: MIT
+// Long text: a line index over a UTF-8 document, and a view (Controls.textView) that lays out only the lines on
+// screen. A 100,000-line document costs a frame what a page of it does: the lines above and below the view are
+// spacers of their height, not elements.
+
+/// Indexes the lines of `text` into `starts`: line k begins at byte `starts[k]` (a line ends at its newline, which
+/// it does not include; a final line without one ends with the text). The number of lines, or null when `starts`
+/// has no room for them all. An empty text is one empty line.
+public fn indexLines(text: Slice<u8>, starts: SliceMut<u32>) -> usize? {
+    if (starts.length == 0) {
+        return null;
+    }
+    starts[0] = 0;
+    var n: usize = 1;
+    for (i in 0..text.length) {
+        if (text[i] == '\n') {
+            if (n >= starts.length) {
+                return null;
+            }
+            starts[n] = truncate<u32>(i + 1);
+            n += 1;
+        }
+    }
+    return n;
+}
+
+/// Line `k` of `text` indexed by `starts` (of `count` lines), without its newline (or a CR before it).
+public fn lineOf<region a>(text: Slice<a, u8>, starts: Slice<u32>, count: usize, k: usize) -> Slice<a, u8> {
+    if (k >= count) {
+        return text[0..0];
+    }
+    let from = (starts[k] as usize).min(text.length);
+    var to = if (k + 1 < count) (starts[k + 1] as usize) - 1 else text.length;
+    to = to.max(from).min(text.length);
+    if (to > from && text[to - 1] == '\r') {
+        to -= 1;
+    }
+    return text[from..to];
+}
+
+/// The line holding byte `offset` of a text indexed by `starts` (of `count` lines).
+public fn lineAt(starts: Slice<u32>, count: usize, offset: usize) -> usize {
+    var lo: usize = 0;
+    var hi = count;
+    while (hi - lo > 1) {
+        let mid = lo + (hi - lo) / 2;
+        if ((starts[mid] as usize) <= offset) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+/// The lines a view shows: the first and one past the last, with `extra` lines either side so a scroll of a few
+/// lines draws nothing new at the edges.
+fn visibleLines(offsetY: f32, viewH: f32, lineH: f32, count: usize, extra: usize) -> [usize; 2] {
+    let top = (0.0 - offsetY).max(0.0);
+    let first = truncate<usize>((top / lineH).floor().max(0.0));
+    let shown = truncate<usize>((viewH / lineH).ceil().max(1.0));
+    let from = if (first > extra) first - extra else 0;
+    let to = (first + shown + extra).min(count);
+    return [from.min(count), to];
+}
+
+impl Controls {
+    /// ClayWind_TextView: a scrolling view of a long text indexed by `starts` and `count` (indexLines), laid out a
+    /// screenful at a time. Lines do not wrap and each is `look`'s line height tall (its font size × 1.4 when it
+    /// has none); `gutter` numbers them. Only the lines in view and a few around them become elements, so its cost
+    /// does not grow with the text.
+    public fn textView(
+        ui: borrow mut Ui,
+        id: StringView,
+        text: Slice<u8>,
+        starts: Slice<u32>,
+        count: usize,
+        look: Text,
+        gutter: bool,
+    ) {
+        let config = look.config();
+        let lineH =
+            if (config.lineHeight > 0.0) config.lineHeight
+                else (if (config.fontSize > 0.0) config.fontSize else 16.0) * 1.4;
+        let viewH = match (ui.boxOf(id)) {
+            Some(b) => b.h,
+            null => ui.screenSize().h,
+        };
+        let lines = visibleLines(ui.scrollOffset(id).y, viewH, lineH, count, 4);
+        let digits = if (count >= 100000) 6 else if (count >= 10000) 5 else if (count >= 1000) 4 else 3;
+        let gutterW = round<f32>(digits) * (if (config.fontSize > 0.0) config.fontSize else 16.0) * 0.62 + 12.0;
+        ui.open(Style.column().id(id).w(Size.grow()).h(Size.grow()).scroll(ScrollAxis.Both).bg(SLATE_900));
+        // The lines above the view, as their height.
+        ui.open(Style.box().w(Size.fixed(1.0)).h(Size.fixed(round<f32>(lines[0]) * lineH)));
+        ui.close();
+        let line = look.wrap(TextWrap.None).leading(lineH);
+        for (k in lines[0]..lines[1]) {
+            ui.open(Style.row().h(Size.fixed(lineH)).alignXY(AxisAlign.Start, AxisAlign.Center));
+            if (gutter) {
+                var number = [0u8; 12];
+                var w = TextWriter.create(mut number[..]);
+                w.decimal((k + 1) as u64);
+                ui.open(Style.box().w(Size.fixed(gutterW)).pr(12.0).alignXY(AxisAlign.End, AxisAlign.Center));
+                ui.labelBytes(w.written(), line.color(SLATE_500));
+                ui.close();
+            }
+            ui.labelBytes(lineOf(text, starts, count, k), line);
+            ui.close();
+        }
+        // The lines below it.
+        ui.open(Style.box().w(Size.fixed(1.0)).h(Size.fixed(round<f32>(count - lines[1]) * lineH)));
+        ui.close();
+        ui.close();
+    }
+}

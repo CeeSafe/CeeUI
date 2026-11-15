@@ -59,6 +59,9 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   inside a left-to-right line and as a line of its own, brackets mirrored, and Arabic joins. It passes Unicode 16's BidiTest.txt and
   BidiCharacterTest.txt in full. Not yet: right-aligned right-to-left paragraphs, caret movement and selection in
   visual order.
+- **Long text:** `indexLines` indexes a document's lines once, and `Controls.textView` shows it a screenful at a time,
+  with optional line numbers: only the lines in view become elements, so a 100,000-line document lays out in the
+  time a page does. Not yet: wrapping, editing and selection in it.
 - **Retina output.** `Raster.setPixelRatio` draws at the display's pixel ratio while layout stays in points.
 - **Incremental rendering.** `Damage` works out what changed between frames, and the raster redraws only those
   boxes. The result is byte-identical to a full redraw.
