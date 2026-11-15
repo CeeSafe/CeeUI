@@ -351,7 +351,7 @@ impl<region r> GpuBackend<r> {
     public fn create(raster: Raster<r>) -> GpuBackend<r> {
         var shaped = Vector<ShapedGlyph>.withCapacity(4096)!;
         for (i in 0..4096) {
-            shaped.push(ShapedGlyph { font: 0, glyph: 0, x: 0.0, cluster: 0 })!;
+            shaped.push(ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 })!;
         }
         return GpuBackend {
             raster: raster,
@@ -1099,10 +1099,12 @@ impl<region r> GpuBackend<r> {
             null => { return; }
         };
         let top = area.y * s;
-        let iy = top.floor();
-        let by = step(top - iy, STEPS_Y);
         for (k in 0..shaped.count) {
             let g = this.shaped[k];
+            // A mark GPOS raised or lowered sits off the line by g.y.
+            let y = top + g.y;
+            let iy = y.floor();
+            let by = step(y - iy, STEPS_Y);
             let x = area.x * s + g.x;
             let ix = x.floor();
             let bx = step(x - ix, STEPS_X);

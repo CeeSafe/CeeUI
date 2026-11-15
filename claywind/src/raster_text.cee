@@ -11,9 +11,11 @@ public struct ShapedGlyph {
     /// The loaded font it is drawn from (an index for Raster.rasterizeGlyph), and its glyph id there.
     public font: u32;
     public glyph: u32;
-    /// Where its origin goes: pixels right of the run's start, kerning and letter spacing applied.
+    /// Where its origin goes: pixels right of the run's start, kerning and letter spacing applied, and pixels below
+    /// the baseline (a mark GPOS raised is negative).
     public x: f32;
-    /// The byte offset in the run's UTF-8 of the character it draws.
+    public y: f32;
+    /// The byte offset in the run's UTF-8 of the character it draws (a ligature's first).
     public cluster: usize;
 }
 
@@ -27,10 +29,9 @@ public struct ShapedRun {
     public count: usize;
 }
 
-/// Where the shaper is in a run.
+/// The previous glyph's font, for a mark that stays with it.
 struct ShapeCursor {
     at: usize;
-    /// The pen, in the run's font's units.
     pen: f32;
     previousSlot: usize;
     previousGlyph: u32;
@@ -41,9 +42,18 @@ struct ShapeCursor {
 struct StepGlyph {
     slot: usize;
     glyph: u32;
-    /// The pen at the glyph's origin (kerning applied), in the run's font's units.
+    /// The glyph's origin, in the run's font's units: right of the run's start, and up from the baseline.
     pen: f32;
+    rise: f32;
     cluster: usize;
+}
+
+fn emptyStep() -> StepGlyph => StepGlyph { slot: 0, glyph: 0, pen: 0.0, rise: 0.0, cluster: 0 };
+
+/// What shaping a line came to: the pen after it (the run's font's units) and how many glyphs it made.
+struct ShapeTotals {
+    pen: f32;
+    glyphs: usize;
 }
 
 /// Characters with no glyph and no width: zero-width spaces and joiners, directional marks, variation selectors,
@@ -53,11 +63,53 @@ fn ignorable(cp: u32) -> bool =>
         (cp >= 0x200B && cp <= 0x200F) || (cp >= 0x202A && cp <= 0x202E) || (cp >= 0x2060 && cp <= 0x206F) ||
         cp == 0xFEFF || (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0xE0000 && cp <= 0xE0FFF);
 
-/// Combining marks, which stay in the font of the character they mark when it has them (until Unicode's
-/// categories are in: the combining diacritical blocks).
-fn combining(cp: u32) -> bool =>
-    (cp >= 0x300 && cp <= 0x36F) || (cp >= 0x1AB0 && cp <= 0x1AFF) || (cp >= 0x1DC0 && cp <= 0x1DFF) ||
-        (cp >= 0x20D0 && cp <= 0x20FF) || (cp >= 0xFE20 && cp <= 0xFE2F);
+/// Combining marks (general category Mn, Mc, Me), which stay in the font of the character they mark when it has
+/// them.
+fn combining(cp: u32) -> bool {
+    let gc = gcOf(unicodeProps(cp));
+    return gc == GC_MN || gc == GC_MC || gc == GC_ME;
+}
+
+/// The OpenType script tag for a run whose first strong character is `cp` ('DFLT' and 'latn' are tried after).
+fn scriptTag(cp: u32) -> u32 {
+    if (cp >= 0x370 && cp <= 0x3FF) {
+        return 0x6772656B; // grek
+    }
+    if (cp >= 0x400 && cp <= 0x52F) {
+        return 0x6379726C; // cyrl
+    }
+    if (cp >= 0x590 && cp <= 0x5FF) {
+        return 0x68656272; // hebr
+    }
+    if ((cp >= 0x600 && cp <= 0x6FF) || (cp >= 0x750 && cp <= 0x77F) || (cp >= 0x8A0 && cp <= 0x8FF) ||
+        (cp >= 0xFB50 && cp <= 0xFDFF) || (cp >= 0xFE70 && cp <= 0xFEFF)) {
+        return 0x61726162; // arab
+    }
+    if (cp >= 0x900 && cp <= 0x97F) {
+        return 0x64657632; // dev2
+    }
+    if (cp >= 0xE00 && cp <= 0xE7F) {
+        return 0x74686169; // thai
+    }
+    if ((cp >= 0x1100 && cp <= 0x11FF) || (cp >= 0xAC00 && cp <= 0xD7AF)) {
+        return 0x68616E67; // hang
+    }
+    if (cp >= 0x3040 && cp <= 0x30FF) {
+        return 0x6B616E61; // kana
+    }
+    if ((cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0x20000 && cp <= 0x2FFFF)) {
+        return 0x68616E69; // hani
+    }
+    return 0x6C61746E; // latn
+}
+
+// The features shaped by default: GSUB's, and GPOS's (kern only for a font without a legacy kern table, which is
+// what ThorVG kerns by, so Latin text keeps its pixels).
+const SUBST_TAGS: [u32; 6] = [0x63636D70, 0x6C6F636C, 0x726C6967, 0x6C696761, 0x636C6967, 0x63616C74];
+const SUBST_MASKS: [u32; 6] = [1, 1, 1, 1, 1, 1];
+const POS_TAGS: [u32; 4] = [0x6B65726E, 0x6D61726B, 0x6D6B6D6B, 0x64697374];
+const POS_TAGS_NO_KERN: [u32; 3] = [0x6D61726B, 0x6D6B6D6B, 0x64697374];
+const POS_MASKS: [u32; 4] = [1, 1, 1, 1];
 
 impl<region r> Raster<r> {
     /// The fonts tried, in order, for a character a run's font lacks (font ids, as `loadFont` took them); up to 24.
@@ -145,55 +197,110 @@ impl<region r> Raster<r> {
         return [truncate<u32>(primary), 0];
     }
 
-    /// The next glyph of `utf8` in a run in font `primary`, or null at its end; `spacing` scales every advance
-    /// (letter spacing). Ignorable characters and newlines take no glyph.
-    fn nextGlyph(
+    /// Shapes one line of `utf8` in a run in font `primary`: each stretch of characters that one font draws (the
+    /// run's, or a fallback's) goes through that font's GSUB and GPOS, then its glyphs are placed in order. `spacing`
+    /// scales every advance (letter spacing). Glyphs from the `skip`-th on go into `out` as far as it reaches.
+    fn shapeLine(
         borrow this,
         primary: usize,
         utf8: Slice<u8>,
-        cur: borrow mut ShapeCursor,
         spacing: f32,
-    ) -> StepGlyph? {
+        skip: usize,
+        out: SliceMut<StepGlyph>,
+    ) -> ShapeTotals {
+        var guard = this.layout.write();
+        let b = guard.data();
+        let primaryUpem = this.fonts.get(primary).info.unitsPerEm;
+        var pen: f32 = 0.0;
+        var made: usize = 0;
+        var cur = ShapeCursor { at: 0, pen: 0.0, previousSlot: 0, previousGlyph: 0, hasPrevious: false };
         while (cur.at < utf8.length) {
-            let start = cur.at;
-            let cp = decodeUtf8(utf8, cur.at);
-            cur.at += cp[1] as usize;
-            if (ignorable(cp[0])) {
+            // A stretch of characters in one font, up to the buffer's size.
+            b.count = 0;
+            b.nextLig = 1;
+            var slot: usize = 0;
+            var script: u32 = 0;
+            while (cur.at < utf8.length && b.count < LAYOUT_CAPACITY) {
+                let cp = decodeUtf8(utf8, cur.at);
+                if (ignorable(cp[0])) {
+                    cur.at += cp[1] as usize;
+                    continue;
+                }
+                let pick = this.fontFor(primary, cur, cp[0]);
+                let k = pick[0] as usize;
+                if (b.count > 0 && k != slot) {
+                    break;
+                }
+                slot = k;
+                if (script == 0 && !combining(cp[0]) && cp[0] > 0x40) {
+                    script = scriptTag(cp[0]);
+                }
+                var g = emptyLayoutGlyph();
+                g.glyph = pick[1];
+                g.cluster = cur.at;
+                g.mask = FEAT_ALL;
+                b.g[b.count] = g;
+                b.count += 1;
+                cur.previousSlot = k;
+                cur.previousGlyph = pick[1];
+                cur.hasPrevious = true;
+                cur.at += cp[1] as usize;
+            }
+            if (b.count == 0) {
                 continue;
             }
-            let pick = this.fontFor(primary, cur, cp[0]);
-            let k = pick[0] as usize;
-            let glyph = pick[1];
-            let slot = this.fonts.get(k);
-            let d = this.fontPool[slot.offset..slot.offset + slot.size];
-            // Advances and kerning in the run's font's units.
-            let units = if (k == primary) 1.0 else this.fonts.get(primary).info.unitsPerEm / slot.info.unitsPerEm;
-            var kernX: f32 = 0.0;
-            if (cur.hasPrevious && cur.previousSlot == k) {
-                kernX = kerning(d, slot.info, cur.previousGlyph, glyph) * units;
+            let fs = this.fonts.get(slot);
+            let d = this.fontPool[fs.offset..fs.offset + fs.size];
+            let info = fs.info;
+            // The lookup cache knows a run by its font (its pool offset), script and kerning.
+            let key = ((fs.offset as u64) << 32) | (script as u64);
+            if (info.kern != 0) {
+                layoutRun(
+                    d,
+                    info,
+                    key,
+                    script,
+                    SUBST_TAGS[..],
+                    SUBST_MASKS[..],
+                    POS_TAGS_NO_KERN[..],
+                    POS_MASKS[0..3],
+                    b,
+                );
+            } else {
+                layoutRun(d, info, key, script, SUBST_TAGS[..], SUBST_MASKS[..], POS_TAGS[..], POS_MASKS[..], b);
             }
-            let advance = glyphAdvance(d, slot.info, glyph) * units;
-            let placed = StepGlyph { slot: k, glyph: glyph, pen: cur.pen + kernX, cluster: start };
-            cur.pen += (advance + kernX) * spacing;
-            cur.previousSlot = k;
-            cur.previousGlyph = glyph;
-            cur.hasPrevious = true;
-            return placed;
+            // Advances and kerning in the run's font's units.
+            let units = if (slot == primary) 1.0 else primaryUpem / info.unitsPerEm;
+            for (k in 0..b.count) {
+                let g = b.g[k];
+                var kernX: f32 = 0.0;
+                if (info.kern != 0 && k > 0) {
+                    kernX = kerning(d, info, b.g[k - 1].glyph, g.glyph) * units;
+                }
+                var x = pen + kernX + g.xOffset * units;
+                var y = g.yOffset * units;
+                if (g.attachTo >= 0 && truncate<usize>(g.attachTo) < k) {
+                    let base = b.g[truncate<usize>(g.attachTo)];
+                    x = base.placedX + g.attachX * units + g.xOffset * units;
+                    y = base.placedY + g.attachY * units + g.yOffset * units;
+                }
+                b.g[k].placedX = x;
+                b.g[k].placedY = y;
+                if (made >= skip && made - skip < out.length) {
+                    out[made - skip] = StepGlyph { slot: slot, glyph: g.glyph, pen: x, rise: y, cluster: g.cluster };
+                }
+                made += 1;
+                pen += (g.xAdvance * units + kernX) * spacing;
+            }
         }
-        return null;
+        return ShapeTotals { pen: pen, glyphs: made };
     }
 
     /// The natural width of one line of `utf8` (no newlines) in font `primary`, in its units, and its glyph count.
     fn lineUnits(borrow this, primary: usize, utf8: Slice<u8>) -> [f32; 2] {
-        var cur = ShapeCursor { at: 0, pen: 0.0, previousSlot: 0, previousGlyph: 0, hasPrevious: false };
-        var count: f32 = 0.0;
-        loop {
-            match (this.nextGlyph(primary, utf8, mut cur, 1.0)) {
-                Some(_) => { count += 1.0; }
-                null => { break; }
-            }
-        }
-        return [cur.pen, count];
+        var none = [emptyStep(); 1];
+        let t = this.shapeLine(primary, utf8, 1.0, 0, mut none[0..0]);
+        return [t.pen, round<f32>(t.glyphs)];
     }
 
     /// Letter spacing as a factor on every advance (ThorVG's): the natural width plus `letterSpacing` per glyph,
@@ -248,25 +355,30 @@ impl<region r> Raster<r> {
         let info = this.fonts.get(primary).info;
         let scale = size / info.unitsPerEm;
         let spacing = this.spacingFactor(primary, utf8, size, letterSpacing);
-        var cur = ShapeCursor { at: 0, pen: 0.0, previousSlot: 0, previousGlyph: 0, hasPrevious: false };
-        var count: usize = 0;
+        var chunk = [emptyStep(); 64];
+        var written: usize = 0;
+        var totals = ShapeTotals { pen: 0.0, glyphs: 0 };
         loop {
-            match (this.nextGlyph(primary, utf8, mut cur, spacing)) {
-                Some(g) => {
-                    if (count < out.length) {
-                        out[count] = ShapedGlyph {
-                            font: truncate<u32>(g.slot),
-                            glyph: g.glyph,
-                            x: g.pen * scale,
-                            cluster: g.cluster,
-                        };
-                        count += 1;
-                    }
+            totals = this.shapeLine(primary, utf8, spacing, written, mut chunk[..]);
+            let n = (totals.glyphs - written).min(64);
+            for (k in 0..n) {
+                if (written + k < out.length) {
+                    let g = chunk[k];
+                    out[written + k] = ShapedGlyph {
+                        font: truncate<u32>(g.slot),
+                        glyph: g.glyph,
+                        x: g.pen * scale,
+                        y: 0.0 - g.rise * scale,
+                        cluster: g.cluster,
+                    };
                 }
-                null => { break; }
+            }
+            written += n;
+            if (written >= totals.glyphs || written >= out.length) {
+                break;
             }
         }
-        return ShapedRun { ascent: info.ascent * scale, width: cur.pen * scale, count: count };
+        return ShapedRun { ascent: info.ascent * scale, width: totals.pen * scale, count: written.min(out.length) };
     }
 
     /// Glyph `glyph` of loaded font `font` (a ShapedGlyph's) at `size` pixels per em, alone in a `width` × `height`
@@ -332,29 +444,43 @@ fn drawText(r: borrow mut Raster, area: Rect, run: TextRun, utf8: Slice<u8>) {
     let originX = area.x;
     let originY = area.y + info.ascent * scale;
     beginPath(mut r);
-    var cur = ShapeCursor { at: 0, pen: 0.0, previousSlot: 0, previousGlyph: 0, hasPrevious: false };
+    // The glyphs a chunk at a time: shaping borrows the raster, drawing changes it.
+    var chunk = [emptyStep(); 64];
+    var done: usize = 0;
     loop {
-        let g = match (r.nextGlyph(primary, utf8, mut cur, spacing)) {
-            Some(g) => g,
-            null => { break; }
-        };
-        let slot = r.fonts.get(g.slot);
-        var outline = emptyOutline();
-        {
-            let d = r.fontPool[slot.offset..slot.offset + slot.size];
-            // The run's own glyphs are offset in font units, as they always were; a fallback's by its origin.
-            let ox = if (g.slot == primary) g.pen else 0.0;
-            let decoded = decodeGlyph(d, slot.info, g.glyph, ox, 0.0, 1, mut outline);
+        let totals = r.shapeLine(primary, utf8, spacing, done, mut chunk[..]);
+        let n = (totals.glyphs - done).min(64);
+        for (k in 0..n) {
+            let g = chunk[k];
+            let slot = r.fonts.get(g.slot);
+            var outline = emptyOutline();
+            {
+                let d = r.fontPool[slot.offset..slot.offset + slot.size];
+                // The run's own glyphs are offset in font units, as they always were; a fallback's by its origin.
+                let ox = if (g.slot == primary) g.pen else 0.0;
+                let oy = if (g.slot == primary) 0.0 - g.rise else 0.0;
+                let decoded = decodeGlyph(d, slot.info, g.glyph, ox, oy, 1, mut outline);
+            }
+            // Flush a long run before the path buffer fills.
+            if (r.pointCount + outline.ptCount * 24 > r.points.length) {
+                fillPath(mut r, solidPaint(run.color), FillTarget.Layer);
+                beginPath(mut r);
+            }
+            if (g.slot == primary) {
+                appendOutline(mut r, outline, originX, originY, scale);
+            } else {
+                appendOutline(
+                    mut r,
+                    outline,
+                    originX + g.pen * scale,
+                    originY - g.rise * scale,
+                    size / slot.info.unitsPerEm,
+                );
+            }
         }
-        // Flush a long run before the path buffer fills.
-        if (r.pointCount + outline.ptCount * 24 > r.points.length) {
-            fillPath(mut r, solidPaint(run.color), FillTarget.Layer);
-            beginPath(mut r);
-        }
-        if (g.slot == primary) {
-            appendOutline(mut r, outline, originX, originY, scale);
-        } else {
-            appendOutline(mut r, outline, originX + g.pen * scale, originY, size / slot.info.unitsPerEm);
+        done += n;
+        if (n == 0 || done >= totals.glyphs) {
+            break;
         }
     }
     fillPath(mut r, solidPaint(run.color), FillTarget.Layer);

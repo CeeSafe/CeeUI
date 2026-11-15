@@ -59,7 +59,7 @@ fn fallbackGlyphsAreShapedMeasuredAndDrawn() -> Result<void, TestFailure> {
     Check.isTrue(ras.loadFont(16, wide.view()), "Arial Unicode loads")?;
     let chain = [16u32];
     ras.setFallbacks(chain[..]);
-    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, cluster: 0 }; 8];
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 8];
     // "A中": the A from Arial, 中 from the fallback, after the A's advance (0.667 em at 20px = 13.34).
     let run = ras.shapeRun("A中".bytes(), 0, 20.0, 0.0, mut out[..])!;
     Check.equalU64(2, run.count as u64)?;
@@ -175,7 +175,7 @@ fn cffOutlinesDraw() -> Result<void, TestFailure> {
         null => {}
     }
     // Ink in each of the first four glyphs' cells, and none far below the baseline.
-    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, cluster: 0 }; 8];
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 8];
     let shaped = ras.shapeRun(text.bytes(), 0, 48.0, 0.0, mut out[..])!;
     for (k in 0usize..4) {
         let x0 = 4 + truncate<usize>(out[k].x);
@@ -190,5 +190,30 @@ fn cffOutlinesDraw() -> Result<void, TestFailure> {
         }
         Check.isTrue(ink > 60, "every glyph has ink")?;
     }
+    return Ok();
+}
+
+@test
+fn marksSitOnTheirBases() -> Result<void, TestFailure> {
+    let arial = readFile(arialPath());
+    if (arial.length == 0) {
+        Console.writeLine("  (Arial not found: skipped)");
+        return Ok();
+    }
+    var storage = heap(8388608);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(64, 64);
+    c.imagePixels = 4;
+    c.fontBytes = 2097152;
+    var ras = Raster.create(memory, c)!;
+    Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 8];
+    // e + COMBINING ACUTE: Arial's GPOS 'mark' puts the accent over the e, not after it.
+    let run = ras.shapeRun("e\u{301}".bytes(), 0, 40.0, 0.0, mut out[..])!;
+    Check.equalU64(2, run.count as u64)?;
+    let e = ras.measure("e".bytes(), TextConfig.of(40.0)).w;
+    Check.isTrue(out[1].x > out[0].x && out[1].x < out[0].x + e, "the accent is over the e")?;
+    Check.equalU64(1, out[1].cluster as u64)?;
+    expect("the accent takes no width", run.width, e)?;
     return Ok();
 }

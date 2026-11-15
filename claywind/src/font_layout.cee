@@ -1,0 +1,1443 @@
+// SPDX-License-Identifier: MIT
+// OpenType layout: GSUB substitutes glyphs (ligatures, contextual forms, decompositions) and GPOS positions them
+// (pair kerning, marks on their bases), over a buffer of glyphs, for the features a script asks for. GDEF gives the
+// glyph classes lookups skip by. Offsets are in the font file; a malformed table changes nothing.
+
+/// Feature masks: a glyph takes a feature's lookups only where its mask has the feature's bit.
+const FEAT_ALL: u32 = 1;
+
+/// One glyph in the shaping buffer.
+struct LayoutGlyph {
+    glyph: u32;
+    /// The byte offset in the run's UTF-8 of the first character it came from.
+    cluster: usize;
+    mask: u32;
+    /// GDEF: 1 base, 2 ligature, 3 mark, 4 component (0 unknown); and a mark's attachment class.
+    glyphClass: u32;
+    markClass: u32;
+    /// Which ligature (by number) a glyph belongs to, and which of its components a mark sits on (1-based).
+    ligId: u32;
+    ligComp: u32;
+    /// Advances and offsets, in the font's units.
+    xAdvance: f32;
+    xOffset: f32;
+    yOffset: f32;
+    /// A mark attached by GPOS: the glyph it sits on (an index) and where, relative to that glyph's origin.
+    attachTo: i32;
+    attachX: f32;
+    attachY: f32;
+    /// Where the shaper placed it: pen and rise, in the run's own font's units.
+    placedX: f32;
+    placedY: f32;
+}
+
+fn emptyLayoutGlyph() -> LayoutGlyph => LayoutGlyph {
+    glyph: 0,
+    cluster: 0,
+    mask: 0,
+    glyphClass: 0,
+    markClass: 0,
+    ligId: 0,
+    ligComp: 0,
+    xAdvance: 0.0,
+    xOffset: 0.0,
+    yOffset: 0.0,
+    attachTo: -1,
+    attachX: 0.0,
+    attachY: 0.0,
+    placedX: 0.0,
+    placedY: 0.0,
+};
+
+/// The glyphs a font run holds while it is shaped (Raster's shaping scratch).
+const LAYOUT_CAPACITY: usize = 256;
+
+struct LayoutBuffer {
+    g: [LayoutGlyph; 256];
+    count: usize;
+    /// The next ligature number.
+    nextLig: u32;
+    /// Each lookup's feature mask, while lookups are collected (collectLookups).
+    masks: [u32; 2048];
+    /// The lookups recent runs used, by font, script and kerning: 4 entries of each table's active lookups (index
+    /// and mask), so a run in a font and script seen before collects none.
+    cacheKeys: [u64; 4];
+    cacheNext: usize;
+    substIndex: [[u16; 192]; 4];
+    substMask: [[u32; 192]; 4];
+    substCount: [usize; 4];
+    /// Each active lookup's glyph digest (lookupDigest), two words a lookup.
+    substDigest: [[u64; 384]; 4];
+    posIndex: [[u16; 192]; 4];
+    posMask: [[u32; 192]; 4];
+    posCount: [usize; 4];
+    posDigest: [[u64; 384]; 4];
+}
+
+fn emptyLayoutBuffer() -> LayoutBuffer => LayoutBuffer {
+    g: [emptyLayoutGlyph(); 256],
+    count: 0,
+    nextLig: 1,
+    masks: [0u32; 2048],
+    cacheKeys: [0u64; 4],
+    cacheNext: 0,
+    substIndex: [[0u16; 192]; 4],
+    substMask: [[0u32; 192]; 4],
+    substCount: [0usize; 4],
+    substDigest: [[0u64; 384]; 4],
+    posIndex: [[0u16; 192]; 4],
+    posMask: [[0u32; 192]; 4],
+    posCount: [0usize; 4],
+    posDigest: [[0u64; 384]; 4],
+};
+
+// ---- common tables ---------------------------------------------------------------------------------------------
+
+/// `glyph`'s index in the Coverage table at `at`, or -1.
+fn coverageIndex(d: Slice<u8>, at: usize, glyph: u32) -> i32 {
+    if (!valid(d, at, 4)) {
+        return -1;
+    }
+    let format = u16at(d, at);
+    let count = u16at(d, at + 2) as usize;
+    if (format == 1) {
+        if (!valid(d, at + 4, count * 2)) {
+            return -1;
+        }
+        var lo: usize = 0;
+        var hi = count;
+        while (lo < hi) {
+            let mid = lo + (hi - lo) / 2;
+            let g = u16at(d, at + 4 + mid * 2);
+            if (g == glyph) {
+                return truncate<i32>(mid);
+            }
+            if (g < glyph) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return -1;
+    }
+    if (format == 2) {
+        if (!valid(d, at + 4, count * 6)) {
+            return -1;
+        }
+        var lo: usize = 0;
+        var hi = count;
+        while (lo < hi) {
+            let mid = lo + (hi - lo) / 2;
+            let r = at + 4 + mid * 6;
+            let first = u16at(d, r);
+            let last = u16at(d, r + 2);
+            if (glyph < first) {
+                hi = mid;
+            } else if (glyph > last) {
+                lo = mid + 1;
+            } else {
+                return truncate<i32>(u16at(d, r + 4) + glyph - first);
+            }
+        }
+    }
+    return -1;
+}
+
+/// `glyph`'s class in the ClassDef table at `at` (0 when it has none).
+fn classOf(d: Slice<u8>, at: usize, glyph: u32) -> u32 {
+    if (at == 0 || !valid(d, at, 4)) {
+        return 0;
+    }
+    let format = u16at(d, at);
+    if (format == 1) {
+        if (!valid(d, at, 6)) {
+            return 0;
+        }
+        let first = u16at(d, at + 2);
+        let count = u16at(d, at + 4);
+        if (glyph < first || glyph >= first + count || !valid(d, at + 6, (count as usize) * 2)) {
+            return 0;
+        }
+        return u16at(d, at + 6 + ((glyph - first) as usize) * 2);
+    }
+    if (format == 2) {
+        let count = u16at(d, at + 2) as usize;
+        if (!valid(d, at + 4, count * 6)) {
+            return 0;
+        }
+        var lo: usize = 0;
+        var hi = count;
+        while (lo < hi) {
+            let mid = lo + (hi - lo) / 2;
+            let r = at + 4 + mid * 6;
+            if (glyph < u16at(d, r)) {
+                hi = mid;
+            } else if (glyph > u16at(d, r + 2)) {
+                lo = mid + 1;
+            } else {
+                return u16at(d, r + 4);
+            }
+        }
+    }
+    return 0;
+}
+
+/// An offset16 at `at` from `base`, as an offset in the file (0 when null).
+fn offset16(d: Slice<u8>, base: usize, at: usize) -> usize {
+    if (!valid(d, at, 2)) {
+        return 0;
+    }
+    let o = u16at(d, at) as usize;
+    return if (o == 0) 0 else base + o;
+}
+
+// ---- GDEF ------------------------------------------------------------------------------------------------------
+
+/// GDEF's glyph class and mark attachment class of each glyph in the buffer.
+fn assignClasses(d: Slice<u8>, gdef: usize, b: borrow mut LayoutBuffer) {
+    if (gdef == 0 || !valid(d, gdef, 12)) {
+        return;
+    }
+    let classes = offset16(d, gdef, gdef + 4);
+    let marks = offset16(d, gdef, gdef + 10);
+    for (i in 0..b.count) {
+        b.g[i].glyphClass = classOf(d, classes, b.g[i].glyph);
+        b.g[i].markClass = classOf(d, marks, b.g[i].glyph);
+    }
+}
+
+fn refreshClass(d: Slice<u8>, gdef: usize, g: borrow mut LayoutGlyph) {
+    if (gdef == 0 || !valid(d, gdef, 12)) {
+        return;
+    }
+    g.glyphClass = classOf(d, offset16(d, gdef, gdef + 4), g.glyph);
+    g.markClass = classOf(d, offset16(d, gdef, gdef + 10), g.glyph);
+}
+
+/// Whether mark filtering set `set` of GDEF holds `glyph`.
+fn inMarkSet(d: Slice<u8>, gdef: usize, set: u32, glyph: u32) -> bool {
+    if (gdef == 0 || !valid(d, gdef, 14) || u16at(d, gdef + 2) < 2) {
+        return false;
+    }
+    let sets = offset16(d, gdef, gdef + 12);
+    if (sets == 0 || !valid(d, sets, 4) || set >= u16at(d, sets + 2)) {
+        return false;
+    }
+    let at = sets + 4 + (set as usize) * 4;
+    if (!valid(d, at, 4)) {
+        return false;
+    }
+    return coverageIndex(d, sets + (u32at(d, at) as usize), glyph) >= 0;
+}
+
+// ---- lookups ---------------------------------------------------------------------------------------------------
+
+/// A lookup's type (an Extension's own type), flags, mark filtering set and subtables.
+struct Lookup {
+    kind: u32;
+    flags: u32;
+    markSet: u32;
+    at: usize;
+    count: usize;
+}
+
+/// Lookup `index` of the GSUB or GPOS table at `table`; `extension` is its Extension type (7 GSUB, 9 GPOS).
+fn lookupAt(d: Slice<u8>, table: usize, index: usize) -> Lookup? {
+    let list = offset16(d, table, table + 8);
+    if (list == 0 || !valid(d, list, 2) || index >= (u16at(d, list) as usize)) {
+        return null;
+    }
+    let at = offset16(d, list, list + 2 + index * 2);
+    if (at == 0 || !valid(d, at, 6)) {
+        return null;
+    }
+    let flags = u16at(d, at + 2);
+    let count = u16at(d, at + 4) as usize;
+    var markSet: u32 = 0;
+    if ((flags & 0x10) != 0 && valid(d, at + 6 + count * 2, 2)) {
+        markSet = u16at(d, at + 6 + count * 2);
+    }
+    return Lookup { kind: u16at(d, at), flags: flags, markSet: markSet, at: at, count: count };
+}
+
+/// Subtable `k` of a lookup, past an Extension: its type and offset.
+fn subtableOf(d: Slice<u8>, l: Lookup, k: usize, extension: u32) -> [usize; 2]? {
+    let st = offset16(d, l.at, l.at + 6 + k * 2);
+    if (st == 0) {
+        return null;
+    }
+    if (l.kind == extension) {
+        if (!valid(d, st, 8) || u16at(d, st) != 1) {
+            return null;
+        }
+        return [u16at(d, st + 2) as usize, st + (u32at(d, st + 4) as usize)];
+    }
+    return [l.kind as usize, st];
+}
+
+/// Whether lookup flags `flags` skip glyph `g` (marks, bases or ligatures by GDEF class, other mark classes).
+fn skipped(d: Slice<u8>, gdef: usize, l: Lookup, g: borrow LayoutGlyph) -> bool {
+    let c = g.glyphClass;
+    if (c == 1 && (l.flags & 2) != 0) {
+        return true;
+    }
+    if (c == 2 && (l.flags & 4) != 0) {
+        return true;
+    }
+    if (c == 3) {
+        if ((l.flags & 8) != 0) {
+            return true;
+        }
+        if ((l.flags & 0x10) != 0) {
+            return !inMarkSet(d, gdef, l.markSet, g.glyph);
+        }
+        let attachType = l.flags >> 8;
+        if (attachType != 0 && g.markClass != attachType) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// The next glyph after `i` a lookup does not skip, or -1.
+fn nextUnskipped(d: Slice<u8>, gdef: usize, l: Lookup, b: borrow LayoutBuffer, i: i32) -> i32 {
+    var j = i + 1;
+    while (j < truncate<i32>(b.count)) {
+        if (!skipped(d, gdef, l, b.g[truncate<usize>(j)])) {
+            return j;
+        }
+        j += 1;
+    }
+    return -1;
+}
+
+/// The previous glyph before `i` a lookup does not skip, or -1.
+fn previousUnskipped(d: Slice<u8>, gdef: usize, l: Lookup, b: borrow LayoutBuffer, i: i32) -> i32 {
+    var j = i - 1;
+    while (j >= 0) {
+        if (!skipped(d, gdef, l, b.g[truncate<usize>(j)])) {
+            return j;
+        }
+        j -= 1;
+    }
+    return -1;
+}
+
+/// The lookups the features `tags` (with their masks) of script `script` ask for, as a mask per lookup index in
+/// `masks` (the required feature's for every glyph). A script the table lacks uses DFLT, then latn.
+fn collectLookups(
+    d: Slice<u8>,
+    table: usize,
+    script: u32,
+    tags: Slice<u32>,
+    featureMasks: Slice<u32>,
+    masks: borrow mut [u32; 2048],
+) {
+    for (k in 0..2048) {
+        masks[k] = 0;
+    }
+    if (table == 0 || !valid(d, table, 10)) {
+        return;
+    }
+    let scripts = offset16(d, table, table + 4);
+    let features = offset16(d, table, table + 6);
+    if (scripts == 0 || features == 0 || !valid(d, scripts, 2) || !valid(d, features, 2)) {
+        return;
+    }
+    var chosen: usize = 0;
+    let wanted = [script, 0x44464C54, 0x6C61746E]; // the script, 'DFLT', 'latn'
+    for (w in wanted) {
+        if (chosen != 0) {
+            break;
+        }
+        let n = u16at(d, scripts) as usize;
+        for (k in 0..n) {
+            let r = scripts + 2 + k * 6;
+            if (valid(d, r, 6) && u32at(d, r) == w) {
+                chosen = offset16(d, scripts, r + 4);
+                break;
+            }
+        }
+    }
+    if (chosen == 0 || !valid(d, chosen, 4)) {
+        return;
+    }
+    let langSys = offset16(d, chosen, chosen);
+    if (langSys == 0 || !valid(d, langSys, 6)) {
+        return;
+    }
+    let featureCount = u16at(d, features) as usize;
+    let required = u16at(d, langSys + 2);
+    let count = u16at(d, langSys + 4) as usize;
+    for (k in 0..count + 1) {
+        var fi: usize = 0;
+        var mask: u32 = 0;
+        if (k == count) {
+            if (required == 0xFFFF) {
+                break;
+            }
+            fi = required as usize;
+            mask = 0xFFFFFFFF;
+        } else {
+            if (!valid(d, langSys + 6 + k * 2, 2)) {
+                break;
+            }
+            fi = u16at(d, langSys + 6 + k * 2) as usize;
+        }
+        if (fi >= featureCount) {
+            continue;
+        }
+        let record = features + 2 + fi * 6;
+        if (!valid(d, record, 6)) {
+            continue;
+        }
+        if (k < count) {
+            let tag = u32at(d, record);
+            for (t in 0..tags.length) {
+                if (tags[t] == tag) {
+                    mask |= featureMasks[t];
+                }
+            }
+            if (mask == 0) {
+                continue;
+            }
+        }
+        let feature = offset16(d, features, record + 4);
+        if (feature == 0 || !valid(d, feature, 4)) {
+            continue;
+        }
+        let lookups = u16at(d, feature + 2) as usize;
+        for (j in 0..lookups) {
+            if (!valid(d, feature + 4 + j * 2, 2)) {
+                break;
+            }
+            let li = u16at(d, feature + 4 + j * 2) as usize;
+            if (li < 2048) {
+                masks[li] |= mask;
+            }
+        }
+    }
+}
+
+// ---- context matching (GSUB 5/6, GPOS 7/8) -----------------------------------------------------------------------
+
+/// Where a context rule's input glyphs matched (indices), and how many.
+struct Matched {
+    at: [i32; 64];
+    count: usize;
+}
+
+/// How an input, backtrack or lookahead item is given: by glyph id, by class (in a ClassDef), or by Coverage.
+const MATCH_GLYPH: u32 = 0;
+const MATCH_CLASS: u32 = 1;
+const MATCH_COVERAGE: u32 = 2;
+
+/// Whether `glyph` matches item `k` of the array of u16s at `items`, given as `how` (with `classes` or `base`).
+fn itemMatches(d: Slice<u8>, how: u32, items: usize, k: usize, classes: usize, base: usize, glyph: u32) -> bool {
+    if (!valid(d, items + k * 2, 2)) {
+        return false;
+    }
+    let v = u16at(d, items + k * 2);
+    if (how == MATCH_GLYPH) {
+        return glyph == v;
+    }
+    if (how == MATCH_CLASS) {
+        return classOf(d, classes, glyph) == v;
+    }
+    return coverageIndex(d, base + (v as usize), glyph) >= 0;
+}
+
+/// Matches a rule's `count` input glyphs forward from glyph `i` (the first already matched; `items` lists the rest).
+fn matchInput(
+    d: Slice<u8>,
+    gdef: usize,
+    l: Lookup,
+    b: borrow LayoutBuffer,
+    i: i32,
+    count: usize,
+    how: u32,
+    items: usize,
+    classes: usize,
+    base: usize,
+    includeFirst: bool,
+    m: borrow mut Matched,
+) -> bool {
+    // The first glyph is matched already; `items` lists the rest (count - 1 of them).
+    let ignored = includeFirst;
+    m.at[0] = i;
+    m.count = 1;
+    var j = i;
+    for (k in 1..count) {
+        if (m.count >= 64) {
+            return false;
+        }
+        j = nextUnskipped(d, gdef, l, b, j);
+        if (j < 0 || !itemMatches(d, how, items, k - 1, classes, base, b.g[truncate<usize>(j)].glyph)) {
+            return false;
+        }
+        m.at[m.count] = j;
+        m.count += 1;
+    }
+    return true;
+}
+
+fn matchBacktrack(
+    d: Slice<u8>,
+    gdef: usize,
+    l: Lookup,
+    b: borrow LayoutBuffer,
+    i: i32,
+    count: usize,
+    how: u32,
+    items: usize,
+    classes: usize,
+    base: usize,
+) -> bool {
+    var j = i;
+    for (k in 0..count) {
+        j = previousUnskipped(d, gdef, l, b, j);
+        if (j < 0 || !itemMatches(d, how, items, k, classes, base, b.g[truncate<usize>(j)].glyph)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn matchLookahead(
+    d: Slice<u8>,
+    gdef: usize,
+    l: Lookup,
+    b: borrow LayoutBuffer,
+    last: i32,
+    count: usize,
+    how: u32,
+    items: usize,
+    classes: usize,
+    base: usize,
+) -> bool {
+    var j = last;
+    for (k in 0..count) {
+        j = nextUnskipped(d, gdef, l, b, j);
+        if (j < 0 || !itemMatches(d, how, items, k, classes, base, b.g[truncate<usize>(j)].glyph)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// A matched context rule's nested lookups: `records` SequenceLookupRecords at `at`, run at the matched glyphs.
+/// Returns the index after the matched input.
+fn applyNested(
+    d: Slice<u8>,
+    table: usize,
+    gdef: usize,
+    gsub: bool,
+    b: borrow mut LayoutBuffer,
+    m: borrow mut Matched,
+    records: usize,
+    at: usize,
+    depth: u32,
+) -> i32 {
+    for (r in 0..records) {
+        if (!valid(d, at + r * 4, 4)) {
+            break;
+        }
+        let seq = u16at(d, at + r * 4) as usize;
+        let li = u16at(d, at + r * 4 + 2) as usize;
+        if (seq >= m.count) {
+            continue;
+        }
+        let before = b.count;
+        let pos = m.at[seq];
+        let ignored = applyLookupAt(d, table, gdef, gsub, li, b, pos, 0xFFFFFFFF, depth + 1);
+        let delta = truncate<i32>(b.count) - truncate<i32>(before);
+        if (delta != 0) {
+            for (k in seq + 1..m.count) {
+                m.at[k] += delta;
+            }
+        }
+    }
+    return m.at[m.count - 1] + 1;
+}
+
+/// A context (GSUB 5, GPOS 7) or chained context (GSUB 6, GPOS 8) subtable at `st`, at glyph `i`: the index after
+/// the input it matched, or -1.
+fn applyContext(
+    d: Slice<u8>,
+    table: usize,
+    gdef: usize,
+    gsub: bool,
+    l: Lookup,
+    chained: bool,
+    st: usize,
+    b: borrow mut LayoutBuffer,
+    i: i32,
+    depth: u32,
+) -> i32 {
+    if (!valid(d, st, 6)) {
+        return -1;
+    }
+    let format = u16at(d, st);
+    let glyph = b.g[truncate<usize>(i)].glyph;
+    var m = Matched { at: [0i32; 64], count: 0 };
+    if (format == 3) {
+        // Coverages: [backtrack], input, [lookahead], then the records.
+        var p = st + 2;
+        var backtrack: usize = 0;
+        var backtrackAt: usize = 0;
+        if (chained) {
+            backtrack = u16at(d, p) as usize;
+            backtrackAt = p + 2;
+            p += 2 + backtrack * 2;
+        }
+        if (!valid(d, p, 2)) {
+            return -1;
+        }
+        let input = u16at(d, p) as usize;
+        var inputAt = p + 2;
+        var records: usize = 0;
+        if (!chained) {
+            // Context format 3: glyphCount, seqLookupCount, coverages.
+            records = u16at(d, p + 2) as usize;
+            inputAt = p + 4;
+        }
+        if (input == 0 || coverageIndex(d, st + (u16at(d, inputAt) as usize), glyph) < 0) {
+            return -1;
+        }
+        if (!matchInput(d, gdef, l, b, i, input, MATCH_COVERAGE, inputAt + 2, 0, st, true, mut m)) {
+            return -1;
+        }
+        var recordsAt = inputAt + input * 2;
+        if (chained) {
+            if (!matchBacktrack(d, gdef, l, b, i, backtrack, MATCH_COVERAGE, backtrackAt, 0, st)) {
+                return -1;
+            }
+            let lookahead = u16at(d, recordsAt) as usize;
+            if (!matchLookahead(d, gdef, l, b, m.at[m.count - 1], lookahead, MATCH_COVERAGE, recordsAt + 2, 0, st)) {
+                return -1;
+            }
+            recordsAt += 2 + lookahead * 2;
+            records = u16at(d, recordsAt) as usize;
+            recordsAt += 2;
+        }
+        return applyNested(d, table, gdef, gsub, b, mut m, records, recordsAt, depth);
+    }
+    let coverage = offset16(d, st, st + 2);
+    let ci = coverageIndex(d, coverage, glyph);
+    if (ci < 0) {
+        return -1;
+    }
+    var backtrackClasses: usize = 0;
+    var inputClasses: usize = 0;
+    var lookaheadClasses: usize = 0;
+    var setsAt = st + 4;
+    var setIndex = truncate<usize>(ci);
+    let how = if (format == 2) MATCH_CLASS else MATCH_GLYPH;
+    if (format == 2) {
+        if (chained) {
+            backtrackClasses = offset16(d, st, st + 4);
+            inputClasses = offset16(d, st, st + 6);
+            lookaheadClasses = offset16(d, st, st + 8);
+            setsAt = st + 10;
+        } else {
+            inputClasses = offset16(d, st, st + 4);
+            setsAt = st + 6;
+        }
+        setIndex = classOf(d, inputClasses, glyph) as usize;
+    } else if (format != 1) {
+        return -1;
+    }
+    if (!valid(d, setsAt, 2) || setIndex >= (u16at(d, setsAt) as usize)) {
+        return -1;
+    }
+    let set = offset16(d, st, setsAt + 2 + setIndex * 2);
+    if (set == 0 || !valid(d, set, 2)) {
+        return -1;
+    }
+    let rules = u16at(d, set) as usize;
+    for (r in 0..rules) {
+        let rule = offset16(d, set, set + 2 + r * 2);
+        if (rule == 0 || !valid(d, rule, 4)) {
+            continue;
+        }
+        var p = rule;
+        var backtrack: usize = 0;
+        var backtrackAt: usize = 0;
+        if (chained) {
+            backtrack = u16at(d, p) as usize;
+            backtrackAt = p + 2;
+            p += 2 + backtrack * 2;
+        }
+        if (!valid(d, p, 2)) {
+            continue;
+        }
+        let input = u16at(d, p) as usize;
+        var records: usize = 0;
+        var inputAt = p + 2;
+        if (!chained) {
+            records = u16at(d, p + 2) as usize;
+            inputAt = p + 4;
+        }
+        if (input == 0) {
+            continue;
+        }
+        if (!matchInput(d, gdef, l, b, i, input, how, inputAt, inputClasses, 0, false, mut m)) {
+            continue;
+        }
+        var recordsAt = inputAt + (input - 1) * 2;
+        if (chained) {
+            if (!matchBacktrack(d, gdef, l, b, i, backtrack, how, backtrackAt, backtrackClasses, 0)) {
+                continue;
+            }
+            if (!valid(d, recordsAt, 2)) {
+                continue;
+            }
+            let lookahead = u16at(d, recordsAt) as usize;
+            if (!matchLookahead(d, gdef, l, b, m.at[m.count - 1], lookahead, how, recordsAt + 2, lookaheadClasses, 0)) {
+                continue;
+            }
+            recordsAt += 2 + lookahead * 2;
+            if (!valid(d, recordsAt, 2)) {
+                continue;
+            }
+            records = u16at(d, recordsAt) as usize;
+            recordsAt += 2;
+        }
+        return applyNested(d, table, gdef, gsub, b, mut m, records, recordsAt, depth);
+    }
+    return -1;
+}
+
+// ---- GSUB ------------------------------------------------------------------------------------------------------
+
+/// Replaces glyph `i` by `n` glyphs from the u16 array at `at` (a Multiple Substitution's sequence).
+fn replaceWithSequence(d: Slice<u8>, gdef: usize, b: borrow mut LayoutBuffer, i: usize, at: usize, n: usize) -> bool {
+    if (b.count - 1 + n > LAYOUT_CAPACITY || !valid(d, at, n * 2)) {
+        return false;
+    }
+    let source = b.g[i];
+    // Move the tail to make room (or to close the gap when n is 0).
+    if (n > 1) {
+        var k = b.count;
+        while (k > i + 1) {
+            k -= 1;
+            b.g[k + n - 1] = b.g[k];
+        }
+    } else if (n == 0) {
+        for (k in i + 1..b.count) {
+            b.g[k - 1] = b.g[k];
+        }
+    }
+    for (k in 0..n) {
+        var g = source;
+        g.glyph = u16at(d, at + k * 2);
+        refreshClass(d, gdef, mut g);
+        b.g[i + k] = g;
+    }
+    b.count = b.count - 1 + n;
+    return true;
+}
+
+/// GSUB subtable `st` of type `kind` at glyph `i`: the index to continue at, or -1 when it did not apply.
+fn applySubst(
+    d: Slice<u8>,
+    table: usize,
+    gdef: usize,
+    l: Lookup,
+    kind: usize,
+    st: usize,
+    b: borrow mut LayoutBuffer,
+    i: i32,
+    depth: u32,
+) -> i32 {
+    if (!valid(d, st, 6)) {
+        return -1;
+    }
+    let ui = truncate<usize>(i);
+    let glyph = b.g[ui].glyph;
+    let format = u16at(d, st);
+    if (kind == 1) { // single
+        let ci = coverageIndex(d, offset16(d, st, st + 2), glyph);
+        if (ci < 0) {
+            return -1;
+        }
+        if (format == 1) {
+            b.g[ui].glyph = (glyph + u16at(d, st + 4)) & 0xFFFF;
+        } else {
+            let at = st + 6 + truncate<usize>(ci) * 2;
+            if (!valid(d, at, 2) || truncate<usize>(ci) >= (u16at(d, st + 4) as usize)) {
+                return -1;
+            }
+            b.g[ui].glyph = u16at(d, at);
+        }
+        refreshClass(d, gdef, mut b.g[ui]);
+        return i + 1;
+    }
+    if (kind == 2 || kind == 3) { // multiple; alternate (the first)
+        let ci = coverageIndex(d, offset16(d, st, st + 2), glyph);
+        if (ci < 0 || truncate<usize>(ci) >= (u16at(d, st + 4) as usize)) {
+            return -1;
+        }
+        let seq = offset16(d, st, st + 6 + truncate<usize>(ci) * 2);
+        if (seq == 0 || !valid(d, seq, 2)) {
+            return -1;
+        }
+        let n = u16at(d, seq) as usize;
+        if (kind == 3) {
+            if (n == 0 || !valid(d, seq + 2, 2)) {
+                return -1;
+            }
+            b.g[ui].glyph = u16at(d, seq + 2);
+            refreshClass(d, gdef, mut b.g[ui]);
+            return i + 1;
+        }
+        if (!replaceWithSequence(d, gdef, b, ui, seq + 2, n)) {
+            return -1;
+        }
+        return i + truncate<i32>(n);
+    }
+    if (kind == 4) { // ligature
+        let ci = coverageIndex(d, offset16(d, st, st + 2), glyph);
+        if (ci < 0 || truncate<usize>(ci) >= (u16at(d, st + 4) as usize)) {
+            return -1;
+        }
+        let set = offset16(d, st, st + 6 + truncate<usize>(ci) * 2);
+        if (set == 0 || !valid(d, set, 2)) {
+            return -1;
+        }
+        let ligatures = u16at(d, set) as usize;
+        var m = Matched { at: [0i32; 64], count: 0 };
+        for (k in 0..ligatures) {
+            let lig = offset16(d, set, set + 2 + k * 2);
+            if (lig == 0 || !valid(d, lig, 4)) {
+                continue;
+            }
+            let components = u16at(d, lig + 2) as usize;
+            if (components == 0 || components > 64) {
+                continue;
+            }
+            if (!matchInput(d, gdef, l, b, i, components, MATCH_GLYPH, lig + 4, 0, 0, false, mut m)) {
+                continue;
+            }
+            // The ligature takes the first glyph's place; its other components go, and marks between them keep
+            // which component they were on (for mark-to-ligature).
+            let id = b.nextLig;
+            b.nextLig += 1;
+            b.g[ui].glyph = u16at(d, lig);
+            b.g[ui].ligId = id;
+            b.g[ui].ligComp = 0;
+            refreshClass(d, gdef, mut b.g[ui]);
+            var write = ui + 1;
+            var component: u32 = 1;
+            var next: usize = 1;
+            var r = ui + 1;
+            let last = truncate<usize>(m.at[m.count - 1]);
+            while (r <= last) {
+                if (next < m.count && truncate<usize>(m.at[next]) == r) {
+                    component += 1;
+                    next += 1;
+                    r += 1;
+                    continue;
+                }
+                var g = b.g[r];
+                g.ligId = id;
+                g.ligComp = component;
+                b.g[write] = g;
+                write += 1;
+                r += 1;
+            }
+            let removed = last + 1 - write;
+            for (k2 in last + 1..b.count) {
+                b.g[k2 - removed] = b.g[k2];
+            }
+            b.count -= removed;
+            return truncate<i32>(write);
+        }
+        return -1;
+    }
+    if (kind == 5 || kind == 6) {
+        return applyContext(d, table, gdef, true, l, kind == 6, st, b, i, depth);
+    }
+    if (kind == 8) { // reverse chaining single: done in applyLookup's backward pass
+        let ci = coverageIndex(d, offset16(d, st, st + 2), glyph);
+        if (ci < 0) {
+            return -1;
+        }
+        let backtrack = u16at(d, st + 4) as usize;
+        if (!matchBacktrack(d, gdef, l, b, i, backtrack, MATCH_COVERAGE, st + 6, 0, st)) {
+            return -1;
+        }
+        let p = st + 6 + backtrack * 2;
+        if (!valid(d, p, 2)) {
+            return -1;
+        }
+        let lookahead = u16at(d, p) as usize;
+        if (!matchLookahead(d, gdef, l, b, i, lookahead, MATCH_COVERAGE, p + 2, 0, st)) {
+            return -1;
+        }
+        let q = p + 2 + lookahead * 2;
+        if (!valid(d, q, 2) || truncate<usize>(ci) >= (u16at(d, q) as usize) || !valid(
+            d,
+            q + 2 + truncate<usize>(ci) * 2,
+            2,
+        )) {
+            return -1;
+        }
+        b.g[ui].glyph = u16at(d, q + 2 + truncate<usize>(ci) * 2);
+        refreshClass(d, gdef, mut b.g[ui]);
+        return i + 1;
+    }
+    return -1;
+}
+
+// ---- GPOS ------------------------------------------------------------------------------------------------------
+
+/// The size of a ValueRecord of `format`.
+fn valueSize(format: u32) -> usize {
+    var n: usize = 0;
+    for (bit in 0u32..8) {
+        if ((format & (1u32 << bit)) != 0) {
+            n += 2;
+        }
+    }
+    return n;
+}
+
+/// Adds the ValueRecord of `format` at `at` to glyph `g` (device adjustments are not read).
+fn addValue(d: Slice<u8>, at: usize, format: u32, g: borrow mut LayoutGlyph) {
+    if (!valid(d, at, valueSize(format))) {
+        return;
+    }
+    var p = at;
+    if ((format & 1) != 0) {
+        g.xOffset += round<f32>(i16at(d, p));
+        p += 2;
+    }
+    if ((format & 2) != 0) {
+        g.yOffset += round<f32>(i16at(d, p));
+        p += 2;
+    }
+    if ((format & 4) != 0) {
+        g.xAdvance += round<f32>(i16at(d, p));
+    }
+}
+
+/// An Anchor table's point, or null.
+fn anchorAt(d: Slice<u8>, at: usize) -> [f32; 2]? {
+    if (at == 0 || !valid(d, at, 6)) {
+        return null;
+    }
+    return [round<f32>(i16at(d, at + 2)), round<f32>(i16at(d, at + 4))];
+}
+
+/// The mark's class and anchor from a MarkArray at `array`, for mark coverage index `mi`.
+fn markRecord(d: Slice<u8>, array: usize, mi: usize) -> [f32; 3]? {
+    if (array == 0 || !valid(d, array, 2) || mi >= (u16at(d, array) as usize)) {
+        return null;
+    }
+    let r = array + 2 + mi * 4;
+    if (!valid(d, r, 4)) {
+        return null;
+    }
+    let a = anchorAt(d, offset16(d, array, r + 2))?;
+    return [round<f32>(u16at(d, r)), a[0], a[1]];
+}
+
+/// Attaches mark `i` to glyph `j`, the base's anchor at `base` minus the mark's.
+fn attachMark(b: borrow mut LayoutBuffer, i: usize, j: usize, base: [f32; 2], mark: [f32; 3]) {
+    b.g[i].attachTo = truncate<i32>(j);
+    b.g[i].attachX = base[0] - mark[1];
+    b.g[i].attachY = base[1] - mark[2];
+}
+
+/// The glyph before mark `i` that a mark attaches to: the nearest that is not a mark (or, for mark-to-mark, the
+/// nearest glyph at all).
+fn markBase(b: borrow LayoutBuffer, i: i32, onMark: bool) -> i32 {
+    var j = i - 1;
+    while (j >= 0) {
+        let c = b.g[truncate<usize>(j)].glyphClass;
+        if (onMark || c != 3) {
+            return j;
+        }
+        j -= 1;
+    }
+    return -1;
+}
+
+/// GPOS subtable `st` of type `kind` at glyph `i`: the index to continue at, or -1 when it did not apply.
+fn applyPos(
+    d: Slice<u8>,
+    table: usize,
+    gdef: usize,
+    l: Lookup,
+    kind: usize,
+    st: usize,
+    b: borrow mut LayoutBuffer,
+    i: i32,
+    depth: u32,
+) -> i32 {
+    if (!valid(d, st, 6)) {
+        return -1;
+    }
+    let ui = truncate<usize>(i);
+    let glyph = b.g[ui].glyph;
+    let format = u16at(d, st);
+    if (kind == 1) { // single
+        let ci = coverageIndex(d, offset16(d, st, st + 2), glyph);
+        if (ci < 0) {
+            return -1;
+        }
+        let vf = u16at(d, st + 4);
+        if (format == 1) {
+            addValue(d, st + 6, vf, mut b.g[ui]);
+        } else {
+            addValue(d, st + 8 + truncate<usize>(ci) * valueSize(vf), vf, mut b.g[ui]);
+        }
+        return i + 1;
+    }
+    if (kind == 2) { // pair
+        let ci = coverageIndex(d, offset16(d, st, st + 2), glyph);
+        if (ci < 0 || !valid(d, st, 10)) {
+            return -1;
+        }
+        let j = nextUnskipped(d, gdef, l, b, i);
+        if (j < 0) {
+            return -1;
+        }
+        let uj = truncate<usize>(j);
+        let second = b.g[uj].glyph;
+        let vf1 = u16at(d, st + 4);
+        let vf2 = u16at(d, st + 6);
+        let s1 = valueSize(vf1);
+        let s2 = valueSize(vf2);
+        if (format == 1) {
+            if (truncate<usize>(ci) >= (u16at(d, st + 8) as usize)) {
+                return -1;
+            }
+            let set = offset16(d, st, st + 10 + truncate<usize>(ci) * 2);
+            if (set == 0 || !valid(d, set, 2)) {
+                return -1;
+            }
+            let count = u16at(d, set) as usize;
+            let size = 2 + s1 + s2;
+            var lo: usize = 0;
+            var hi = count;
+            while (lo < hi) {
+                let mid = lo + (hi - lo) / 2;
+                let r = set + 2 + mid * size;
+                if (!valid(d, r, size)) {
+                    return -1;
+                }
+                let g2 = u16at(d, r);
+                if (g2 == second) {
+                    addValue(d, r + 2, vf1, mut b.g[ui]);
+                    addValue(d, r + 2 + s1, vf2, mut b.g[uj]);
+                    return if (vf2 != 0) j + 1 else j;
+                }
+                if (g2 < second) {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            return -1;
+        }
+        if (format == 2) {
+            if (!valid(d, st, 16)) {
+                return -1;
+            }
+            let c1 = classOf(d, offset16(d, st, st + 8), glyph) as usize;
+            let c2 = classOf(d, offset16(d, st, st + 10), second) as usize;
+            let n1 = u16at(d, st + 12) as usize;
+            let n2 = u16at(d, st + 14) as usize;
+            if (c1 >= n1 || c2 >= n2) {
+                return -1;
+            }
+            let r = st + 16 + (c1 * n2 + c2) * (s1 + s2);
+            addValue(d, r, vf1, mut b.g[ui]);
+            addValue(d, r + s1, vf2, mut b.g[uj]);
+            return if (vf2 != 0) j + 1 else j;
+        }
+        return -1;
+    }
+    if (kind == 4 || kind == 6) { // mark to base, mark to mark
+        let mi = coverageIndex(d, offset16(d, st, st + 2), glyph);
+        if (mi < 0 || !valid(d, st, 12)) {
+            return -1;
+        }
+        let j = if (kind == 6) previousUnskipped(d, gdef, l, b, i) else markBase(b, i, false);
+        if (j < 0) {
+            return -1;
+        }
+        let uj = truncate<usize>(j);
+        if (kind == 6 && b.g[uj].glyphClass != 3) {
+            return -1;
+        }
+        let bi = coverageIndex(d, offset16(d, st, st + 4), b.g[uj].glyph);
+        if (bi < 0) {
+            return -1;
+        }
+        let classes = u16at(d, st + 6) as usize;
+        let mark = match (markRecord(d, offset16(d, st, st + 8), truncate<usize>(mi))) {
+            Some(m) => m,
+            null => { return -1; }
+        };
+        let array = offset16(d, st, st + 10);
+        let mc = truncate<usize>(mark[0]);
+        if (array == 0 || mc >= classes || !valid(d, array + 2 + (truncate<usize>(bi) * classes + mc) * 2, 2)) {
+            return -1;
+        }
+        let base = match (anchorAt(d, offset16(d, array, array + 2 + (truncate<usize>(bi) * classes + mc) * 2))) {
+            Some(a) => a,
+            null => { return -1; }
+        };
+        attachMark(b, ui, uj, base, mark);
+        return i + 1;
+    }
+    if (kind == 5) { // mark to ligature
+        let mi = coverageIndex(d, offset16(d, st, st + 2), glyph);
+        if (mi < 0 || !valid(d, st, 12)) {
+            return -1;
+        }
+        let j = markBase(b, i, false);
+        if (j < 0) {
+            return -1;
+        }
+        let uj = truncate<usize>(j);
+        let li = coverageIndex(d, offset16(d, st, st + 4), b.g[uj].glyph);
+        if (li < 0) {
+            return -1;
+        }
+        let classes = u16at(d, st + 6) as usize;
+        let mark = match (markRecord(d, offset16(d, st, st + 8), truncate<usize>(mi))) {
+            Some(m) => m,
+            null => { return -1; }
+        };
+        let ligArray = offset16(d, st, st + 10);
+        let attach = offset16(d, ligArray, ligArray + 2 + truncate<usize>(li) * 2);
+        if (attach == 0 || !valid(d, attach, 2)) {
+            return -1;
+        }
+        let components = u16at(d, attach) as usize;
+        if (components == 0) {
+            return -1;
+        }
+        var comp = components - 1;
+        if (b.g[ui].ligId != 0 && b.g[ui].ligId == b.g[uj].ligId && b.g[ui].ligComp > 0) {
+            comp = ((b.g[ui].ligComp as usize) - 1).min(components - 1);
+        }
+        let mc = truncate<usize>(mark[0]);
+        if (mc >= classes) {
+            return -1;
+        }
+        let base = match (anchorAt(d, offset16(d, attach, attach + 2 + (comp * classes + mc) * 2))) {
+            Some(a) => a,
+            null => { return -1; }
+        };
+        attachMark(b, ui, uj, base, mark);
+        return i + 1;
+    }
+    if (kind == 7 || kind == 8) {
+        return applyContext(d, table, gdef, false, l, kind == 8, st, b, i, depth);
+    }
+    return -1;
+}
+
+// ---- driving lookups -------------------------------------------------------------------------------------------
+
+/// Lookup `li` of GSUB (`gsub`) or GPOS at glyph `i` only: the index to continue at, or -1.
+fn applyLookupAt(
+    d: Slice<u8>,
+    table: usize,
+    gdef: usize,
+    gsub: bool,
+    li: usize,
+    b: borrow mut LayoutBuffer,
+    i: i32,
+    mask: u32,
+    depth: u32,
+) -> i32 {
+    if (depth > 8 || i < 0 || truncate<usize>(i) >= b.count) {
+        return -1;
+    }
+    let l = match (lookupAt(d, table, li)) {
+        Some(x) => x,
+        null => { return -1; }
+    };
+    let ignored = mask;
+    return applyLookupWith(d, table, gdef, gsub, l, b, i, depth);
+}
+
+/// Lookup `l` (parsed) at glyph `i` only: the index to continue at, or -1.
+fn applyLookupWith(
+    d: Slice<u8>,
+    table: usize,
+    gdef: usize,
+    gsub: bool,
+    l: Lookup,
+    b: borrow mut LayoutBuffer,
+    i: i32,
+    depth: u32,
+) -> i32 {
+    if (skipped(d, gdef, l, b.g[truncate<usize>(i)])) {
+        return -1;
+    }
+    let extension: u32 = if (gsub) 7 else 9;
+    for (k in 0..l.count) {
+        let sub = match (subtableOf(d, l, k, extension)) {
+            Some(s) => s,
+            null => { continue; }
+        };
+        let r = if (gsub) applySubst(d, table, gdef, l, sub[0], sub[1], b, i, depth) else applyPos(
+            d,
+            table,
+            gdef,
+            l,
+            sub[0],
+            sub[1],
+            b,
+            i,
+            depth,
+        );
+        if (r >= 0) {
+            return r;
+        }
+    }
+    return -1;
+}
+
+/// Lookup `li` over the whole buffer, at the glyphs whose mask meets `mask` (reverse chaining ones from the end).
+// ---- glyph digests ---------------------------------------------------------------------------------------------
+
+/// A digest that lets every glyph through.
+const ALL_GLYPHS: [u64; 2] = [0xFFFFFFFFFFFFFFFFu64, 0xFFFFFFFFFFFFFFFFu64];
+
+/// Adds glyphs `first` to `last` to digest `dg`: one bit for the glyph's low six bits and one for the next six,
+/// so a glyph missing either bit is in none of the glyphs added.
+fn digestRange(dg: borrow mut [u64; 2], first: u32, last: u32) {
+    if (last < first) {
+        return;
+    }
+    if (last - first >= 63) {
+        dg[0] = ALL_GLYPHS[0];
+    } else {
+        for (g in first..last + 1) {
+            dg[0] = dg[0] | (1u64 << (g & 63));
+        }
+    }
+    if ((last >> 6) - (first >> 6) >= 63) {
+        dg[1] = ALL_GLYPHS[1];
+    } else {
+        for (h in (first >> 6)..(last >> 6) + 1) {
+            dg[1] = dg[1] | (1u64 << (h & 63));
+        }
+    }
+}
+
+/// Adds the glyphs of the Coverage table at `at` to `dg`; false when the table cannot be read.
+fn digestCoverage(d: Slice<u8>, at: usize, dg: borrow mut [u64; 2]) -> bool {
+    if (at == 0 || !valid(d, at, 4)) {
+        return false;
+    }
+    let format = u16at(d, at);
+    let count = u16at(d, at + 2) as usize;
+    if (format == 1 && valid(d, at + 4, count * 2)) {
+        for (k in 0..count) {
+            let g = u16at(d, at + 4 + k * 2);
+            digestRange(dg, g, g);
+        }
+        return true;
+    }
+    if (format == 2 && valid(d, at + 4, count * 6)) {
+        for (k in 0..count) {
+            digestRange(dg, u16at(d, at + 4 + k * 6), u16at(d, at + 6 + k * 6));
+        }
+        return true;
+    }
+    return false;
+}
+
+/// The digest of the glyphs lookup `l` can start at: the first coverage of each subtable (the first input
+/// coverage of a format 3 context), or every glyph when a subtable cannot be read.
+fn lookupDigest(d: Slice<u8>, l: Lookup, gsub: bool) -> [u64; 2] {
+    var dg = [0u64, 0u64];
+    let context: u32 = if (gsub) 5 else 7;
+    for (k in 0..l.count) {
+        let s = match (subtableOf(d, l, k, if (gsub) 7 else 9)) {
+            Some(x) => x,
+            null => { return ALL_GLYPHS; }
+        };
+        let st = s[1];
+        if (!valid(d, st, 6)) {
+            return ALL_GLYPHS;
+        }
+        var cover = offset16(d, st, st + 2);
+        if (u16at(d, st) == 3 && s[0] == context as usize) {
+            cover = offset16(d, st, st + 6);
+        } else if (u16at(d, st) == 3 && s[0] == context as usize + 1) {
+            let n = u16at(d, st + 2) as usize;
+            cover = offset16(d, st, st + 6 + n * 2);
+        }
+        if (!digestCoverage(d, cover, mut dg)) {
+            return ALL_GLYPHS;
+        }
+    }
+    return dg;
+}
+
+/// Whether `glyph` may be in the glyphs digest `dg` holds.
+fn mayHold(dg: [u64; 2], glyph: u32) -> bool {
+    return (dg[0] & (1u64 << (glyph & 63))) != 0 && (dg[1] & (1u64 << ((glyph >> 6) & 63))) != 0;
+}
+
+/// Lookup `li` with feature mask `mask` across the buffer, at glyphs digest `dg` may hold.
+fn applyLookup(
+    d: Slice<u8>,
+    table: usize,
+    gdef: usize,
+    gsub: bool,
+    li: usize,
+    mask: u32,
+    dg: [u64; 2],
+    b: borrow mut LayoutBuffer,
+) {
+    let l = match (lookupAt(d, table, li)) {
+        Some(x) => x,
+        null => { return; }
+    };
+    var reverse = gsub && l.kind == 8;
+    if (gsub && l.kind == 7 && l.count > 0) {
+        match (subtableOf(d, l, 0, 7)) {
+            Some(s) => { reverse = s[0] == 8; }
+            null => {}
+        }
+    }
+    if (reverse) {
+        var i = truncate<i32>(b.count) - 1;
+        while (i >= 0) {
+            let g = b.g[truncate<usize>(i)];
+            if ((g.mask & mask) != 0 && mayHold(dg, g.glyph)) {
+                let ignored = applyLookupWith(d, table, gdef, gsub, l, b, i, 0);
+            }
+            i -= 1;
+        }
+        return;
+    }
+    var i: i32 = 0;
+    while (i < truncate<i32>(b.count)) {
+        let g = b.g[truncate<usize>(i)];
+        if ((g.mask & mask) == 0 || !mayHold(dg, g.glyph)) {
+            i += 1;
+            continue;
+        }
+        let r = applyLookupWith(d, table, gdef, gsub, l, b, i, 0);
+        i = if (r > i) r else i + 1;
+    }
+}
+
+/// How many lookups the GSUB or GPOS table at `table` has.
+fn lookupCount(d: Slice<u8>, table: usize) -> usize {
+    let list = offset16(d, table, table + 8);
+    return if (list == 0 || !valid(d, list, 2)) 0 else (u16at(d, list) as usize).min(2048);
+}
+
+/// The cache entry for `key`, collecting it (the lookups of the features asked for, in lookup order) on a miss.
+fn cachedLookups(
+    d: Slice<u8>,
+    f: FontInfo,
+    key: u64,
+    script: u32,
+    substTags: Slice<u32>,
+    substMasks: Slice<u32>,
+    posTags: Slice<u32>,
+    posMasks: Slice<u32>,
+    b: borrow mut LayoutBuffer,
+) -> usize {
+    for (e in 0usize..4) {
+        if (b.cacheKeys[e] == key) {
+            return e;
+        }
+    }
+    let e = b.cacheNext;
+    b.cacheNext = (e + 1) % 4;
+    b.cacheKeys[e] = key;
+    b.substCount[e] = 0;
+    b.posCount[e] = 0;
+    if (f.gsub != 0) {
+        collectLookups(d, f.gsub, script, substTags, substMasks, mut b.masks);
+        for (li in 0..lookupCount(d, f.gsub)) {
+            let n = b.substCount[e];
+            if (b.masks[li] != 0 && n < 192) {
+                b.substIndex[e][n] = truncate<u16>(li);
+                b.substMask[e][n] = b.masks[li];
+                let dg = match (lookupAt(d, f.gsub, li)) {
+                    Some(l) => lookupDigest(d, l, true),
+                    null => ALL_GLYPHS,
+                };
+                b.substDigest[e][n * 2] = dg[0];
+                b.substDigest[e][n * 2 + 1] = dg[1];
+                b.substCount[e] = n + 1;
+            }
+        }
+    }
+    if (f.gpos != 0) {
+        collectLookups(d, f.gpos, script, posTags, posMasks, mut b.masks);
+        for (li in 0..lookupCount(d, f.gpos)) {
+            let n = b.posCount[e];
+            if (b.masks[li] != 0 && n < 192) {
+                b.posIndex[e][n] = truncate<u16>(li);
+                b.posMask[e][n] = b.masks[li];
+                let dg = match (lookupAt(d, f.gpos, li)) {
+                    Some(l) => lookupDigest(d, l, false),
+                    null => ALL_GLYPHS,
+                };
+                b.posDigest[e][n * 2] = dg[0];
+                b.posDigest[e][n * 2 + 1] = dg[1];
+                b.posCount[e] = n + 1;
+            }
+        }
+    }
+    return e;
+}
+
+/// Shapes the glyphs in `b` (cmap glyphs, clusters, masks) with face `f`'s GSUB and GPOS for script `script`
+/// (an OpenType script tag), applying the features `substTags` and `posTags` with their masks; `key` names the face,
+/// script and feature set for the lookup cache. Then every glyph has its advance and offsets in font units; marks
+/// GPOS attached have no advance of their own.
+fn layoutRun(
+    d: Slice<u8>,
+    f: FontInfo,
+    key: u64,
+    script: u32,
+    substTags: Slice<u32>,
+    substMasks: Slice<u32>,
+    posTags: Slice<u32>,
+    posMasks: Slice<u32>,
+    b: borrow mut LayoutBuffer,
+) {
+    assignClasses(d, f.gdef, b);
+    let e = cachedLookups(d, f, key, script, substTags, substMasks, posTags, posMasks, b);
+    for (k in 0..b.substCount[e]) {
+        let li = b.substIndex[e][k] as usize;
+        let mask = b.substMask[e][k];
+        let dg = [b.substDigest[e][k * 2], b.substDigest[e][k * 2 + 1]];
+        applyLookup(d, f.gsub, f.gdef, true, li, mask, dg, b);
+    }
+    for (i in 0..b.count) {
+        b.g[i].xAdvance = glyphAdvance(d, f, b.g[i].glyph);
+        b.g[i].xOffset = 0.0;
+        b.g[i].yOffset = 0.0;
+        b.g[i].attachTo = -1;
+    }
+    for (k in 0..b.posCount[e]) {
+        let li = b.posIndex[e][k] as usize;
+        let mask = b.posMask[e][k];
+        let dg = [b.posDigest[e][k * 2], b.posDigest[e][k * 2 + 1]];
+        applyLookup(d, f.gpos, f.gdef, false, li, mask, dg, b);
+    }
+    for (i in 0..b.count) {
+        if (b.g[i].attachTo >= 0) {
+            b.g[i].xAdvance = 0.0;
+        }
+    }
+}

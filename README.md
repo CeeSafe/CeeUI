@@ -31,6 +31,10 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   collections (.ttc), CID-keyed CJK fonts such as Hiragino and Noto Sans CJK included. Text
   is shaped into glyphs that measuring and drawing share, and a character the run's font lacks comes from a
   fallback chain (`Raster.setFallbacks`), so CJK, Hangul, Greek and Cyrillic draw in a Latin run.
+- **OpenType shaping:** each font run goes through the font's own GSUB and GPOS lookups (all substitution
+  types, and single, pair, mark-to-base, mark-to-ligature, mark-to-mark and contextual positioning) for the
+  run's script, with GDEF glyph classes and lookup flags: ligatures, contextual alternates, GPOS kerning, and
+  combining marks placed on their base by the font's anchors.
 - **System fonts as fallbacks:** `claywind-fonts` (hosted; `SystemFonts.supply`) finds, among the OS's own fonts, a
   face for each character the loaded ones lack, and loads it into the fallback chain. Its catalog (each face's
   coverage, weight and style, read from its cmap and OS/2 tables) is built the first time a character is missing.
