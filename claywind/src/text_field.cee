@@ -42,6 +42,28 @@ fn offsetAt<M: TextMetrics>(metrics: borrow M, text: Slice<u8>, x: f32) -> usize
     return text.length;
 }
 
+/// Whether byte `b` ends a word: ASCII space, punctuation or a symbol (a letter, digit or anything non-ASCII does
+/// not).
+fn wordBreakByte(b: u8) -> bool =>
+    b < 0x80 && !((b >= '0' && b <= '9') || (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || b == '_');
+
+/// The word around byte `at` of `text`: its start and end (by grapheme clusters).
+fn wordAround(text: Slice<u8>, at: usize) -> [usize; 2] {
+    var from = at.min(text.length);
+    var to = from;
+    while (from > 0) {
+        let b = graphemeBefore(text, from);
+        if (wordBreakByte(text[b])) {
+            break;
+        }
+        from = b;
+    }
+    while (to < text.length && !wordBreakByte(text[to])) {
+        to = graphemeEnd(text, to);
+    }
+    return [from, to];
+}
+
 /// Replaces the selection of `buf[0..len]` with the typeable characters of `utf8` (as far as they fit): the caret
 /// after them, nothing selected. Whether anything changed.
 fn replaceSelection(buf: SliceMut<u8>, len: borrow mut usize, edit: borrow mut TextEdit, utf8: Slice<u8>) -> bool {
@@ -103,10 +125,19 @@ impl Controls {
                     if (!ui.shiftDown()) {
                         edit.anchor = edit.caret;
                     }
+                    // A double click selects the word, a triple click everything.
+                    if (ui.pressCount() == 2) {
+                        let w = wordAround(buf[0..len], edit.caret);
+                        edit.anchor = w[0];
+                        edit.caret = w[1];
+                    } else if (ui.pressCount() >= 3) {
+                        edit.anchor = 0;
+                        edit.caret = len;
+                    }
                 }
                 null => {}
             }
-        } else if (ui.captured() == h && p.down) {
+        } else if (ui.captured() == h && p.down && ui.pressCount() < 2) {
             match (box) {
                 Some(b) => { edit.caret = offsetAt(metrics, buf[0..len], p.position.x - b.x - padX); }
                 null => {}
@@ -205,8 +236,12 @@ impl Controls {
         if (focused && edit.selects()) {
             let x0 = metrics.measure(buf[0..edit.from()], config).w;
             let x1 = metrics.measure(buf[0..edit.to()], config).w;
-            ui.open(Style.box().absolute().left(padX + x0).top(padY).w(Size.fixed(x1 - x0)).h(Size.fixed(FIELD_TEXT))
-                .bg(BLUE_700));
+            ui.open(
+                Style.box().absolute().passthrough().left(padX + x0).top(padY).w(
+                    Size.fixed(x1 - x0),
+                ).h(Size.fixed(FIELD_TEXT))
+                    .bg(BLUE_700),
+            );
             ui.close();
         }
         // The text, with the composition (underlined) at the caret while the input method composes.
@@ -239,7 +274,7 @@ impl Controls {
         ui.close();
         if (focused) {
             if ((truncate<u64>((ui.time() * 2.0).floor()) & 1) == 0 || composing) {
-                ui.open(Style.box().absolute().left(padX + caretX).top(padY).w(Size.fixed(2.0))
+                ui.open(Style.box().absolute().passthrough().left(padX + caretX).top(padY).w(Size.fixed(2.0))
                     .h(Size.fixed(FIELD_TEXT)).bg(SLATE_200));
                 ui.close();
             }

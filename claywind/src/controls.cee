@@ -520,7 +520,7 @@ public struct Controls {
         if (focused && (truncate<u64>((ui.time() * 2.0).floor()) & 1) == 0) {
             let cx = metrics.measure(buf[0..caret], TextConfig.of(18.0)).w;
             ui.open(
-                Style.box().absolute().left(
+                Style.box().absolute().passthrough().left(
                     space(3.0) + cx,
                 ).top(space(2.0)).w(Size.fixed(2.0)).h(Size.fixed(18.0)).bg(SLATE_200),
             );

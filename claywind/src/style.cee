@@ -171,6 +171,8 @@ struct Props {
     bottom: f32;
     insetRight: bool;
     insetBottom: bool;
+    /// pointer-events-none: an absolute or fixed element lets the pointer through to what is under it.
+    passthrough: bool;
     z: i32;
     cursor: Cursor?;
     tx: f32?;
@@ -236,6 +238,7 @@ fn noProps() -> Props => Props {
     bottom: 0.0,
     insetRight: false,
     insetBottom: false,
+    passthrough: false,
     z: 0,
     cursor: null,
     tx: null,
@@ -430,6 +433,7 @@ fn applyProps(d: borrow mut Decl, p: Props) {
                 y: if (anchorBottom) -p.bottom else p.top,
             };
             d.floating.zIndex = p.z;
+            d.floating.passthrough = p.passthrough;
         }
         null => {}
     }
@@ -1133,6 +1137,12 @@ public struct Style {
 
     // ---- position and transforms -------------------------------------------------------------------------------
 
+    /// pointer-events-none: an absolute or fixed element the pointer passes through (a highlight, a caret).
+    public fn passthrough(this) -> Style {
+        var s = this;
+        s.props.passthrough = true;
+        return s;
+    }
     public fn absolute(this) -> Style {
         var s = this;
         s.props.position = Position.Absolute;

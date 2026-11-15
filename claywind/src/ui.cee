@@ -85,6 +85,10 @@ public struct Ui<region r> {
     composingCaret: usize;
     caretArea: Rect;
     wantsText: bool;
+    // Repeated presses: when and where the last went down, and how many came in quick succession.
+    lastPressTime: f64;
+    lastPressAt: Vec2;
+    presses: u32;
 
     /// A context whose memory comes from `memory`, which it borrows for its whole life.
     public fn create(memory: borrow(r) FixedBufferAllocator, capacity: UiCapacity) -> Result<Ui<r>, AllocError> {
@@ -144,6 +148,9 @@ public struct Ui<region r> {
             composingCaret: 0,
             caretArea: Rect.zero(),
             wantsText: false,
+            lastPressTime: -1.0,
+            lastPressAt: Vec2.zero(),
+            presses: 0,
         });
     }
 
@@ -190,6 +197,12 @@ public struct Ui<region r> {
         // Clicks: an element is clicked when the pointer went down and came back up over it.
         this.clickedIds.clear();
         if (pointer.pressed) {
+            // A press soon after the last, near it, counts on (a double or triple click).
+            let near = (pointer.position.x - this.lastPressAt.x).abs() <= 4.0 &&
+                (pointer.position.y - this.lastPressAt.y).abs() <= 4.0;
+            this.presses = if (near && this.clock - this.lastPressTime <= 0.4) this.presses + 1 else 1;
+            this.lastPressTime = this.clock;
+            this.lastPressAt = pointer.position;
             this.pressedIds.clear();
             for (i in 0..this.tree.pointerOverCount()) {
                 this.pressedIds.push(this.tree.pointerOverAt(i));
@@ -364,6 +377,9 @@ public struct Ui<region r> {
         }
         return false;
     }
+
+    /// How many presses came in quick succession, this one included (2 for a double click, 3 for a triple).
+    public fn pressCount(borrow this) -> u32 => this.presses;
 
     /// Seconds since start, from the platform (ClayWind_Time).
     public fn time(borrow this) -> f64 => this.clock;

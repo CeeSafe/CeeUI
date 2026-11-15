@@ -595,3 +595,44 @@ fn textFieldSelectsCopiesCutsAndPastes() -> Result<void, TestFailure> {
     // 10 points a byte here: "x" and the 3 bytes of the composition before its caret, past the padding.
     return Check.isTrue((area.x - box.x - space(3.0) - 40.0).abs() < 0.5, "the caret is after the composed text");
 }
+
+@test
+fn doubleClickSelectsAWordAndTripleClickEverything() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(400.0, 300.0, 20.0, 15.0);
+    var buf = [0u8; 64];
+    let start = "hello world";
+    for (k in 0..start.length) {
+        buf[k] = start.bytes()[k];
+    }
+    var len = start.length;
+    var edit = TextEdit.at(0);
+    fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 0)?;
+    let box = ui.boxOf("field")!;
+    // Inside "world" (10 points a byte here): byte 8, past the padding.
+    platform.pointerState.position = Vec2 { x: box.x + space(3.0) + 85.0, y: box.y + 10.0 };
+    for (click in 1..4) {
+        platform.clock += 0.1;
+        platform.pointerState.pressed = true;
+        platform.pointerState.down = true;
+        fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 0)?;
+        platform.pointerState.down = false;
+        platform.pointerState.released = true;
+        fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 0)?;
+        if (click == 1) {
+            Check.isTrue(!edit.selects() && edit.caret == 8 || edit.caret == 9, "a click places the caret")?;
+        } else if (click == 2) {
+            Check.isTrue(edit.from() == 6 && edit.to() == 11, "a double click selects the word")?;
+        } else {
+            Check.isTrue(edit.from() == 0 && edit.to() == 11, "a triple click selects everything")?;
+        }
+    }
+    // A press a second later starts counting again.
+    platform.clock += 1.0;
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 0)?;
+    return Check.isTrue(!edit.selects(), "a slow click is a single click");
+}
