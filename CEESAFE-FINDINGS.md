@@ -292,7 +292,7 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   drag(borrow this) -> Drag? => null; }`; an app that imports `lib.Source` and `lib.Point` only, with `struct Thing {
   a: u32; files: Drag?; fn create() -> Thing => Thing { a: 1, files: null }; }` and `impl Source for Thing { fn
   drag(borrow this) -> Drag? => this.files; }`: three N0204, one of them at `create`'s `-> Thing` (13:17).
-- **M4. A git dependency must be the package at the repository's root.** tooling.md §4: "the dependency is the
+- **M4 (fixed in ceesafec 0.55.0, ADR 0152). A git dependency must be the package at the repository's root.** tooling.md §4: "the dependency is the
   package at the checkout's root". ClayWind is one repository of several packages in subdirectories (`claywind/`,
   `claywind-fonts/`, `claywind-tasks/`, …), as most multi-package projects are, so an outside app (P3's gate, a chat
   client in its own repository, "built on ClayWind's released packages only") cannot name `claywind` at a tag: only
@@ -309,24 +309,24 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
 
 ## N. Found while writing the chat client (roadmap P3's gate, 2026-11-15, ceesafec 0.54.0 and ADR 0152's branch)
 
-- **N1. lib/std cannot tell the local time zone.** A chat client shows each message's time ("22:50"), but
+- **N1 (fixed in ceesafec 0.55.0, ADR 0153: `Clock.localOffset(at)`). lib/std cannot tell the local time zone.** A chat client shows each message's time ("22:50"), but
   `Clock.now()` is UTC and §26.11 says "calendar dates, time zones and formatting are not part of the library" (ADR
   0055), so the client prints UTC times (`claywind-chat`'s `clock`): three hours off here (UTC+3). An app cannot work
   it out itself without reading the time zone database or calling C. **Proposed:** `Clock.localOffset(at: UnixTime) ->
   i32`, the seconds east of UTC that the system's time zone gives at `at` (daylight saving included): `localtime_r`'s
   `tm_gmtoff` on POSIX systems, `GetTimeZoneInformationForYear` and `SystemTimeToTzSpecificLocalTime` on Windows, 0 in
   the interpreter (for reproducible runs) and where the system has no zone. Dates and formatting can stay out.
-- **N2 (fixed on CeeSafe's branch `fix/claywind-n2-n4`, awaiting a release). On Windows, git dependencies cannot be
+- **N2 (fixed in ceesafec 0.55.0). On Windows, git dependencies cannot be
   fetched.** ceesafec ran `env GIT_TERMINAL_PROMPT=0 git …` (lib/std cannot set a child's environment, §26.9), and
   Windows has no `env`: every git dependency failed with `'"env"' is not recognized` (seen with 0.54.0 and ADR 0152's
   branch on the Windows 11 x64 laptop). Fixed: on Windows the variable is set by the batch file ceesafec already runs
   tools through (`set "GIT_TERMINAL_PROMPT=0"`), and a `%` in an argument there is doubled, so a percent-encoded URL is
   not read as a variable.
-- **N3 (fixed on the same branch). On Windows, a git dependency's checkout never matches `ceesafe.lock`.** Git for
+- **N3 (fixed in ceesafec 0.55.0). On Windows, a git dependency's checkout never matches `ceesafe.lock`.** Git for
   Windows converts checkouts to CRLF by default (`core.autocrlf=true` in its system config), so the files' hash differs
   from the lock's, written where they were LF: N0325, "its files changed". Fixed: ceesafec runs git with `-c
   core.autocrlf=false -c core.eol=lf`.
-- **N4 (fixed on the same branch). On Windows, a program whose first socket is `AsyncTcpStream.connect` cannot
+- **N4 (fixed in ceesafec 0.55.0). On Windows, a program whose first socket is `AsyncTcpStream.connect` cannot
   connect.** The connect creates its socket (`WSASocketW`) without starting Winsock, which only the blocking sockets,
   the listeners and the resolver did, so the chat client (which never listens) failed with "Input/output error"
   (WSANOTINITIALISED, unmapped). A server, which listens first, never met it. Fixed: the connect starts Winsock first.
