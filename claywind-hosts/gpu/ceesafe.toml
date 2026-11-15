@@ -15,3 +15,4 @@ links = ["ws2_32", "gdi32", "user32", "bcrypt"]
 claywind = { path = "../../claywind" }
 claywind_demo = { path = "../../claywind-demo" }
 claywind_fonts = { path = "../../claywind-fonts" }
+claywind_demo_tasks = { path = "../../claywind-demo-tasks" }

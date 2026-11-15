@@ -22,7 +22,10 @@ static PRIO_ITEMS: [StringView; 3] = ["Low", "Medium", "High"];
 static FILE_ITEMS: [StringView; 6] = ["README.md", "main.c", "clay.h", "renderer.h", "controls.h", "PARITY.md"];
 static THEME_ITEMS: [StringView; 3] = ["System", "Light", "Dark"];
 static CTX_ITEMS: [StringView; 4] = ["Cut", "Copy", "Paste", "Delete"];
-static CONTROLS_TABS: [StringView; 3] = ["Inputs", "Selection", "Lists"];
+static CONTROLS_TABS: [StringView; 4] = ["Inputs", "Selection", "Lists", "Tasks"];
+/// The Tasks tab's counts: the primes below each.
+static PRIME_LIMITS: [u64; 3] = [1000000, 5000000, 20000000];
+static PRIME_LABELS: [StringView; 3] = ["1 M", "5 M", "20 M"];
 static SIZE_ITEMS: [StringView; 4] = ["Small", "Medium", "Large", "X-Large"];
 static TAG_ITEMS: [StringView; 10] = [
     "layout",
@@ -57,6 +60,68 @@ static BLEND_NAMES: [StringView; 16] = [
 const HALF_PI: f32 = 1.5707964;
 static GRADIENT_DIRS: [StringView; 8] = ["t", "tr", "r", "br", "b", "bl", "l", "tl"];
 
+/// How far a count of primes got: the numbers below `checked` (of those below `below`) hold `found` primes.
+public struct PrimeCount {
+    public below: u64;
+    public checked: u64;
+    public found: u64;
+
+    /// Whether the count is complete.
+    public fn done(this) -> bool => this.below > 0 && this.checked >= this.below;
+}
+
+/// The primes in [from, to), by trial division: work for a background job, a step at a time.
+public fn primesIn(from: u64, to: u64) -> u64 {
+    var found: u64 = 0;
+    var n = from.max(2);
+    while (n < to) {
+        if (n == 2 || (n & 1) == 1) {
+            var prime = true;
+            var d: u64 = 3;
+            while (d * d <= n) {
+                if (n % d == 0) {
+                    prime = false;
+                    break;
+                }
+                d += 2;
+            }
+            if (prime) {
+                found += 1;
+            }
+        }
+        n += 1;
+    }
+    return found;
+}
+
+/// Background work for the Controls page's Tasks tab: a host with threads runs the count on one (claywind_tasks,
+/// whose results wake the window); NoJobs is a host without them, and the tab says so.
+public interface DemoJobs {
+    /// Whether this host runs background jobs.
+    fn available(borrow this) -> bool;
+    /// Starts counting the primes below `below`, cancelling a count under way.
+    fn startCount(borrow mut this, below: u64);
+    /// Cancels the count under way.
+    fn cancelCount(borrow mut this);
+    /// The count's latest report, if one arrived (call until null each frame).
+    fn pollCount(borrow mut this, ui: borrow mut Ui) -> PrimeCount?;
+    /// Whether a count is under way.
+    fn counting(borrow this) -> bool;
+}
+
+/// A host without background jobs.
+public struct NoJobs {
+    public fn create() -> NoJobs => NoJobs {};
+}
+
+impl DemoJobs for NoJobs {
+    fn available(borrow this) -> bool => false;
+    fn startCount(borrow mut this, below: u64) {}
+    fn cancelCount(borrow mut this) {}
+    fn pollCount(borrow mut this, ui: borrow mut Ui) -> PrimeCount? => null;
+    fn counting(borrow this) -> bool => false;
+}
+
 /// The app state (main.c's statics), all caller-owned state for the controls.
 public struct DemoApp {
     public clicks: i32;
@@ -89,6 +154,10 @@ public struct DemoApp {
     notifyPush: bool;
     sizeSel: usize;
     sizeOpen: bool;
+    /// The Tasks tab: the latest count report, and when its count started (the clock, for the time it took).
+    primes: PrimeCount;
+    primesStarted: f64;
+    primesTook: f64;
 
     /// main.c's initial state (and `ClayWind_darkMode = true`, which the host sets on the Ui).
     public fn create() -> DemoApp => DemoApp {
@@ -120,6 +189,9 @@ public struct DemoApp {
         notifyPush: false,
         sizeSel: 1,
         sizeOpen: false,
+        primes: PrimeCount { below: 0, checked: 0, found: 0 },
+        primesStarted: 0.0,
+        primesTook: 0.0,
     };
 
     /// Opens nav tab `index` (CLAYWIND_SCREENSHOT_TAB).
@@ -164,11 +236,34 @@ fn namedId(prefix: StringView, name: StringView) -> u32 {
 
 /// The frame: main.c's update() then BuildUI().
 public fn demoFrame<M: TextMetrics>(ui: borrow mut Ui, app: borrow mut DemoApp, metrics: borrow M) {
+    var jobs = NoJobs.create();
+    demoFrameWith(mut ui, mut app, metrics, mut jobs);
+}
+
+/// demoFrame on a host that runs background jobs (the Controls page's Tasks tab).
+public fn demoFrameWith<M: TextMetrics, J: DemoJobs>(
+    ui: borrow mut Ui,
+    app: borrow mut DemoApp,
+    metrics: borrow M,
+    jobs: borrow mut J,
+) {
     update(mut ui, mut app);
+    // The count's reports, whichever page shows.
+    loop {
+        match (jobs.pollCount(mut ui)) {
+            Some(c) => {
+                app.primes = c;
+                if (c.done()) {
+                    app.primesTook = ui.time() - app.primesStarted;
+                }
+            }
+            null => { break; }
+        }
+    }
     ui.open(Style.row().id("root").w(Size.grow()).h(Size.grow()).bg(pageBg(ui)));
     sidebar(mut ui, app);
     if (app.activeNav == NAV_CONTROLS) {
-        controlsPage(mut ui, mut app, metrics);
+        controlsPage(mut ui, mut app, metrics, mut jobs);
     } else if (app.activeNav == NAV_EFFECTS) {
         effectsPage(mut ui, app);
     } else {
@@ -573,6 +668,78 @@ fn quoted(w: borrow mut TextWriter, text: Slice<u8>) {
     w.byte('"');
 }
 
+/// `n` in decimal with its thousands separated by commas.
+fn grouped(w: borrow mut TextWriter, n: u64) {
+    var digits = [0u8; 20];
+    var count: usize = 0;
+    var v = n;
+    loop {
+        digits[count] = truncate<u8>(v % 10) + '0';
+        count += 1;
+        v /= 10;
+        if (v == 0) {
+            break;
+        }
+    }
+    var k = count;
+    while (k > 0) {
+        k -= 1;
+        w.byte(digits[k]);
+        if (k > 0 && k % 3 == 0) {
+            w.byte(',');
+        }
+    }
+}
+
+/// The Tasks tab: counting primes on a background thread. Its reports wake the window, which otherwise sleeps.
+fn tasksSection<J: DemoJobs>(ui: borrow mut Ui, app: borrow mut DemoApp, jobs: borrow mut J) {
+    if (!jobs.available()) {
+        caption(mut ui, "This host runs no background jobs (the desktop and GPU hosts do).");
+        return;
+    }
+    caption(mut ui, "Count primes on a background thread: the window sleeps between its reports.");
+    ui.open(Style.row().gap(space(2.0)).alignXY(AxisAlign.Start, AxisAlign.Center));
+    ui.label("Below", Text.of().color(inkCol(ui)));
+    for (k in 0..PRIME_LIMITS.length) {
+        var id = [0u8; 16];
+        var w = TextWriter.create(mut id[..]);
+        w.text("ci-primes");
+        w.decimal(k as u64);
+        if (Controls.button(mut ui, StringView.fromUtf8(w.written())!, PRIME_LABELS[k])) {
+            jobs.startCount(PRIME_LIMITS[k]);
+            app.primes = PrimeCount { below: PRIME_LIMITS[k], checked: 0, found: 0 };
+            app.primesStarted = ui.time();
+        }
+    }
+    if (jobs.counting() && Controls.button(mut ui, "ci-primes-cancel", "Cancel")) {
+        jobs.cancelCount();
+    }
+    ui.close();
+    let c = app.primes;
+    if (c.below == 0) {
+        return;
+    }
+    // The progress bar, and what the count found so far.
+    let part = round<f32>(c.checked) / round<f32>(c.below);
+    ui.open(Style.box().w(Size.grow()).h(Size.fixed(8.0)).bg(SLATE_700).rounded(Radius.Full));
+    ui.open(Style.box().w(Size.percent(part.min(1.0))).h(Size.grow()).bg(EMERALD_500).rounded(Radius.Full));
+    ui.close();
+    ui.close();
+    var line = [0u8; 96];
+    var lw = TextWriter.create(mut line[..]);
+    grouped(mut lw, c.found);
+    lw.text(" primes below ");
+    grouped(mut lw, c.checked);
+    if (c.done()) {
+        lw.text(", in ");
+        Format.fixed(mut lw, round<f32>(app.primesTook), 2);
+        lw.text(" s");
+    } else if (!jobs.counting()) {
+        lw.text(" (cancelled)");
+    }
+    ui.labelBytes(lw.written(), Text.of().color(inkCol(ui)));
+}
+
 fn statePanel(ui: borrow mut Ui, app: borrow DemoApp) {
     var staged: i64 = 0;
     for (i in 0usize..6) {
@@ -632,7 +799,12 @@ fn statePanel(ui: borrow mut Ui, app: borrow DemoApp) {
     ui.close();
 }
 
-fn controlsPage<M: TextMetrics>(ui: borrow mut Ui, app: borrow mut DemoApp, metrics: borrow M) {
+fn controlsPage<M: TextMetrics, J: DemoJobs>(
+    ui: borrow mut Ui,
+    app: borrow mut DemoApp,
+    metrics: borrow M,
+    jobs: borrow mut J,
+) {
     ui.open(Style.column().id("content").w(Size.grow()).h(Size.grow()).bg(pageBg(ui)).p(space(6.0)).gap(space(5.0)));
     ui.open(Style.row().w(Size.grow()).gap(space(3.0)).alignXY(AxisAlign.Start, AxisAlign.Center));
     ui.label("Controls", Text.of().font(TEXT_XL).color(inkCol(ui)).bold());
@@ -647,8 +819,10 @@ fn controlsPage<M: TextMetrics>(ui: borrow mut Ui, app: borrow mut DemoApp, metr
         inputsSection(mut ui, mut app, metrics);
     } else if (app.controlsTab == 1) {
         selectionSection(mut ui, mut app);
-    } else {
+    } else if (app.controlsTab == 2) {
         listsSection(mut ui, mut app);
+    } else {
+        tasksSection(mut ui, mut app, mut jobs);
     }
     ui.close();
     statePanel(mut ui, app);

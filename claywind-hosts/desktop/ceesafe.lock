@@ -9,5 +9,13 @@ name = "claywind_demo"
 source = "path+../../claywind-demo"
 
 [[package]]
+name = "claywind_demo_tasks"
+source = "path+../../claywind-demo-tasks"
+
+[[package]]
 name = "claywind_fonts"
 source = "path+../../claywind-fonts"
+
+[[package]]
+name = "claywind_tasks"
+source = "path+../../claywind-tasks"

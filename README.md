@@ -83,7 +83,9 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 |---|---|
 | `claywind/` | The library: `layout_*`, `raster_*`, `font`, `image`, `controls`, `ui`, `style`, `transition`, `damage` and the rest, under `src/` |
 | `claywind-fonts/` | System font discovery for hosts (it reads files, as `claywind` cannot): fallback fonts for the characters a frame's fonts lack |
+| `claywind-tasks/` | Background work for a UI (hosted): a `Task` runs jobs on threads of their own, whose results wake the window (`Window.waitEvent`) and reach the frame through `poll`; a new job cancels the one before |
 | `claywind-demo/` | The demo app (the C version's `main.c`) and `ScriptPlatform`, a scripted input source for tests |
+| `claywind-demo-tasks/` | The demo's background jobs on threads (`claywind-tasks`), for the desktop and GPU hosts: the Controls page's Tasks tab counts primes on one |
 | `claywind-hosts/desktop/` | The demo in a native window: AppKit, Win32 or X11, through CeeSafe's `Window` |
 | `claywind-hosts/headless/` | The demo rendered to files: screenshots, golden tests and benchmarks |
 | `claywind-hosts/browser/` | An HTTP + WebSocket server streaming the demo to a `<canvas>` page |
@@ -166,8 +168,13 @@ ClayWind is immediate mode. Every frame:
 3. `endFrame` lays the frame out;
 4. a `Backend` draws it. The built-in `Raster` is the software renderer; the host then shows its pixels.
 
+A frame runs only when something changed: `Ui.needsFrame` and `Ui.frameDelayMs` tell the host whether to run the
+next frame at the display's pace or to sleep on `Window.waitEvent` until input, a caret blink, a timer the app asked
+for (`Ui.requestFrameAfter`), or a background job's result (`claywind-tasks`) wakes it. An idle window uses no CPU.
+
 The demo (`claywind-demo/src/demo.cee`) uses most of the API. `claywind-hosts/desktop/src/main.cee` is a complete
-host loop in about 230 lines: window events, layout, incremental rendering, and presenting only the changed boxes.
+host loop in about 250 lines: window events, layout, incremental rendering, presenting only the changed boxes, and
+sleeping while nothing changes.
 
 ## Status
 

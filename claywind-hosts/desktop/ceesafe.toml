@@ -7,3 +7,4 @@ kind = "executable"
 claywind = { path = "../../claywind" }
 claywind_demo = { path = "../../claywind-demo" }
 claywind_fonts = { path = "../../claywind-fonts" }
+claywind_demo_tasks = { path = "../../claywind-demo-tasks" }
