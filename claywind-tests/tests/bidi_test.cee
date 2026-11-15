@@ -127,7 +127,7 @@ fn bidiPassesBidiTest() -> Result<void, TestFailure> {
     var orderCount: usize = 0;
     var classes = [0u8; 256];
     var levels = [0u8; 256];
-    var scratch = [0u32; 2048];
+    var scratch = [0u32; 256 * BIDI_SCRATCH];
     var tk = [0usize; 512];
     var cases: u32 = 0;
     var failed: u32 = 0;
@@ -212,7 +212,7 @@ fn bidiPassesBidiCharacterTest() -> Result<void, TestFailure> {
     var want = [0u8; 256];
     var order = [0u32; 256];
     var levels = [0u8; 256];
-    var scratch = [0u32; 2048];
+    var scratch = [0u32; 256 * BIDI_SCRATCH];
     var utf8 = [0u8; 1024];
     var tk = [0usize; 512];
     var cases: u32 = 0;
@@ -290,7 +290,7 @@ fn bidiOrdersMixedText() -> Result<void, TestFailure> {
     // "abc", Hebrew alef bet gimel, "123": the Hebrew reads right to left, and the number after it goes with it.
     let text = "abc אבג 123";
     var levels = [0u8; 16];
-    var scratch = [0u32; 128];
+    var scratch = [0u32; 16 * BIDI_SCRATCH];
     let para = bidiLevels(text.bytes(), -1, mut levels[..], mut scratch[..]);
     var order = [0u32; 16];
     let m = bidiVisualOrder(levels[0..11], mut order[..]);

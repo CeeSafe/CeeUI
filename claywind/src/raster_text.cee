@@ -200,21 +200,21 @@ const BIDI_CAPACITY: usize = 1024;
 
 /// A line's bidi levels, its directional runs (byte ranges and levels) and their visual order.
 struct BidiBuffer {
-    levels: [u8; 1024];
-    scratch: [u32; 8192];
-    runStart: [usize; 1024];
-    runEnd: [usize; 1024];
-    runLevel: [u8; 1024];
-    order: [u32; 1024];
+    levels: [u8; BIDI_CAPACITY];
+    scratch: [u32; BIDI_CAPACITY * BIDI_SCRATCH];
+    runStart: [usize; BIDI_CAPACITY];
+    runEnd: [usize; BIDI_CAPACITY];
+    runLevel: [u8; BIDI_CAPACITY];
+    order: [u32; BIDI_CAPACITY];
 }
 
 fn emptyBidiBuffer() -> BidiBuffer => BidiBuffer {
-    levels: [0u8; 1024],
-    scratch: [0u32; 8192],
-    runStart: [0usize; 1024],
-    runEnd: [0usize; 1024],
-    runLevel: [0u8; 1024],
-    order: [0u32; 1024],
+    levels: [0u8; BIDI_CAPACITY],
+    scratch: [0u32; BIDI_CAPACITY * BIDI_SCRATCH],
+    runStart: [0usize; BIDI_CAPACITY],
+    runEnd: [0usize; BIDI_CAPACITY],
+    runLevel: [0u8; BIDI_CAPACITY],
+    order: [0u32; BIDI_CAPACITY],
 };
 
 /// Whether `utf8` has right-to-left text or controls (R, AL, RLE, RLO, RLI, FSI), without which every level is even

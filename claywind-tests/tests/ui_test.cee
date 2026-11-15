@@ -722,6 +722,39 @@ fn aFocusedFieldWakesForItsCaret() -> Result<void, TestFailure> {
     return Check.isTrue((delay - 0.2).abs() < 0.001, "the next frame is due when the caret blinks");
 }
 
+/// One frame that asks for frames `a` and `b` seconds later (negative: not asked).
+fn laterFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, a: f64, b: f64) -> Result<void, TestFailure> {
+    ui.begin(mut platform);
+    if (a >= 0.0) {
+        ui.requestFrameAfter(a);
+    }
+    if (b >= 0.0) {
+        ui.requestFrameAfter(b);
+    }
+    ui.open(Style.column().w(Size.fixed(200.0)).h(Size.fixed(100.0)));
+    ui.close();
+    return finish(mut ui, mut platform);
+}
+
+@test
+fn aFrameAskedForLaterSetsTheDelay() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(400.0, 300.0, 10.0, 10.0);
+    laterFrame(mut ui, mut platform, -1.0, -1.0)?;
+    laterFrame(mut ui, mut platform, -1.0, -1.0)?;
+    Check.isTrue(ui.frameDelay() == null && ui.frameDelayMs(77) == 77, "idle: no delay")?;
+    // Two requests: the sooner wins, and it does not make the next frame run at once.
+    laterFrame(mut ui, mut platform, 0.7, 0.4)?;
+    Check.isTrue(!ui.needsFrame(), "a later frame is not due at once")?;
+    Check.isTrue((ui.frameDelay()! - 0.4).abs() < 0.0001, "the sooner request sets the delay")?;
+    Check.equalU64(400, ui.frameDelayMs(77) as u64)?;
+    // A frame forgets the requests of the one before.
+    laterFrame(mut ui, mut platform, -1.0, -1.0)?;
+    return Check.isTrue(ui.frameDelay() == null, "a request lasts one frame");
+}
+
 /// A keystroke of character `c` with Command (when `command`) or Control.
 fn stroke(c: u32, command: bool, control: bool, shift: bool) -> Keystroke =>
     Keystroke { key: null, character: c, modifiers: Modifiers { shift: shift, control: control, alt: false, command: command } };

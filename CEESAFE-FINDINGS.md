@@ -202,16 +202,17 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
 
 ## K. Found while building text shaping and bidi (2026-11-15, ceesafec 0.48.0)
 
-- **K1 (fixed on CeeSafe branch `adr/0143-0144-k1-k2`, ADR 0143, awaiting a release). An array length cannot be a
-  constant expression.** An array length may now be any `usize` constant expression (`[0u32; 256 * 8]`), not one
-  using a const parameter (ADR 0083 stays). ClayWind's sizes follow once a release has it. The report as made: `[0u32; 256 * 8]` is refused: "an array length must be
+- **K1 (fixed in ceesafec 0.50.0, ADR 0143). An array length cannot be a constant expression.** An array length
+  may now be any `usize` constant expression (`[0u32; 256 * 8]`), not one using a const parameter (ADR 0083 stays).
+  ClayWind's sizes are their real expressions now (`BidiBuffer`'s `[u32; BIDI_CAPACITY * BIDI_SCRATCH]`, the lookup
+  cache's `CACHED_LOOKUPS * 2` digests). The report as made: `[0u32; 256 * 8]` is refused: "an array length must be
   an integer literal, a 'usize' constant or a const parameter" (N0259). So a buffer sized as "8 u32s for each of
   1,024 characters" has to be written `[0u32; 8192]`, and the two numbers can drift apart. The same goes for
   `[u8; BIDI_CAPACITY]`-style fields whose size should follow another constant times a factor. **Proposed:** accept
   any constant expression of type `usize` (arithmetic on literals and `usize` constants) as an array length.
-- **K2 (a misleading message, not a gap; fixed on CeeSafe branch `adr/0143-0144-k1-k2`, ADR 0144). `Slice<u8>`
+- **K2 (a misleading message, not a gap; fixed in ceesafec 0.50.0, ADR 0144). `Slice<u8>`
   seemed to have no `trim`.** Byte slices have had `trim()`, `trimStart()` and `trimEnd()` since ADR 0071 (lib/core's
-  `ByteSearch`); N0200 listed only the built-in slice methods, so `trimmed()` looked unsupported. The branch makes
+  `ByteSearch`); N0200 listed only the built-in slice methods, so `trimmed()` looked unsupported. 0.50.0 makes
   N0200 list the byte and text methods and suggest close names ("did you mean 'trim' or 'trimEnd'?"). ClayWind's
   bidi test now uses `trim()`. The report as made: Parsing Unicode's test files (fields like ` 2 ` between semicolons) needs one;
   the slice methods are `copyFrom`, `fill`, `swap`, `sortBy`, `forEach`, `any`, `all`, `partitionPoint`, `splitAt`

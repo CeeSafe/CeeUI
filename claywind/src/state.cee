@@ -7,9 +7,10 @@
 //
 //     loop {
 //         ui.begin(platform); app.frame(ui); ui.endFrame(...); render...
-//         match (ui.frameDelay()) {
-//             Some(seconds) => window.waitEvent(milliseconds(seconds)),   // a caret blink, or 0: at once
-//             null => window.waitEvent(FOREVER),                          // idle until an event or a wake
+//         if (ui.needsFrame()) {
+//             window.waitFrame();                                // the next frame, at the display's pace
+//         } else {
+//             window.waitEvent(ui.frameDelayMs(0xFFFFFFFF));     // a caret blink, a timer, or idle until an event
 //         }
 //     }
 
@@ -17,6 +18,15 @@ impl<region r> Ui<r> {
     /// Asks for another frame after this one (something the frame cannot see changed: a model, a timer).
     public fn requestFrame(borrow mut this) {
         this.requested = true;
+    }
+
+    /// Asks for a frame `seconds` from now (a clock the frame shows, a delay that ends), unless one comes sooner:
+    /// asked for again each frame that still needs it, as a frame forgets the requests of the one before.
+    public fn requestFrameAfter(borrow mut this, seconds: f64) {
+        let s = seconds.max(0.0);
+        if (this.requestedAfter < 0.0 || s < this.requestedAfter) {
+            this.requestedAfter = s;
+        }
     }
 
     /// After the frame: whether the next frame must run at once: input arrived, a transition or a scroll's
@@ -35,18 +45,34 @@ impl<region r> Ui<r> {
     }
 
     /// After the frame: how long the host may wait for an event before the next frame: 0 when it must run at once
-    /// (needsFrame), the time to the focused text field's next caret blink, or null when nothing changes until an
-    /// event arrives.
+    /// (needsFrame), the time to the focused text field's next caret blink or to a frame asked for later
+    /// (requestFrameAfter), whichever is sooner, or null when nothing changes until an event arrives.
     public fn frameDelay(borrow this) -> f64? {
         if (this.needsFrame()) {
             return 0.0;
         }
+        var delay = this.requestedAfter;
         if (this.wantsText) {
             // The caret blinks at 2 Hz: it next changes at the next half second.
             let half = (this.clock * 2.0).floor() + 1.0;
-            return (half / 2.0 - this.clock).max(0.0);
+            let blink = (half / 2.0 - this.clock).max(0.0);
+            if (delay < 0.0 || blink < delay) {
+                delay = blink;
+            }
         }
-        return null;
+        if (delay < 0.0) {
+            return null;
+        }
+        return delay;
+    }
+
+    /// After the frame: frameDelay in whole milliseconds for Window.waitEvent (rounded up, so the frame is not
+    /// early), or `idle` when nothing changes until an event arrives.
+    public fn frameDelayMs(borrow this, idle: u32) -> u32 {
+        match (this.frameDelay()) {
+            Some(s) => { return saturatingTruncate<u32>((s * 1000.0).ceil()); }
+            null => { return idle; }
+        }
     }
 }
 

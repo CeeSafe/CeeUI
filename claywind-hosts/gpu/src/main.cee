@@ -17,6 +17,8 @@ import claywind_fonts;
 
 const START_WIDTH: u32 = 1024;
 const START_HEIGHT: u32 = 640;
+/// How long an idle window sleeps for want of an event (a wake or an event ends it sooner).
+const IDLE_MS: u32 = 0xFFFFFFFF;
 
 extern "C" {
     @effects(sleep, alloc)
@@ -336,7 +338,13 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
             shown += 1;
             cpuTotal += ms(t0, nanos());
             gpuTotal += unsafe { cw_gpu_gpu_ms() };
-        } else {
+        }
+        // While something moves, presenting a frame waits for the display; with nothing to draw, wait for its pace.
+        // Otherwise sleep until an event, a wake, or what the frame asked for (a caret blink, a timer), using no CPU
+        // while idle.
+        if (!ui.needsFrame()) {
+            window.waitEvent(ui.frameDelayMs(IDLE_MS));
+        } else if (boxes == 0) {
             window.waitFrame();
         }
         // The previous frame's GPU time is known once the next one starts, so the averages lag by a frame.

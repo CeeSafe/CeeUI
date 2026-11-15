@@ -54,12 +54,17 @@ static BLEND_NAMES: [StringView; 16] = [
     "luminosity",
     "plus-lighter",
 ];
+const HALF_PI: f32 = 1.5707964;
 static GRADIENT_DIRS: [StringView; 8] = ["t", "tr", "r", "br", "b", "bl", "l", "tl"];
 
 /// The app state (main.c's statics), all caller-owned state for the controls.
 public struct DemoApp {
     public clicks: i32;
     public elapsed: f32;
+    /// How many frames ran (the window sleeps between them while nothing changes).
+    public frames: u64;
+    /// The PRO badge's rocking, in seconds of rocking: it rocks while the pointer is over it, then settles.
+    rock: f32;
     public activeNav: usize;
     public focusedNav: usize;
     nameBuf: [u8; 64];
@@ -89,6 +94,8 @@ public struct DemoApp {
     public fn create() -> DemoApp => DemoApp {
         clicks: 0,
         elapsed: 0.0,
+        frames: 0,
+        rock: 0.0,
         activeNav: 0,
         focusedNav: 0,
         nameBuf: [0u8; 64],
@@ -170,7 +177,7 @@ public fn demoFrame<M: TextMetrics>(ui: borrow mut Ui, app: borrow mut DemoApp, 
     // Fixed, floating badge pinned to the top-right of the window (position + z-index), translucent, rocking.
     ui.open(
         Style.box().id("proBadge").fixed().top(12.0).left(ui.screenSize().w - 78.0).z(10).px(space(3.0)).py(space(1.0))
-            .bg(withAlpha(AMBER_500, 235)).rounded(Radius.Md).rotate(Math.sin(app.elapsed * 2.0) * 6.0),
+            .bg(withAlpha(AMBER_500, 235)).rounded(Radius.Md).rotate(Math.sin(app.rock * 2.0) * 6.0),
     );
     ui.label("PRO", Text.of().font(FONT_18).color(SLATE_950).tracking(2.0).align(TextAlign.Center));
     ui.close();
@@ -186,6 +193,18 @@ public fn demoFrame<M: TextMetrics>(ui: borrow mut Ui, app: borrow mut DemoApp, 
 
 fn update(ui: borrow mut Ui, app: borrow mut DemoApp) {
     app.elapsed += ui.frameTime();
+    app.frames += 1;
+    // The badge rocks while the pointer is over it; after, it swings on to rest (where sin(2 rock) is 0). A frame
+    // after a long sleep counts as a short one.
+    let dt = ui.frameTime().min(0.1);
+    let rest = HALF_PI * (app.rock / HALF_PI).ceil();
+    if (ui.hovered("proBadge")) {
+        app.rock += dt;
+        ui.requestFrame();
+    } else if (app.rock < rest) {
+        app.rock = (app.rock + dt).min(rest);
+        ui.requestFrame();
+    }
     if (clicked(ui, "clickBtn")) {
         app.clicks += 1;
     }
@@ -396,18 +415,20 @@ fn dashboard(ui: borrow mut Ui, app: borrow DemoApp) {
     ui.open(Style.row().w(Size.grow()).gap(space(4.0)));
     var uptime = [0u8; 32];
     var uw = TextWriter.create(mut uptime[..]);
-    Format.fixed(mut uw, app.elapsed, 1);
+    let now = ui.time(); // the clock: frame times are capped, and the window sleeps between frames
+    uw.signed(truncate<i64>(now.floor()));
     uw.byte('s');
     statCard(mut ui, "cardUptime", "Uptime", uw.written(), BLUE_500);
+    // Whole seconds: the next frame that changes the card is at the next second.
+    ui.requestFrameAfter(now.floor() + 1.0 - now);
     var clicks = [0u8; 32];
     var kw = TextWriter.create(mut clicks[..]);
     kw.signed(app.clicks as i64);
     statCard(mut ui, "cardClicks", "Clicks", kw.written(), EMERALD_500);
-    let dt = ui.frameTime();
-    var fps = [0u8; 32];
-    var fw = TextWriter.create(mut fps[..]);
-    fw.signed(truncate<i64>((1.0 / (if (dt > 0.000001) dt else 0.000001)).floor()));
-    statCard(mut ui, "cardFps", "FPS", fw.written(), AMBER_500);
+    var frames = [0u8; 32];
+    var fw = TextWriter.create(mut frames[..]);
+    fw.decimal(app.frames);
+    statCard(mut ui, "cardFrames", "Frames", fw.written(), AMBER_500);
     ui.close();
 
     // A wrapping tag row (flex-wrap).
@@ -744,6 +765,7 @@ fn gradientsSection(ui: borrow mut Ui, app: borrow DemoApp) {
     ui.label("bg-radial", Text.of().color(muteCol(ui)));
     ui.close();
     swatchOpen(mut ui);
+    ui.requestFrame(); // the live gradient turns every frame while it shows
     let turns = app.elapsed * 40.0 / 360.0;
     var angle = (turns - turns.floor()) * 360.0;
     if (angle < 1.0) {

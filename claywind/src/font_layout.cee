@@ -79,6 +79,9 @@ fn emptyLayoutGlyph() -> LayoutGlyph => LayoutGlyph {
 /// The glyphs a font run holds while it is shaped (Raster's shaping scratch).
 const LAYOUT_CAPACITY: usize = 256;
 
+/// The active lookups a cache entry keeps of each table (GSUB, GPOS).
+const CACHED_LOOKUPS: usize = 192;
+
 struct LayoutBuffer {
     g: [LayoutGlyph; 256];
     count: usize;
@@ -96,17 +99,17 @@ struct LayoutBuffer {
     /// and mask), so a run in a font and script seen before collects none.
     cacheKeys: [u64; 4];
     cacheNext: usize;
-    substIndex: [[u16; 192]; 4];
-    substMask: [[u32; 192]; 4];
+    substIndex: [[u16; CACHED_LOOKUPS]; 4];
+    substMask: [[u32; CACHED_LOOKUPS]; 4];
     substCount: [usize; 4];
     /// Each active GSUB lookup's stage.
-    substStage: [[u8; 192]; 4];
+    substStage: [[u8; CACHED_LOOKUPS]; 4];
     /// Each active lookup's glyph digest (lookupDigest), two words a lookup.
-    substDigest: [[u64; 384]; 4];
-    posIndex: [[u16; 192]; 4];
-    posMask: [[u32; 192]; 4];
+    substDigest: [[u64; CACHED_LOOKUPS * 2]; 4];
+    posIndex: [[u16; CACHED_LOOKUPS]; 4];
+    posMask: [[u32; CACHED_LOOKUPS]; 4];
     posCount: [usize; 4];
-    posDigest: [[u64; 384]; 4];
+    posDigest: [[u64; CACHED_LOOKUPS * 2]; 4];
 }
 
 fn emptyLayoutBuffer() -> LayoutBuffer => LayoutBuffer {
@@ -119,15 +122,15 @@ fn emptyLayoutBuffer() -> LayoutBuffer => LayoutBuffer {
     masks: [0u32; 2048],
     cacheKeys: [0u64; 4],
     cacheNext: 0,
-    substIndex: [[0u16; 192]; 4],
-    substMask: [[0u32; 192]; 4],
+    substIndex: [[0u16; CACHED_LOOKUPS]; 4],
+    substMask: [[0u32; CACHED_LOOKUPS]; 4],
     substCount: [0usize; 4],
-    substStage: [[0u8; 192]; 4],
-    substDigest: [[0u64; 384]; 4],
-    posIndex: [[0u16; 192]; 4],
-    posMask: [[0u32; 192]; 4],
+    substStage: [[0u8; CACHED_LOOKUPS]; 4],
+    substDigest: [[0u64; CACHED_LOOKUPS * 2]; 4],
+    posIndex: [[0u16; CACHED_LOOKUPS]; 4],
+    posMask: [[0u32; CACHED_LOOKUPS]; 4],
     posCount: [0usize; 4],
-    posDigest: [[0u64; 384]; 4],
+    posDigest: [[0u64; CACHED_LOOKUPS * 2]; 4],
 };
 
 // ---- common tables ---------------------------------------------------------------------------------------------
@@ -1524,7 +1527,7 @@ fn lookupCount(d: Slice<u8>, table: usize) -> usize {
 fn collectStage(d: Slice<u8>, gsub: usize, e: usize, stage: u32, b: borrow mut LayoutBuffer) {
     for (li in 0..lookupCount(d, gsub)) {
         let n = b.substCount[e];
-        if (b.masks[li] != 0 && n < 192) {
+        if (b.masks[li] != 0 && n < CACHED_LOOKUPS) {
             b.substIndex[e][n] = truncate<u16>(li);
             b.substMask[e][n] = b.masks[li];
             b.substStage[e][n] = truncate<u8>(stage);
@@ -1592,7 +1595,7 @@ fn cachedLookups(
         collectLookups(d, f.gpos, script, posTags, posMasks, true, mut b.masks);
         for (li in 0..lookupCount(d, f.gpos)) {
             let n = b.posCount[e];
-            if (b.masks[li] != 0 && n < 192) {
+            if (b.masks[li] != 0 && n < CACHED_LOOKUPS) {
                 b.posIndex[e][n] = truncate<u16>(li);
                 b.posMask[e][n] = b.masks[li];
                 let dg = match (lookupAt(d, f.gpos, li)) {

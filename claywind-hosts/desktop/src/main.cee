@@ -18,6 +18,8 @@ import claywind_fonts;
 
 const START_WIDTH: u32 = 1024;
 const START_HEIGHT: u32 = 640;
+/// How long an idle window sleeps for want of an event (a wake or an event ends it sooner).
+const IDLE_MS: u32 = 0xFFFFFFFF;
 const MAX_PIXELS_WIDTH: usize = 2880;
 const MAX_PIXELS_HEIGHT: usize = 1800;
 
@@ -242,6 +244,12 @@ fn main() -> i32 {
             }
         }
         platform.endFrame();
-        window.waitFrame();
+        // The next frame at the display's pace while something moves; otherwise sleep until an event, a wake, or
+        // what the frame asked for (a caret blink, a timer), using no CPU while idle.
+        if (ui.needsFrame()) {
+            window.waitFrame();
+        } else {
+            window.waitEvent(ui.frameDelayMs(IDLE_MS));
+        }
     }
 }

@@ -99,8 +99,10 @@ public struct Ui<region r> {
     nextFocusContexts: [u32; 16];
     nextFocusContextCount: usize;
     secondaryIsCommand: bool;
-    // Frame pacing (state.cee): another frame asked for, input seen this frame, and the pointer's last place.
+    // Frame pacing (state.cee): another frame asked for, a frame asked for later (seconds from this frame's clock,
+    // negative for none), input seen this frame, and the pointer's last place.
     requested: bool;
+    requestedAfter: f64;
     inputSeen: bool;
     lastPointer: Vec2;
     // Repeated presses: when and where the last went down, and how many came in quick succession.
@@ -182,6 +184,7 @@ public struct Ui<region r> {
             nextFocusContextCount: 0,
             secondaryIsCommand: false,
             requested: false,
+            requestedAfter: -1.0,
             inputSeen: false,
             lastPointer: Vec2 { x: -1.0, y: -1.0 },
             lastPressTime: -1.0,
@@ -222,6 +225,7 @@ public struct Ui<region r> {
             pointer.position.y != this.lastPointer.y || this.keysPressed != 0 || this.keysRepeated != 0;
         this.lastPointer = pointer.position;
         this.requested = false;
+        this.requestedAfter = -1.0;
         this.chars.clear();
         this.charRead = 0;
         loop {
