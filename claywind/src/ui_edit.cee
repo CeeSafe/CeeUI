@@ -1,0 +1,98 @@
+// SPDX-License-Identifier: MIT
+// Text editing between the host and the Ui: the commands the platform's shortcuts give (copy, cut, paste, select
+// all), text to and from the system clipboard, and the input method's composition. A host calls the setters after
+// `begin` and before the frame's controls run, and reads what the frame asked for after `endFrame`:
+//
+//     ui.begin(platform);
+//     if (cmdOrCtrl && v) { window.clipboardText(text); ui.paste(text); }       // Paste
+//     ui.setComposition(window.composition(), window.compositionCaret());
+//     app.frame(ui);
+//     ui.endFrame(...);
+//     match (ui.copiedText()) { Some(t) => window.setClipboardText(t), null => {} }
+//     window.setTextInput(ui.wantsTextInput()); window.setTextInputArea(ui.textInputArea());
+
+/// An editing command from the platform's shortcut (Cmd on macOS, Ctrl elsewhere).
+public enum EditCommand {
+    Copy,
+    Cut,
+    Paste,
+    SelectAll,
+}
+
+fn commandBit(c: EditCommand) -> u32 => match (c) {
+    EditCommand.Copy => 1,
+    EditCommand.Cut => 2,
+    EditCommand.Paste => 4,
+    EditCommand.SelectAll => 8,
+};
+
+impl<region r> Ui<r> {
+    /// Hosts: the user gave editing command `c` this frame (the focused text field acts on it).
+    public fn editCommand(borrow mut this, c: EditCommand) {
+        this.commands |= commandBit(c);
+    }
+
+    /// Hosts: a Paste of `utf8` (the clipboard's text) this frame; text past the Ui's text capacity is left out.
+    public fn paste(borrow mut this, utf8: Slice<u8>) {
+        let n = utf8.length.min(this.pasted.length);
+        for (i in 0..n) {
+            this.pasted[i] = utf8[i];
+        }
+        this.pastedLength = n;
+        this.commands |= commandBit(EditCommand.Paste);
+    }
+
+    /// Hosts: the input method's composition (its UTF-8 text, empty when none, and the caret's byte offset in it),
+    /// shown at the caret of the focused text field until it is committed as typed text.
+    public fn setComposition(borrow mut this, utf8: Slice<u8>, caret: usize) {
+        let n = utf8.length.min(this.composing.length);
+        for (i in 0..n) {
+            this.composing[i] = utf8[i];
+        }
+        this.composingLength = n;
+        this.composingCaret = caret.min(n);
+    }
+
+    /// Hosts, after the frame: the text a control copied or cut, for the system clipboard; null when none was.
+    public fn copiedText(borrow this) -> Slice<u8>? {
+        if (!this.hasCopied) {
+            return null;
+        }
+        return this.copied[0..this.copiedLength];
+    }
+
+    /// Hosts, after the frame: whether a text field has focus (the input method should be on).
+    public fn wantsTextInput(borrow this) -> bool => this.wantsText;
+
+    /// Hosts, after the frame: the focused text field's caret, in layout units (the input method's candidate window
+    /// goes by it).
+    public fn textInputArea(borrow this) -> Rect => this.caretArea;
+
+    // ---- for controls ----------------------------------------------------------------------------------------------
+
+    /// Whether the user gave editing command `c` this frame.
+    public fn commanded(borrow this, c: EditCommand) -> bool => (this.commands & commandBit(c)) != 0;
+
+    /// The text pasted this frame (empty without a Paste).
+    public fn pastedText(borrow this) -> Slice<u8> => this.pasted[0..this.pastedLength];
+
+    /// Puts `utf8` on the clipboard when the frame ends (Copy, Cut).
+    public fn copyText(borrow mut this, utf8: Slice<u8>) {
+        let n = utf8.length.min(this.copied.length);
+        for (i in 0..n) {
+            this.copied[i] = utf8[i];
+        }
+        this.copiedLength = n;
+        this.hasCopied = true;
+    }
+
+    /// The input method's composition, and its caret.
+    public fn composition(borrow this) -> Slice<u8> => this.composing[0..this.composingLength];
+    public fn compositionCaret(borrow this) -> usize => this.composingCaret;
+
+    /// A focused text field reports its caret: the input method is wanted, and its candidate window goes there.
+    public fn reportCaret(borrow mut this, area: Rect) {
+        this.wantsText = true;
+        this.caretArea = area;
+    }
+}

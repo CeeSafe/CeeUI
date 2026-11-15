@@ -1,0 +1,254 @@
+// SPDX-License-Identifier: MIT
+// A text field with a selection: the caret and the other end of the selection move by grapheme cluster (Shift with
+// the arrows, Home and End extends it), the pointer places the caret and a drag selects, typing and Paste replace
+// the selection, Copy and Cut take it, Select All takes everything, and an input method's composition shows at the
+// caret, underlined, until it is committed.
+
+/// A text field's caret and the other end of its selection, as byte offsets (equal when nothing is selected).
+public struct TextEdit {
+    public caret: usize;
+    public anchor: usize;
+
+    /// The caret at `offset`, nothing selected.
+    public fn at(offset: usize) -> TextEdit => TextEdit { caret: offset, anchor: offset };
+
+    /// Where the selection starts and ends.
+    public fn from(this) -> usize => this.caret.min(this.anchor);
+    public fn to(this) -> usize => this.caret.max(this.anchor);
+
+    /// Whether anything is selected.
+    public fn selects(this) -> bool => this.caret != this.anchor;
+}
+
+/// The field's text size, as textInputEx measures it.
+const FIELD_TEXT: f32 = 18.0;
+
+/// The grapheme boundary of `text` nearest `x` points from its start.
+fn offsetAt<M: TextMetrics>(metrics: borrow M, text: Slice<u8>, x: f32) -> usize {
+    if (x <= 0.0) {
+        return 0;
+    }
+    var before: usize = 0;
+    var beforeX: f32 = 0.0;
+    while (before < text.length) {
+        let next = graphemeEnd(text, before);
+        let nextX = metrics.measure(text[0..next], TextConfig.of(FIELD_TEXT)).w;
+        if (nextX >= x) {
+            return if (x - beforeX <= nextX - x) before else next;
+        }
+        before = next;
+        beforeX = nextX;
+    }
+    return text.length;
+}
+
+/// Replaces the selection of `buf[0..len]` with the typeable characters of `utf8` (as far as they fit): the caret
+/// after them, nothing selected. Whether anything changed.
+fn replaceSelection(buf: SliceMut<u8>, len: borrow mut usize, edit: borrow mut TextEdit, utf8: Slice<u8>) -> bool {
+    var changed = false;
+    if (edit.selects()) {
+        removeBytes(buf, mut len, edit.from(), edit.to());
+        edit.caret = edit.from();
+        changed = true;
+    }
+    var i: usize = 0;
+    while (i < utf8.length) {
+        let c = decodeUtf8(utf8, i);
+        i += c[1] as usize;
+        if (typeable(c[0])) {
+            let at = edit.caret;
+            let added = insertChar(buf, mut len, at, c[0]);
+            if (added == 0) {
+                break;
+            }
+            edit.caret += added;
+            changed = true;
+        }
+    }
+    edit.anchor = edit.caret;
+    return changed;
+}
+
+impl Controls {
+    /// ClayWind_TextField: a one-line text field with a selection (see TextEdit). The pointer places the caret and
+    /// a drag selects; the arrows, Home and End move it (with Shift, extending the selection); Backspace and Delete
+    /// remove the selection or a grapheme cluster; typing and Paste replace the selection; Copy, Cut and Select All
+    /// act on it; Enter leaves the field. While it has focus it shows the input method's composition at the caret
+    /// and reports the caret to the host (Ui.textInputArea). It measures text to place the caret, so it takes the
+    /// text metrics.
+    public fn textField<M: TextMetrics>(
+        ui: borrow mut Ui,
+        metrics: borrow M,
+        id: StringView,
+        buf: SliceMut<u8>,
+        len: borrow mut usize,
+        edit: borrow mut TextEdit,
+    ) -> bool {
+        let h = hashId(id);
+        ui.registerFocusable(h);
+        var changed = false;
+        edit.caret = edit.caret.min(len);
+        edit.anchor = edit.anchor.min(len);
+        let padX = space(3.0);
+        let padY = space(2.0);
+        // The pointer: a press places the caret (Shift extends the selection), and a drag moves it.
+        let p = ui.pointer();
+        let box = ui.boxOfHash(h);
+        if (ui.pressedOn(h)) {
+            ui.setFocus(h);
+            ui.capture(h);
+            match (box) {
+                Some(b) => {
+                    edit.caret = offsetAt(metrics, buf[0..len], p.position.x - b.x - padX);
+                    if (!ui.shiftDown()) {
+                        edit.anchor = edit.caret;
+                    }
+                }
+                null => {}
+            }
+        } else if (ui.captured() == h && p.down) {
+            match (box) {
+                Some(b) => { edit.caret = offsetAt(metrics, buf[0..len], p.position.x - b.x - padX); }
+                null => {}
+            }
+        }
+        if (p.released && ui.captured() == h) {
+            ui.capture(0);
+        }
+        let focused = ui.hasFocus(h);
+        if (focused) {
+            if (ui.commanded(EditCommand.SelectAll)) {
+                edit.anchor = 0;
+                edit.caret = len;
+            }
+            if ((ui.commanded(EditCommand.Copy) || ui.commanded(EditCommand.Cut)) && edit.selects()) {
+                ui.copyText(buf[edit.from()..edit.to()]);
+                if (ui.commanded(EditCommand.Cut)) {
+                    let none = [0u8; 1];
+                    changed = replaceSelection(buf, mut len, mut edit, none[0..0]) || changed;
+                }
+            }
+            if (ui.commanded(EditCommand.Paste)) {
+                var pasted = [0u8; 1024];
+                let text = ui.pastedText();
+                let n = text.length.min(1024);
+                for (i in 0..n) {
+                    pasted[i] = text[i];
+                }
+                changed = replaceSelection(buf, mut len, mut edit, pasted[0..n]) || changed;
+            }
+            loop {
+                let c = ui.nextChar();
+                if (c == 0) {
+                    break;
+                }
+                var bytes = [0u8; 4];
+                let n = encodeUtf8(c, mut bytes);
+                changed = replaceSelection(buf, mut len, mut edit, bytes[0..n]) || changed;
+            }
+            // Backspace and Delete take the selection, or a whole grapheme cluster.
+            if (ui.keyHit(Key.Backspace) && (edit.selects() || edit.caret > 0)) {
+                if (!edit.selects()) {
+                    edit.anchor = graphemeBefore(buf[0..len], edit.caret);
+                }
+                let none = [0u8; 1];
+                changed = replaceSelection(buf, mut len, mut edit, none[0..0]) || changed;
+            }
+            if (ui.keyHit(Key.Delete) && (edit.selects() || edit.caret < len)) {
+                if (!edit.selects()) {
+                    edit.anchor = graphemeEnd(buf[0..len], edit.caret);
+                }
+                let none = [0u8; 1];
+                changed = replaceSelection(buf, mut len, mut edit, none[0..0]) || changed;
+            }
+            // The arrows: with Shift they extend the selection; without, they end it (at its near side) or move.
+            let shift = ui.shiftDown();
+            if (ui.keyHit(Key.Left)) {
+                if (!shift && edit.selects()) {
+                    edit.caret = edit.from();
+                } else if (edit.caret > 0) {
+                    edit.caret = graphemeBefore(buf[0..len], edit.caret);
+                }
+                if (!shift) {
+                    edit.anchor = edit.caret;
+                }
+            }
+            if (ui.keyHit(Key.Right)) {
+                if (!shift && edit.selects()) {
+                    edit.caret = edit.to();
+                } else if (edit.caret < len) {
+                    edit.caret = graphemeEnd(buf[0..len], edit.caret);
+                }
+                if (!shift) {
+                    edit.anchor = edit.caret;
+                }
+            }
+            if (ui.keyPressed(Key.Home)) {
+                edit.caret = 0;
+                if (!shift) {
+                    edit.anchor = 0;
+                }
+            }
+            if (ui.keyPressed(Key.End)) {
+                edit.caret = len;
+                if (!shift) {
+                    edit.anchor = len;
+                }
+            }
+            if (ui.keyPressed(Key.Enter)) {
+                ui.clearFocus();
+            }
+        }
+        ui.open(Controls.fieldStyle(h, focused));
+        let config = TextConfig.of(FIELD_TEXT);
+        // The selection, behind the text.
+        if (focused && edit.selects()) {
+            let x0 = metrics.measure(buf[0..edit.from()], config).w;
+            let x1 = metrics.measure(buf[0..edit.to()], config).w;
+            ui.open(Style.box().absolute().left(padX + x0).top(padY).w(Size.fixed(x1 - x0)).h(Size.fixed(FIELD_TEXT))
+                .bg(BLUE_700));
+            ui.close();
+        }
+        // The text, with the composition (underlined) at the caret while the input method composes.
+        let composing = focused && ui.composition().length > 0;
+        var caretX = metrics.measure(buf[0..edit.caret], config).w;
+        ui.open(Style.row().alignXY(AxisAlign.Start, AxisAlign.Center));
+        if (composing) {
+            var text = [0u8; 256];
+            let comp = ui.composition();
+            let n = comp.length.min(256);
+            for (i in 0..n) {
+                text[i] = comp[i];
+            }
+            let caretInComposition = ui.compositionCaret().min(n);
+            if (edit.caret > 0) {
+                ui.labelBytes(buf[0..edit.caret], Text.of().color(SLATE_100));
+            }
+            ui.open(Style.column());
+            ui.labelBytes(text[0..n], Text.of().color(SLATE_100));
+            ui.open(Style.box().w(Size.grow()).h(Size.fixed(1.0)).bg(SLATE_100));
+            ui.close();
+            ui.close();
+            if (edit.caret < len) {
+                ui.labelBytes(buf[edit.caret..len], Text.of().color(SLATE_100));
+            }
+            caretX += metrics.measure(text[0..caretInComposition], config).w;
+        } else if (len > 0) {
+            ui.labelBytes(buf[0..len], Text.of().color(SLATE_100));
+        }
+        ui.close();
+        if (focused) {
+            if ((truncate<u64>((ui.time() * 2.0).floor()) & 1) == 0 || composing) {
+                ui.open(Style.box().absolute().left(padX + caretX).top(padY).w(Size.fixed(2.0))
+                    .h(Size.fixed(FIELD_TEXT)).bg(SLATE_200));
+                ui.close();
+            }
+            match (box) {
+                Some(b) => { ui.reportCaret(Rect { x: b.x + padX + caretX, y: b.y + padY, w: 2.0, h: FIELD_TEXT }); }
+                null => {}
+            }
+        }
+        ui.close();
+        return changed;
+    }
+}

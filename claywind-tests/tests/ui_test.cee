@@ -508,3 +508,90 @@ fn aHundredThousandLinesCostAScreenful() -> Result<void, TestFailure> {
     Check.isTrue(ms < 50.0, "a frame does not walk the whole document")?;
     return Check.isTrue(top, "line 50000 is at the top");
 }
+
+/// One frame of a text field, with `setup` run between begin and the field (the host's edit commands).
+fn fieldFrame(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    buf: SliceMut<u8>,
+    len: borrow mut usize,
+    edit: borrow mut TextEdit,
+    command: u32,
+) -> Result<void, TestFailure> {
+    ui.begin(mut platform);
+    if (command == 1) {
+        ui.editCommand(EditCommand.Copy);
+    } else if (command == 2) {
+        ui.editCommand(EditCommand.Cut);
+    } else if (command == 3) {
+        ui.paste("there".bytes());
+    } else if (command == 4) {
+        ui.editCommand(EditCommand.SelectAll);
+    } else if (command == 5) {
+        ui.setComposition("にほ".bytes(), 3);
+    }
+    let measure = ClayMeasure { unused: 0 };
+    ui.open(Style.column().w(Size.fixed(300.0)).h(Size.fixed(100.0)));
+    let changed = Controls.textField(mut ui, measure, "field", buf, mut len, mut edit);
+    ui.close();
+    platform.typedCount = 0;
+    platform.typedRead = 0;
+    platform.pressed = 0;
+    platform.pointerState.pressed = false;
+    platform.pointerState.released = false;
+    return finish(mut ui, mut platform);
+}
+
+@test
+fn textFieldSelectsCopiesCutsAndPastes() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(400.0, 300.0, 20.0, 15.0);
+    var buf = [0u8; 64];
+    var len: usize = 0;
+    var edit = TextEdit.at(0);
+    fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 0)?;
+    // A click focuses it; then "hello world" is typed.
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 0)?;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    let typed = "hello world";
+    for (k in 0..typed.length) {
+        platform.typed[k] = typed.bytes()[k] as u32;
+    }
+    platform.typedCount = typed.length;
+    fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 0)?;
+    Check.isTrue(len == 11 && edit.caret == 11, "typed at the caret")?;
+    // Shift+Left five times selects "world"; Copy takes it.
+    platform.down = 1u64 << (keyIndex(Key.LeftShift) as u64);
+    for (k in 0..5) {
+        platform.pressed = 1u64 << (keyIndex(Key.Left) as u64);
+        fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 0)?;
+    }
+    platform.down = 0;
+    Check.isTrue(edit.from() == 6 && edit.to() == 11, "Shift+Left selects")?;
+    fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 1)?;
+    let copied = ui.copiedText()!;
+    Check.isTrue(copied.length == 5 && copied[0] == 'w', "Copy takes the selection")?;
+    // Cut removes it; Paste puts "there" at the caret.
+    fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 2)?;
+    Check.isTrue(len == 6 && ui.copiedText()!.length == 5, "Cut takes and removes it")?;
+    fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 3)?;
+    Check.isTrue(len == 11 && buf[6] == 't' && edit.caret == 11, "Paste inserts at the caret")?;
+    // Select All, then typing replaces everything.
+    fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 4)?;
+    platform.typed[0] = 'x' as u32;
+    platform.typedCount = 1;
+    fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 0)?;
+    Check.isTrue(len == 1 && buf[0] == 'x', "typing replaces the selection")?;
+    // An input method's composition: the field wants text input and reports its caret past the composed text.
+    fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 5)?;
+    Check.isTrue(ui.wantsTextInput(), "a focused field wants text input")?;
+    let area = ui.textInputArea();
+    let box = ui.boxOf("field")!;
+    // 10 points a byte here: "x" and the 3 bytes of the composition before its caret, past the padding.
+    return Check.isTrue((area.x - box.x - space(3.0) - 40.0).abs() < 0.5, "the caret is after the composed text");
+}

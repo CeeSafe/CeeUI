@@ -59,6 +59,12 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   inside a left-to-right line and as a line of its own, brackets mirrored, and Arabic joins. It passes Unicode 16's BidiTest.txt and
   BidiCharacterTest.txt in full. Not yet: right-aligned right-to-left paragraphs, caret movement and selection in
   visual order.
+- **Text editing:** `Controls.textField` keeps a caret and a selection (`TextEdit`): the pointer places the caret and
+  a drag selects, the arrows, Home and End move it (Shift extends), Backspace and Delete remove a selection or a
+  grapheme cluster, typing and Paste replace the selection, Copy, Cut and Select All act on it, and an input
+  method's composition shows underlined at the caret. Hosts pass the platform's shortcuts and clipboard in and out
+  (`Ui.editCommand`, `Ui.paste`, `Ui.copiedText`) and drive the input method (`Ui.setComposition`,
+  `Ui.wantsTextInput`, `Ui.textInputArea`).
 - **Long text:** `indexLines` indexes a document's lines once, and `Controls.textView` shows it a screenful at a time,
   with optional line numbers: only the lines in view become elements, so a 100,000-line document lays out in the
   time a page does. Not yet: wrapping, editing and selection in it.

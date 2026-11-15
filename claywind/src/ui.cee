@@ -39,11 +39,14 @@ public struct UiCapacity {
     public layout: LayoutCapacity;
     public animations: usize;
     public scrollContainers: usize;
+    /// Bytes for text going to and from the clipboard, and for an input method's composition (each).
+    public textBytes: usize;
 
     public fn of(elements: usize) -> UiCapacity => UiCapacity {
         layout: LayoutCapacity.of(elements),
         animations: 512,
         scrollContainers: 64,
+        textBytes: 16384,
     };
 }
 
@@ -69,6 +72,19 @@ public struct Ui<region r> {
     focusedId: u32;
     activeId: u32;
     focusables: FixedList<r, u32>;
+    // Text editing with the host (ui_edit.cee): this frame's edit commands, text pasted and copied, the input
+    // method's composition, and the focused text field's caret.
+    commands: u32;
+    pasted: SliceMut<r, u8>;
+    pastedLength: usize;
+    copied: SliceMut<r, u8>;
+    copiedLength: usize;
+    hasCopied: bool;
+    composing: SliceMut<r, u8>;
+    composingLength: usize;
+    composingCaret: usize;
+    caretArea: Rect;
+    wantsText: bool;
 
     /// A context whose memory comes from `memory`, which it borrows for its whole life.
     public fn create(memory: borrow(r) FixedBufferAllocator, capacity: UiCapacity) -> Result<Ui<r>, AllocError> {
@@ -94,6 +110,9 @@ public struct Ui<region r> {
         let clicked = memory.allocArray(capacity.layout.elements, 0u32)?;
         let chars = memory.allocArray(64, 0u32)?;
         let focusables = memory.allocArray(64, 0u32)?;
+        let pasted = memory.allocArray(capacity.textBytes, 0u8)?;
+        let copied = memory.allocArray(capacity.textBytes, 0u8)?;
+        let composing = memory.allocArray(capacity.textBytes, 0u8)?;
         return Ok(Ui {
             tree: tree,
             animations: animations,
@@ -114,6 +133,17 @@ public struct Ui<region r> {
             focusedId: 0,
             activeId: 0,
             focusables: FixedList<u32>.over(focusables),
+            commands: 0,
+            pasted: pasted,
+            pastedLength: 0,
+            copied: copied,
+            copiedLength: 0,
+            hasCopied: false,
+            composing: composing,
+            composingLength: 0,
+            composingCaret: 0,
+            caretArea: Rect.zero(),
+            wantsText: false,
         });
     }
 
@@ -150,6 +180,11 @@ public struct Ui<region r> {
             }
         }
         this.focusables.clear();
+        this.commands = 0;
+        this.pastedLength = 0;
+        this.hasCopied = false;
+        this.copiedLength = 0;
+        this.wantsText = false;
         this.tree.hitTest(pointer.position);
 
         // Clicks: an element is clicked when the pointer went down and came back up over it.
