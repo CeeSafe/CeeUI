@@ -241,7 +241,7 @@ impl Controls {
                 Style.box().absolute().passthrough().left(padX + x0).top(padY).w(
                     Size.fixed(x1 - x0),
                 ).h(Size.fixed(FIELD_TEXT))
-                    .bg(BLUE_700),
+                    .bg(0x3B82F666), // BLUE_500 at 40 %: the selected text shows through
             );
             ui.close();
         }
