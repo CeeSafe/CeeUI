@@ -33,6 +33,8 @@ struct LayoutGlyph {
     attachY: f32;
     /// A glyph GPOS cursive attachment hangs off another (an index), whose vertical offset it then shares.
     cursiveTo: i32;
+    /// A joiner or selector (ZWJ, VS16) kept for an emoji sequence's ligature: drawn nowhere if it is left over.
+    hidden: bool;
     /// Where the shaper placed it: pen and rise, in the run's own font's units.
     placedX: f32;
     placedY: f32;
@@ -53,6 +55,7 @@ fn emptyLayoutGlyph() -> LayoutGlyph => LayoutGlyph {
     attachX: 0.0,
     attachY: 0.0,
     cursiveTo: -1,
+    hidden: false,
     placedX: 0.0,
     placedY: 0.0,
 };
@@ -484,6 +487,12 @@ fn matchInput(
             return false;
         }
         j = nextUnskipped(d, gdef, l, b, j);
+        // A hidden joiner or selector is matched if the rule names it, and passed over if not (HarfBuzz's
+        // "maybe skip" of default ignorables).
+        while (j >= 0 && b.g[truncate<usize>(j)].hidden &&
+            !itemMatches(d, how, items, k - 1, classes, base, b.g[truncate<usize>(j)].glyph)) {
+            j = nextUnskipped(d, gdef, l, b, j);
+        }
         if (j < 0 || !itemMatches(d, how, items, k - 1, classes, base, b.g[truncate<usize>(j)].glyph)) {
             return false;
         }
@@ -508,6 +517,10 @@ fn matchBacktrack(
     var j = i;
     for (k in 0..count) {
         j = previousUnskipped(d, gdef, l, b, j);
+        while (j >= 0 && b.g[truncate<usize>(j)].hidden &&
+            !itemMatches(d, how, items, k, classes, base, b.g[truncate<usize>(j)].glyph)) {
+            j = previousUnskipped(d, gdef, l, b, j);
+        }
         if (j < 0 || !itemMatches(d, how, items, k, classes, base, b.g[truncate<usize>(j)].glyph)) {
             return false;
         }
@@ -530,6 +543,10 @@ fn matchLookahead(
     var j = last;
     for (k in 0..count) {
         j = nextUnskipped(d, gdef, l, b, j);
+        while (j >= 0 && b.g[truncate<usize>(j)].hidden &&
+            !itemMatches(d, how, items, k, classes, base, b.g[truncate<usize>(j)].glyph)) {
+            j = nextUnskipped(d, gdef, l, b, j);
+        }
         if (j < 0 || !itemMatches(d, how, items, k, classes, base, b.g[truncate<usize>(j)].glyph)) {
             return false;
         }
@@ -835,6 +852,12 @@ fn applySubst(
             // which component they were on (for mark-to-ligature).
             let id = b.nextLig;
             b.nextLig += 1;
+            // Hidden (a leftover joiner or selector) only if every component was: ZWJ + a person is a person.
+            var hidden = true;
+            for (c in 0..m.count) {
+                hidden = hidden && b.g[truncate<usize>(m.at[c])].hidden;
+            }
+            b.g[ui].hidden = hidden;
             b.g[ui].glyph = u16at(d, lig);
             b.g[ui].ligId = id;
             b.g[ui].ligComp = 0;
@@ -1513,6 +1536,10 @@ fn layoutRun(
     b.rtl = rtl;
     assignClasses(d, f.gdef, b);
     let e = cachedLookups(d, f, key, script, substTags, substMasks, substStages, posTags, posMasks, b);
+    // A font that substitutes by morx instead of GSUB (Apple's).
+    if (f.gsub == 0 && f.morx != 0) {
+        applyMorx(d, f, f.morx, b);
+    }
     for (k in 0..b.substCount[e]) {
         let li = b.substIndex[e][k] as usize;
         let mask = b.substMask[e][k];

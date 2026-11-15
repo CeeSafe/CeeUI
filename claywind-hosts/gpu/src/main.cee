@@ -986,7 +986,7 @@ fn line<B: Backend>(b: borrow mut B, y: f32, size: f32, spacing: f32, font: u32,
 /// the fallback font (and in the bold and monospaced runs), letter spacing across fallback glyphs, and a character
 /// no font has (the run's missing-glyph box), and Hebrew right to left inside a left-to-right line and as a
 /// right-to-left line of its own, brackets mirrored; Arabic, its letters joined and lam-alef ligated; and colour
-/// emoji. In points, 1024 × 640.
+/// emoji, sequences (a red heart, a skin tone, a flag, a family, a keycap) included. In points, 1024 × 640.
 fn drawText<B: Backend>(b: borrow mut B) {
     line(mut b, 30.0, 28.0, 0.0, FONT_18, "AVATAR Wave Tokyo  café naïve  cafe\u{301} n\u{303}");
     line(mut b, 80.0, 28.0, 0.0, FONT_18, "Ωμέγα  Привет, мир  你好，世界  漢字かなカナ  한국어");
@@ -999,7 +999,14 @@ fn drawText<B: Backend>(b: borrow mut B) {
     line(mut b, 450.0, 28.0, 0.0, FONT_18, "bidi: שלום (עולם) 2026 and back");
     line(mut b, 510.0, 28.0, 0.0, FONT_18, "עברית מימין לשמאל, with English");
     line(mut b, 570.0, 28.0, 0.0, FONT_18, "مرحبا بالعالم (١٢٣) لا Arabic joins");
-    line(mut b, 610.0, 22.0, 0.0, FONT_18, "emoji: 😀🎉🚀 🍣 ✅ ❤ in text");
+    line(
+        mut b,
+        610.0,
+        22.0,
+        0.0,
+        FONT_18,
+        "emoji: 😀🎉🚀 🍣 ✅ ❤ \u{2764}\u{FE0F} \u{1F44D}\u{1F3FD} \u{1F1EF}\u{1F1F5} \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} 1\u{FE0F}\u{20E3} in text",
+    );
 }
 
 fn tabName(tab: usize) -> StringView => match (tab) {

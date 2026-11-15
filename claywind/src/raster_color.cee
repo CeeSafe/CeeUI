@@ -19,6 +19,8 @@ struct ColorBitmapRecord {
     strike: u32;
     /// The image (0 when the glyph has no bitmap at that strike).
     handle: u32;
+    /// The strike (pixels per em) its image is really from: another when the one asked for lacks the glyph.
+    ppem: u32;
     /// The image's left edge right of the glyph's origin, and its top edge above the baseline, in its own pixels.
     left: f32;
     top: f32;
@@ -27,7 +29,7 @@ struct ColorBitmapRecord {
 }
 
 fn emptyColorBitmapRecord() -> ColorBitmapRecord =>
-    ColorBitmapRecord { font: 0, glyph: 0, strike: 0, handle: 0, left: 0.0, top: 0.0, w: 0, h: 0 };
+    ColorBitmapRecord { font: 0, glyph: 0, strike: 0, handle: 0, ppem: 0, left: 0.0, top: 0.0, w: 0, h: 0 };
 
 /// A colour glyph as an image and where it goes: its box relative to the glyph's origin on the baseline (y grows
 /// down), in the units of the size asked for.
@@ -187,14 +189,16 @@ impl<region r> Raster<r> {
     public fn hasColorBitmap(borrow this, font: u32, glyph: u32, strike: u32) -> bool =>
         this.colorRecord(font, glyph, strike) != null;
 
-    /// Supplies glyph `glyph` of loaded font `font` at `strike`: the PNG `png` (empty when the glyph has no bitmap
-    /// there), whose left edge is `left` pixels right of the glyph's origin and top edge `top` above the baseline;
-    /// `scratch` decodes it (imageInfo's scratchBytes). False when it does not decode or there is no room left.
+    /// Supplies glyph `glyph` of loaded font `font` at `strike`: the PNG `png` from strike `ppem` (another when
+    /// `strike` lacks the glyph; empty when no strike has it), whose left edge is `left` pixels right of the glyph's
+    /// origin and top edge `top` above the baseline, in that strike's pixels; `scratch` decodes it (imageInfo's
+    /// scratchBytes). False when it does not decode or there is no room left.
     public fn addColorBitmap(
         borrow mut this,
         font: u32,
         glyph: u32,
         strike: u32,
+        ppem: u32,
         png: Slice<u8>,
         left: f32,
         top: f32,
@@ -205,6 +209,7 @@ impl<region r> Raster<r> {
             glyph: glyph,
             strike: strike,
             handle: 0,
+            ppem: ppem,
             left: left,
             top: top,
             w: 0,
@@ -244,10 +249,10 @@ impl<region r> Raster<r> {
             return null;
         }
         let rec = this.colorRecord(font, glyph, strike)?;
-        if (rec.handle == 0) {
+        if (rec.handle == 0 || rec.ppem == 0) {
             return null;
         }
-        let s = size / round<f32>(strike);
+        let s = size / round<f32>(rec.ppem);
         return ColorGlyph {
             handle: rec.handle,
             x: rec.left * s,
@@ -337,6 +342,7 @@ impl<region r> Raster<r> {
             glyph: glyph,
             strike: key,
             handle: handle,
+            ppem: 0,
             left: 0.0 - pad,
             top: pad + ascent,
             w: w,

@@ -34,6 +34,8 @@ public struct FontInfo {
     /// Colour layers and their palettes (COLR version 0, CPAL), or 0.
     colr: usize;
     cpal: usize;
+    /// Apple's glyph metamorphosis table (font_morx.cee), used when there is no GSUB; or 0.
+    morx: usize;
 }
 
 /// One glyph's outline in font units (y already flipped, as ThorVG builds it): ops 0 = move, 1 = line,
@@ -231,6 +233,7 @@ public fn parseFontFace(d: Slice<u8>, face: u32) -> FontInfo? {
         gdef: tableOffset(d, dir, ['G', 'D', 'E', 'F']),
         colr: tableOffset(d, dir, ['C', 'O', 'L', 'R']),
         cpal: tableOffset(d, dir, ['C', 'P', 'A', 'L']),
+        morx: tableOffset(d, dir, ['m', 'o', 'r', 'x']),
     };
 }
 

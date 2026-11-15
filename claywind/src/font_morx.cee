@@ -1,0 +1,377 @@
+// SPDX-License-Identifier: MIT
+// Apple's extended glyph metamorphosis table ('morx', AAT), for fonts that substitute glyphs with it rather than
+// GSUB: Apple Color Emoji forms its emoji sequences (ZWJ families, skin tones, flags, keycaps) this way. Each chain's
+// subtables run in order where the chain's default feature flags enable them: noncontextual (type 4), contextual
+// (type 1) and ligature (type 2) subtables, the ones a font's default features use; rearrangement and insertion
+// subtables are skipped. The state machine follows HarfBuzz's driver. A glyph a ligature consumes becomes
+// DELETED_GLYPH and is removed at the end.
+
+/// A glyph a ligature consumed, until morx is done.
+const DELETED_GLYPH: u32 = 0xFFFF;
+
+/// The ligature subtable's component stack.
+const MORX_STACK: usize = 64;
+
+/// Value `glyph` maps to in the AAT lookup table at `t` (formats 0, 2, 4, 6, 8 and 10; 16-bit values), or null.
+fn aatLookup(d: Slice<u8>, t: usize, glyph: u32, glyphCount: u32) -> u32? {
+    if (!valid(d, t, 2)) {
+        return null;
+    }
+    let format = u16at(d, t);
+    if (format == 0) {
+        let at = t + 2 + (glyph as usize) * 2;
+        return if (glyph < glyphCount && valid(d, at, 2)) u16at(d, at) else null;
+    }
+    if (format == 2 || format == 4 || format == 6) {
+        // A binary-search header (unitSize, nUnits, ...) then the units, a 0xFFFF one ending them.
+        if (!valid(d, t + 2, 10)) {
+            return null;
+        }
+        let unit = u16at(d, t + 2) as usize;
+        let units = u16at(d, t + 4) as usize;
+        let first = t + 12;
+        if (unit < 4 || !valid(d, first, unit * units)) {
+            return null;
+        }
+        var lo: usize = 0;
+        var hi = units;
+        while (lo < hi) {
+            let mid = lo + (hi - lo) / 2;
+            let u = first + mid * unit;
+            if (format == 6) {
+                let g = u16at(d, u);
+                if (g == glyph) {
+                    return u16at(d, u + 2);
+                }
+                if (g < glyph) {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+                continue;
+            }
+            let last = u16at(d, u);
+            let start = u16at(d, u + 2);
+            if (glyph > last) {
+                lo = mid + 1;
+            } else if (glyph < start) {
+                hi = mid;
+            } else {
+                if (format == 2) {
+                    return u16at(d, u + 4);
+                }
+                let values = t + (u16at(d, u + 4) as usize) + ((glyph - start) as usize) * 2;
+                return if (valid(d, values, 2)) u16at(d, values) else null;
+            }
+        }
+        return null;
+    }
+    if (format == 8) {
+        if (!valid(d, t + 2, 4)) {
+            return null;
+        }
+        let start = u16at(d, t + 2);
+        let count = u16at(d, t + 4);
+        let at = t + 6 + ((glyph - start) as usize) * 2;
+        return if (glyph >= start && glyph - start < count && valid(d, at, 2)) u16at(d, at) else null;
+    }
+    if (format == 10) {
+        if (!valid(d, t + 2, 6)) {
+            return null;
+        }
+        let unit = u16at(d, t + 2) as usize;
+        let start = u16at(d, t + 4);
+        let count = u16at(d, t + 6);
+        let at = t + 8 + ((glyph - start) as usize) * unit;
+        if (glyph < start || glyph - start >= count || !valid(d, at, unit)) {
+            return null;
+        }
+        return if (unit == 1) d[at] as u32 else u16at(d, at);
+    }
+    return null;
+}
+
+/// An extended state table (STXHeader) at `at`: its class count and its parts' offsets in the file.
+struct StateTable {
+    classes: u32;
+    classTable: usize;
+    states: usize;
+    entries: usize;
+}
+
+fn stateTable(d: Slice<u8>, at: usize) -> StateTable? {
+    if (!valid(d, at, 16)) {
+        return null;
+    }
+    return StateTable {
+        classes: u32at(d, at),
+        classTable: at + (u32at(d, at + 4) as usize),
+        states: at + (u32at(d, at + 8) as usize),
+        entries: at + (u32at(d, at + 12) as usize),
+    };
+}
+
+/// The class of the glyph at `i` (0 end of text past the run, 1 out of bounds, 2 a deleted glyph).
+fn glyphClass(d: Slice<u8>, s: borrow StateTable, b: borrow LayoutBuffer, i: usize, glyphCount: u32) -> u32 {
+    if (i >= b.count) {
+        return 0;
+    }
+    let g = b.g[i].glyph;
+    if (g == DELETED_GLYPH) {
+        return 2;
+    }
+    return match (aatLookup(d, s.classTable, g, glyphCount)) {
+        Some(c) => if (c < s.classes) c else 1,
+        null => 1,
+    };
+}
+
+/// The entry (its offset) for `state` and `klass`, each `size` bytes long.
+fn entryAt(d: Slice<u8>, s: borrow StateTable, state: u32, klass: u32, size: usize) -> usize? {
+    let cell = s.states + ((state * s.classes + klass) as usize) * 2;
+    if (!valid(d, cell, 2)) {
+        return null;
+    }
+    let e = s.entries + (u16at(d, cell) as usize) * size;
+    return if (valid(d, e, size)) e else null;
+}
+
+/// A noncontextual subtable (lookup table at `t`): every glyph it maps is replaced.
+fn morxNoncontextual(d: Slice<u8>, t: usize, glyphCount: u32, b: borrow mut LayoutBuffer) {
+    for (i in 0..b.count) {
+        let g = b.g[i].glyph;
+        if (g == DELETED_GLYPH) {
+            continue;
+        }
+        match (aatLookup(d, t, g, glyphCount)) {
+            Some(r) => { b.g[i].glyph = r; }
+            null => {}
+        }
+    }
+}
+
+/// A contextual subtable (its body at `at`): entries replace the marked glyph and the current one through the
+/// substitution lookups.
+fn morxContextual(d: Slice<u8>, at: usize, glyphCount: u32, b: borrow mut LayoutBuffer) {
+    let s = match (stateTable(d, at)) {
+        Some(x) => x,
+        null => { return; }
+    };
+    if (!valid(d, at + 16, 4)) {
+        return;
+    }
+    let subs = at + (u32at(d, at + 16) as usize);
+    var state: u32 = 0;
+    var mark: usize = 0;
+    var marked = false;
+    var i: usize = 0;
+    var budget = b.count * 16 + 64;
+    loop {
+        let klass = glyphClass(d, s, b, i, glyphCount);
+        let e = match (entryAt(d, s, state, klass, 8)) {
+            Some(x) => x,
+            null => { return; }
+        };
+        let flags = u16at(d, e + 2);
+        let markIndex = u16at(d, e + 4);
+        let currentIndex = u16at(d, e + 6);
+        if (markIndex != 0xFFFF && marked && mark < b.count && valid(d, subs + (markIndex as usize) * 4, 4)) {
+            let lookup = subs + (u32at(d, subs + (markIndex as usize) * 4) as usize);
+            match (aatLookup(d, lookup, b.g[mark].glyph, glyphCount)) {
+                Some(r) => { b.g[mark].glyph = r; }
+                null => {}
+            }
+        }
+        if (currentIndex != 0xFFFF && b.count > 0 && valid(d, subs + (currentIndex as usize) * 4, 4)) {
+            let k = i.min(b.count - 1);
+            let lookup = subs + (u32at(d, subs + (currentIndex as usize) * 4) as usize);
+            match (aatLookup(d, lookup, b.g[k].glyph, glyphCount)) {
+                Some(r) => { b.g[k].glyph = r; }
+                null => {}
+            }
+        }
+        if ((flags & 0x8000) != 0) {
+            marked = true;
+            mark = i;
+        }
+        state = u16at(d, e);
+        if (i >= b.count) {
+            return;
+        }
+        if ((flags & 0x4000) == 0 || budget == 0) {
+            i += 1;
+        } else {
+            budget -= 1;
+        }
+    }
+}
+
+/// A ligature subtable (its body at `at`): components are pushed as the state machine marks them, and an action
+/// replaces them with a ligature (HarfBuzz's LigatureSubtable).
+fn morxLigature(d: Slice<u8>, at: usize, glyphCount: u32, b: borrow mut LayoutBuffer) {
+    let s = match (stateTable(d, at)) {
+        Some(x) => x,
+        null => { return; }
+    };
+    if (!valid(d, at + 16, 12)) {
+        return;
+    }
+    let actions = at + (u32at(d, at + 16) as usize);
+    let components = at + (u32at(d, at + 20) as usize);
+    let ligatures = at + (u32at(d, at + 24) as usize);
+    var stack = [0usize; 64];
+    var length: usize = 0;
+    var state: u32 = 0;
+    var i: usize = 0;
+    var budget = b.count * 16 + 64;
+    loop {
+        let klass = glyphClass(d, s, b, i, glyphCount);
+        let e = match (entryAt(d, s, state, klass, 6)) {
+            Some(x) => x,
+            null => { return; }
+        };
+        let flags = u16at(d, e + 2);
+        if ((flags & 0x8000) != 0) { // SetComponent
+            if (length > 0 && stack[(length - 1) % MORX_STACK] == i) {
+                length -= 1;
+            }
+            stack[length % MORX_STACK] = i;
+            length += 1;
+        }
+        if ((flags & 0x2000) != 0 && length > 0 && i < b.count) { // PerformAction
+            var action = actions + (u16at(d, e + 4) as usize) * 4;
+            var cursor = length;
+            var index: u32 = 0;
+            loop {
+                if (cursor == 0) {
+                    length = 0;
+                    break;
+                }
+                cursor -= 1;
+                let pos = stack[cursor % MORX_STACK];
+                if (!valid(d, action, 4) || pos >= b.count) {
+                    break;
+                }
+                let a = u32at(d, action);
+                var offset = a & 0x3FFFFFFF;
+                if ((offset & 0x20000000) != 0) {
+                    offset = offset | 0xC0000000;
+                }
+                // The glyph plus a signed 30-bit offset, wrapping as 32-bit arithmetic does.
+                let component = components + (truncate<u32>((b.g[pos].glyph as u64) + (offset as u64)) as usize) * 2;
+                if (!valid(d, component, 2)) {
+                    break;
+                }
+                index += u16at(d, component);
+                if ((a & 0xC0000000) != 0) { // Store or Last: the ligature goes where this component was
+                    let lig = ligatures + (index as usize) * 2;
+                    if (!valid(d, lig, 2)) {
+                        break;
+                    }
+                    b.g[pos].glyph = u16at(d, lig);
+                    // The components after it are consumed.
+                    while (length - 1 > cursor) {
+                        length -= 1;
+                        let q = stack[length % MORX_STACK];
+                        if (q < b.count) {
+                            b.g[q].glyph = DELETED_GLYPH;
+                        }
+                    }
+                }
+                action += 4;
+                if ((a & 0x80000000) != 0) {
+                    break;
+                }
+            }
+        }
+        state = u16at(d, e);
+        if (i >= b.count) {
+            return;
+        }
+        if ((flags & 0x4000) == 0 || budget == 0) {
+            i += 1;
+        } else {
+            budget -= 1;
+        }
+    }
+}
+
+/// Runs face `f`'s morx table at `morx` over the buffer with each chain's default features, then removes the
+/// glyphs ligatures consumed.
+fn applyMorx(d: Slice<u8>, f: FontInfo, morx: usize, b: borrow mut LayoutBuffer) {
+    if (!valid(d, morx, 8) || u16at(d, morx) < 2) {
+        return;
+    }
+    let glyphCount = if (valid(d, f.maxp, 6)) u16at(d, f.maxp + 4) else 0xFFFF;
+    let chains = u32at(d, morx + 4) as usize;
+    var at = morx + 8;
+    for (c in 0..chains.min(16)) {
+        if (!valid(d, at, 16)) {
+            return;
+        }
+        let flags = u32at(d, at);
+        let length = u32at(d, at + 4) as usize;
+        let features = u32at(d, at + 8) as usize;
+        let subtables = u32at(d, at + 12) as usize;
+        var st = at + 16 + features * 12;
+        for (k in 0..subtables) {
+            if (!valid(d, st, 12)) {
+                return;
+            }
+            let size = u32at(d, st) as usize;
+            let coverage = u32at(d, st + 4);
+            let enabled = (u32at(d, st + 8) & flags) != 0;
+            // Horizontal text only; a subtable for descending order runs over the glyphs reversed.
+            let horizontal = (coverage & 0x80000000) == 0 || (coverage & 0x20000000) != 0;
+            if (enabled && horizontal) {
+                {
+                    let reverse = (coverage & 0x40000000) != 0;
+                    if (reverse) {
+                        reverseBuffer(b);
+                    }
+                    let body = st + 12;
+                    let kind = coverage & 0xFF;
+                    if (kind == 4) {
+                        morxNoncontextual(d, body, glyphCount, b);
+                    } else if (kind == 1) {
+                        morxContextual(d, body, glyphCount, b);
+                    } else if (kind == 2) {
+                        morxLigature(d, body, glyphCount, b);
+                    }
+                    if (reverse) {
+                        reverseBuffer(b);
+                    }
+                }
+            }
+            if (size < 12) {
+                return;
+            }
+            st += size;
+        }
+        at += length;
+    }
+    // The consumed glyphs leave the buffer.
+    var w: usize = 0;
+    for (r in 0..b.count) {
+        if (b.g[r].glyph != DELETED_GLYPH) {
+            b.g[w] = b.g[r];
+            w += 1;
+        }
+    }
+    b.count = w;
+}
+
+fn reverseBuffer(b: borrow mut LayoutBuffer) {
+    if (b.count < 2) {
+        return;
+    }
+    var lo: usize = 0;
+    var hi = b.count - 1;
+    while (lo < hi) {
+        let x = b.g[lo];
+        b.g[lo] = b.g[hi];
+        b.g[hi] = x;
+        lo += 1;
+        hi -= 1;
+    }
+}

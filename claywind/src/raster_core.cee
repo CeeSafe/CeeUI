@@ -179,6 +179,7 @@ public struct Raster<region r> {
             gdef: 0,
             colr: 0,
             cpal: 0,
+            morx: 0,
         };
         let fonts = memory.allocArray(
             32,

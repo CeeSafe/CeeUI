@@ -63,6 +63,28 @@ fn ignorable(cp: u32) -> bool =>
         (cp >= 0x200B && cp <= 0x200F) || (cp >= 0x202A && cp <= 0x202E) || (cp >= 0x2060 && cp <= 0x206F) ||
         cp == 0xFEFF || (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0xE0000 && cp <= 0xE0FFF);
 
+/// Whether `cp` may begin an emoji sequence: an Extended_Pictographic character, a regional indicator (a flag's
+/// half), or a keycap's digit, # or *.
+fn mayStartEmoji(cp: u32) -> bool =>
+    (cp >= 0x30 && cp <= 0x39) || cp == 0x23 || cp == 0x2A || (cp >= 0x1F1E6 && cp <= 0x1F1FF) ||
+        (cp >= 0xA9 && isPictographic(cp));
+
+/// Whether `utf8[from..to]` (the rest of a grapheme cluster) has what makes an emoji sequence: VS16, ZWJ, the
+/// combining keycap, a skin-tone modifier, a regional indicator or a tag character.
+fn hasEmojiComponent(utf8: Slice<u8>, from: usize, to: usize) -> bool {
+    var i = from;
+    while (i < to) {
+        let c = decodeUtf8(utf8, i);
+        let cp = c[0];
+        if (cp == 0xFE0F || cp == 0x200D || cp == 0x20E3 || (cp >= 0x1F3FB && cp <= 0x1F3FF) ||
+            (cp >= 0x1F1E6 && cp <= 0x1F1FF) || (cp >= 0xE0020 && cp <= 0xE007F)) {
+            return true;
+        }
+        i += c[1] as usize;
+    }
+    return false;
+}
+
 /// Combining marks (general category Mn, Mc, Me), which stay in the font of the character they mark when it has
 /// them.
 fn combining(cp: u32) -> bool {
@@ -245,6 +267,36 @@ impl<region r> Raster<r> {
         };
         let cur = ShapeCursor { at: 0, pen: 0.0, previousSlot: 0, previousGlyph: 0, hasPrevious: false };
         return this.fontFor(primary, cur, cp)[1] != 0;
+    }
+
+    /// Whether loaded font `k` draws in colour (bitmaps, or COLR layers).
+    fn isColorSlot(borrow this, k: usize) -> bool {
+        let slot = this.fonts.get(k);
+        return slot.strikeCount > 0 || slot.info.colr != 0;
+    }
+
+    /// The colour font an emoji `cp` in a run in font `primary` comes from: the run's own if it draws in colour,
+    /// else the first of the fallback chain that does and has it.
+    fn emojiFont(borrow this, primary: usize, cp: u32) -> usize? {
+        if (this.isColorSlot(primary) && this.glyphIn(primary, cp) != 0) {
+            return primary;
+        }
+        for (f in 0..this.fallbackCount) {
+            for (k in 0..this.fonts.length()) {
+                if (this.fonts.get(k).id == this.fallbacks[f] && this.isColorSlot(k) && this.glyphIn(k, cp) != 0) {
+                    return k;
+                }
+            }
+        }
+        return null;
+    }
+
+    /// Whether a run in font `fontId` has `cp` in a colour font (for an emoji sequence), its own or a fallback.
+    public fn coversInColor(borrow this, fontId: u32, cp: u32) -> bool {
+        return match (this.slotIndex(fontId)) {
+            Some(k) => this.emojiFont(k, cp) != null,
+            null => false,
+        };
     }
 
     /// The index of the loaded font `id`, falling back to font 0's (thorvg_backend.c's cw_fontFor).
@@ -459,6 +511,46 @@ impl<region r> Raster<r> {
             joining.glyph = -1;
             while (cur.at < to && b.count < LAYOUT_CAPACITY) {
                 let cp = decodeUtf8(utf8, cur.at);
+                // An emoji sequence (ZWJ, skin tone, flag, keycap, VS16) goes whole into a colour font that has its
+                // first character, joiners and selectors included, for that font's ligatures to form it.
+                let next = cur.at + cp[1] as usize;
+                if (next < to && utf8[next] >= 0x80 && mayStartEmoji(cp[0])) {
+                    let end = graphemeEnd(utf8[0..to], cur.at);
+                    if (end > next && hasEmojiComponent(utf8, next, end)) {
+                        match (this.emojiFont(primary, cp[0])) {
+                            Some(k) => {
+                                if (b.count > 0 && (k != slot || b.count + (end - cur.at) > LAYOUT_CAPACITY)) {
+                                    break;
+                                }
+                                slot = k;
+                                if (script == 0) {
+                                    script = scriptTag(cp[0]);
+                                }
+                                var at = cur.at;
+                                while (at < end && b.count < LAYOUT_CAPACITY) {
+                                    let c = decodeUtf8(utf8, at);
+                                    let eg = this.glyphIn(k, c[0]);
+                                    if (eg != 0) {
+                                        var g = emptyLayoutGlyph();
+                                        g.glyph = eg;
+                                        g.cluster = at;
+                                        g.mask = FEAT_ALL;
+                                        g.hidden = ignorable(c[0]);
+                                        b.g[b.count] = g;
+                                        b.count += 1;
+                                        cur.previousGlyph = eg;
+                                    }
+                                    at += c[1] as usize;
+                                }
+                                cur.previousSlot = k;
+                                cur.hasPrevious = true;
+                                cur.at = end;
+                                continue;
+                            }
+                            null => {}
+                        }
+                    }
+                }
                 if (ignorable(cp[0])) {
                     // No glyph, but a joiner (ZWJ) or non-joiner (ZWNJ) still decides how its neighbours join.
                     join(mut joining, joiningType(cp[0]), -1, b);
@@ -539,6 +631,9 @@ impl<region r> Raster<r> {
             let units = if (slot == primary) 1.0 else primaryUpem / info.unitsPerEm;
             for (k in 0..b.count) {
                 let g = b.g[k];
+                if (g.hidden) {
+                    continue;
+                }
                 var kernX: f32 = 0.0;
                 if (info.kern != 0 && k > 0) {
                     kernX = kerning(d, info, b.g[k - 1].glyph, g.glyph) * units;

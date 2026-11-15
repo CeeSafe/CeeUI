@@ -161,9 +161,41 @@ impl SystemFonts {
     public fn supply(borrow mut this, raster: borrow mut Raster, utf8: Slice<u8>, fontId: u32) -> u32 {
         var added: u32 = 0;
         var i: usize = 0;
+        var previous: u32 = 0;
         while (i < utf8.length) {
             let cp = decodeUtf8(utf8, i);
             i += cp[1] as usize;
+            // An emoji sequence (VS16, a keycap, ZWJ, a skin tone) after a character only a text font has: a colour
+            // face for that character.
+            let before = previous;
+            previous = cp[0];
+            let sequence =
+                cp[0] == 0xFE0F || cp[0] == 0x20E3 || cp[0] == 0x200D || (cp[0] >= 0x1F3FB && cp[0] <= 0x1F3FF);
+            if (sequence && before != 0 && !raster.coversInColor(
+                fontId,
+                before,
+            ) && !this.isHopeless(before | 0x80000000)) {
+                if (!this.scanned) {
+                    this.scan();
+                }
+                var found = false;
+                match (this.choose(before, true)) {
+                    Some(k) => {
+                        if (this.faces[k].color) {
+                            let id = FIRST_ID + truncate<u32>(k);
+                            if (this.load(raster, k, id) && raster.addFallback(id)) {
+                                added += 1;
+                                this.loaded += 1;
+                                found = raster.coversInColor(fontId, before);
+                            }
+                        }
+                    }
+                    null => {}
+                }
+                if (!found) {
+                    let ignored = this.hopeless.push(before | 0x80000000);
+                }
+            }
             // A private-use character means something else in every font: none is looked for.
             let privateUse = (cp[0] >= 0xE000 && cp[0] <= 0xF8FF) || cp[0] >= 0xF0000;
             if (cp[0] < 0x80 || privateUse || raster.covers(fontId, cp[0]) || this.isHopeless(cp[0])) {
@@ -173,7 +205,7 @@ impl SystemFonts {
                 this.scan();
             }
             var done = false;
-            match (this.choose(cp[0])) {
+            match (this.choose(cp[0], false)) {
                 Some(k) => {
                     let id = FIRST_ID + truncate<u32>(k);
                     if (this.load(raster, k, id) && raster.addFallback(id)) {
@@ -249,14 +281,15 @@ impl SystemFonts {
             if (raster.hasColorBitmap(g.font, g.glyph, strike)) {
                 continue;
             }
-            var place: [f32; 2]? = null;
+            // The strike asked for, else the nearest that has the glyph (a bigger one first).
+            var place: [f32; 3]? = null;
             for (b in 0..this.bitmaps.length) {
                 let index = match (raster.fontIndex(this.bitmaps[b].id)) {
                     Some(i) => i,
                     null => 0xFFFFFFFF,
                 };
                 if (index == g.font) {
-                    place = readBitmap(borrow this.bitmaps[b], strike, g.glyph, mut png);
+                    place = readNearestBitmap(borrow this.bitmaps[b], strike, g.glyph, mut png);
                 }
             }
             let at = match (place) {
@@ -267,6 +300,7 @@ impl SystemFonts {
                         g.font,
                         g.glyph,
                         strike,
+                        0,
                         none.view(),
                         0.0,
                         0.0,
@@ -284,7 +318,8 @@ impl SystemFonts {
                     return added;
                 }
             }
-            if (raster.addColorBitmap(g.font, g.glyph, strike, png.view(), at[0], at[1], mut scratch.viewMut())) {
+            let from = truncate<u32>(Math.round(at[2]));
+            if (raster.addColorBitmap(g.font, g.glyph, strike, from, png.view(), at[0], at[1], mut scratch.viewMut())) {
                 added += 1;
             }
         }
@@ -471,14 +506,15 @@ impl SystemFonts {
         return true;
     }
 
-    /// The face that best covers `cp` (see `better`), one whose cmap really maps it.
-    fn choose(borrow mut this, cp: u32) -> usize? {
+    /// The face that best covers `cp` (see `better`; a colour face first when `color`), one whose cmap really maps
+    /// it.
+    fn choose(borrow mut this, cp: u32, color: bool) -> usize? {
         let block = (cp >> 8) as usize;
         if (block >= BLOCKS) {
             return null;
         }
         // An emoji comes from a colour face when one covers it, before a monochrome symbol font.
-        let emoji = isPictographic(cp);
+        let emoji = color || isPictographic(cp);
         var most: u32 = 0;
         for (f in this.faces) {
             most = most.max(f.coverage[block] as u32);
@@ -758,6 +794,38 @@ fn putU32(v: borrow mut Vector<u8>, at: usize, x: usize) {
     v[at + 1] = truncate<u8>(x >> 16);
     v[at + 2] = truncate<u8>(x >> 8);
     v[at + 3] = truncate<u8>(x);
+}
+
+/// Glyph `glyph`'s bitmap in face `b` at strike `ppem`, or else at the nearest strike that has it (a bigger one
+/// first): readBitmap's offsets, and the strike it came from.
+fn readNearestBitmap(b: borrow BitmapFace, ppem: u32, glyph: u32, png: borrow mut Vector<u8>) -> [f32; 3]? {
+    match (readBitmap(b, ppem, glyph, png)) {
+        Some(p) => { return [p[0], p[1], round<f32>(ppem)]; }
+        null => {}
+    }
+    // Bigger strikes, smallest first; then smaller ones, biggest first.
+    for (pass in 0..2) {
+        var tried = ppem;
+        loop {
+            var next: u32 = 0;
+            for (p in b.strikePpem) {
+                let wanted =
+                    if (pass == 0) p > tried && (next == 0 || p < next) else p < tried && (next == 0 || p > next);
+                if (wanted) {
+                    next = p;
+                }
+            }
+            if (next == 0) {
+                break;
+            }
+            tried = next;
+            match (readBitmap(b, next, glyph, png)) {
+                Some(p) => { return [p[0], p[1], round<f32>(next)]; }
+                null => {}
+            }
+        }
+    }
+    return null;
 }
 
 /// Glyph `glyph`'s bitmap in face `b` at strike `ppem`, as PNG bytes into `png`: its left edge's offset right of the

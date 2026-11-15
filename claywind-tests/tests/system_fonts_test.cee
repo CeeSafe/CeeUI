@@ -81,3 +81,49 @@ fn emojiComeInColourFromTheSystemsEmojiFont() -> Result<void, TestFailure> {
     }
     return Check.isTrue(yellow > 50, "the emoji is drawn in its own colours");
 }
+
+@test
+fn emojiSequencesBecomeOneGlyph() -> Result<void, TestFailure> {
+    let arial = readFile(arialPath());
+    if (arial.length == 0) {
+        Console.writeLine("  (Arial not found: skipped)");
+        return Ok();
+    }
+    var storage = heap(134217728);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(120, 60);
+    c.imagePixels = 262144;
+    c.fontBytes = 100663296;
+    var ras = Raster.create(memory, c)!;
+    Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
+    var fonts = SystemFonts.create();
+    let loaded = fonts.supply(mut ras, "\u{1F600}".bytes(), 0);
+    if (!ras.coversInColor(0, 0x1F600)) {
+        Console.writeLine("  (no colour emoji font on this system: skipped)");
+        return Ok();
+    }
+    // A skin tone, a flag, a ZWJ family, a keycap and a red heart (VS16): each one colour glyph.
+    let sequences: [StringView; 5] = [
+        "\u{1F44D}\u{1F3FD}",
+        "\u{1F1EF}\u{1F1F5}",
+        "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}",
+        "1\u{FE0F}\u{20E3}",
+        "\u{2764}\u{FE0F}",
+    ];
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 8];
+    for (k in 0usize..5) {
+        let text = sequences[k];
+        let more = fonts.supply(mut ras, text.bytes(), 0);
+        let run = ras.shapeRun(text.bytes(), 0, 40.0, 0.0, mut out[..])!;
+        if (run.count != 1) {
+            Console.write("  sequence ");
+            Console.write(k as u64);
+            Console.write(" shaped to ");
+            Console.write(run.count as u64);
+            Console.writeLine(" glyphs");
+        }
+        Check.equalU64(1, run.count as u64)?;
+        Check.isTrue(ras.isBitmapFont(out[0].font) || ras.isColrGlyph(out[0].font, out[0].glyph), "in colour")?;
+    }
+    return Ok();
+}
