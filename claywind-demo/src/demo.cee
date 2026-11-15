@@ -14,6 +14,8 @@ import claywind;
 
 /// main.c's NAV_COUNT, NAV_CONTROLS and NAV_EFFECTS.
 public const NAV_COUNT: usize = 6;
+/// The format of what DemoApp.save writes: changed whenever what it writes changes.
+public const DEMO_STATE_VERSION: u32 = 1;
 const NAV_CONTROLS: usize = 1;
 const NAV_EFFECTS: usize = 2;
 
@@ -268,6 +270,74 @@ public struct DemoApp {
         droppedLen: 0,
         droppedCount: 0,
     };
+
+    /// Writes what the demo shows into a snapshot (hot reload: the rebuilt demo reads it back on start).
+    public fn save(this, w: borrow mut SnapshotWriter) {
+        w.u32(truncate<u32>(this.activeNav));
+        w.u32(truncate<u32>(this.focusedNav));
+        w.u32(truncate<u32>(this.controlsTab));
+        w.u32(truncate<u32>(this.clicks));
+        w.bytes(this.nameBuf[0..this.nameLen]);
+        w.u32(truncate<u32>(this.nameEdit.caret));
+        w.u32(truncate<u32>(this.nameEdit.anchor));
+        w.bytes(this.noteBuf[0..this.noteLen]);
+        w.bool(this.subscribe);
+        w.u32(truncate<u32>(this.prioSel));
+        w.u32(truncate<u32>(this.fileSel));
+        w.f32(this.volume);
+        w.u32(truncate<u32>(this.qty));
+        w.u32(truncate<u32>(this.radioSel));
+        for (i in 0usize..6) {
+            w.bool(this.filesChecked[i]);
+        }
+        w.u32(truncate<u32>(this.saves));
+        w.bool(this.notifyEmail);
+        w.bool(this.notifyPush);
+        w.u32(truncate<u32>(this.sizeSel));
+        for (i in 0usize..6) {
+            w.u8(this.cardColumn[i]);
+        }
+    }
+
+    /// Reads back what `save` wrote: true, and the state restored, from an intact snapshot of this format; false,
+    /// and the state as it was, otherwise.
+    public fn restore(borrow mut this, r: borrow mut SnapshotReader) -> bool {
+        var next = DemoApp.create();
+        next.opensWindows = this.opensWindows;
+        next.opensFiles = this.opensFiles;
+        next.takesFileDrops = this.takesFileDrops;
+        next.drawsMenuBar = this.drawsMenuBar;
+        next.menuModel = this.menuModel;
+        next.activeNav = (r.u32() as usize).min(NAV_COUNT - 1);
+        next.focusedNav = (r.u32() as usize).min(NAV_COUNT - 1);
+        next.controlsTab = (r.u32() as usize).min(CONTROLS_TABS.length - 1);
+        next.clicks = truncate<i32>(r.u32());
+        next.nameLen = r.bytesInto(mut next.nameBuf[..]);
+        next.nameEdit = TextEdit { caret: (r.u32() as usize).min(next.nameLen), anchor: 0 };
+        next.nameEdit.anchor = (r.u32() as usize).min(next.nameLen);
+        next.noteLen = r.bytesInto(mut next.noteBuf[..]);
+        next.subscribe = r.bool();
+        next.prioSel = (r.u32() as usize).min(PRIO_ITEMS.length - 1);
+        next.fileSel = (r.u32() as usize).min(FILE_ITEMS.length - 1);
+        next.volume = r.f32().max(0.0).min(1.0);
+        next.qty = truncate<i32>(r.u32());
+        next.radioSel = (r.u32() as usize).min(THEME_ITEMS.length - 1);
+        for (i in 0usize..6) {
+            next.filesChecked[i] = r.bool();
+        }
+        next.saves = truncate<i32>(r.u32());
+        next.notifyEmail = r.bool();
+        next.notifyPush = r.bool();
+        next.sizeSel = (r.u32() as usize).min(SIZE_ITEMS.length - 1);
+        for (i in 0usize..6) {
+            next.cardColumn[i] = r.u8().min(1);
+        }
+        if (!r.intact()) {
+            return false;
+        }
+        this = next;
+        return true;
+    }
 
     /// Opens the Controls page's tab `k` (Inputs, Selection, Lists, Tasks, Drag).
     public fn selectControlsTab(borrow mut this, k: usize) {

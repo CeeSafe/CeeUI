@@ -364,7 +364,22 @@ fn windowError(e: WindowError) -> StringView => match (e) {
 };
 
 fn main() -> i32 {
-    var window = match (Window.open("ClayWind — CeeSafe", START_WIDTH, START_HEIGHT)) {
+    // Hot reload (claywind-dev, `--hot DIR`): the state the previous build saved, its window's size included.
+    let hotDir = hotDirectory();
+    var app = DemoApp.create();
+    let resumed: HotStart? = match (hotDir) {
+        Some(d) => hotRestore(d, mut app),
+        null => null,
+    };
+    let startWidth = match (resumed) {
+        Some(r) => r.width,
+        null => START_WIDTH,
+    };
+    let startHeight = match (resumed) {
+        Some(r) => r.height,
+        null => START_HEIGHT,
+    };
+    var window = match (Window.open("ClayWind — CeeSafe", startWidth, startHeight)) {
         Ok(w) => w,
         Err(e) => {
             Console.writeError("desktop: cannot open a window: ");
@@ -415,7 +430,6 @@ fn main() -> i32 {
         Console.writeErrorLine("desktop: no fonts found; set CLAYWIND_FONT_DIR");
         return 1;
     }
-    var app = DemoApp.create();
     app.setOpensWindows(true);
     app.setOpensFiles(true);
     // The menus: the system's (a macOS menu bar, a Windows window's menu), else drawn by the demo (X11, or
@@ -427,7 +441,15 @@ fn main() -> i32 {
         app.setDrawsMenuBar(true);
         menuSet = true;
     }
-    let dark = Environment.variable("CLAYWIND_LIGHT") == null;
+    let dark = match (resumed) {
+        Some(r) => r.dark,
+        null => Environment.variable("CLAYWIND_LIGHT") == null,
+    };
+    // A new build's request to take over (hot reload), watched on a thread of its own.
+    let hot: HotWatch? = match (hotDir) {
+        Some(d) => HotWatch.start(d, window.waker()),
+        null => null,
+    };
     // Shortcuts use Command on macOS (an AppKit window), Control elsewhere.
     let command = match (window.nativeHandle()) {
         WindowHandle.AppKit(_, _) => true,
@@ -443,6 +465,22 @@ fn main() -> i32 {
     var systemFonts = SystemFonts.create();
     loop {
         if (main.takeEvents(mut window)) {
+            return 0;
+        }
+        // A new build is ready (hot reload): save where the app is, and let it take over.
+        let reload = match (borrow hot) {
+            Some(h) => h.reloadAsked(),
+            null => false,
+        };
+        if (reload) {
+            match (hotDir) {
+                Some(d) => {
+                    if (!hotSave(d, window.size(), main.ui.isDarkMode(), app)) {
+                        Console.writeErrorLine("desktop: could not save the state for the new build");
+                    }
+                }
+                null => {}
+            }
             return 0;
         }
         // A menu item chosen: its action, for this frame.

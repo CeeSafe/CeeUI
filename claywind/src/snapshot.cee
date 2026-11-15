@@ -1,0 +1,151 @@
+// SPDX-License-Identifier: MIT
+// Snapshots of app state, for hot reload (roadmap P3 step 7): before a rebuilt app replaces the running one, the
+// app writes what it shows (its page, its fields' text, its toggles) into a snapshot, and the new one reads it back
+// on start, so a code change keeps the app where it was. An app writes its values in an order and reads them in
+// the same order; a snapshot from an app that wrote other things (its code changed what it saves) is detected by
+// its `version`, and the reader then gives defaults (`intact` is false), so a stale snapshot is never misread.
+//
+//     var w = SnapshotWriter.over(mut buffer[..], APP_VERSION);
+//     w.u32(app.page); w.bytes(app.name[0..app.nameLength]);
+//     ... later, in the new process:
+//     var r = SnapshotReader.over(saved, APP_VERSION);
+//     app.page = r.u32(); let n = r.bytesInto(mut app.name[..]);
+
+/// The snapshot's first four bytes, "CWSN".
+const SNAPSHOT_MAGIC: u32 = 0x4E535743;
+
+/// Writes values into a byte buffer, little-endian, after a header (the magic and the app's version). What does not
+/// fit is left out, and `fits` turns false.
+public struct SnapshotWriter<region r> {
+    buffer: SliceMut<r, u8>;
+    length: usize;
+    full: bool;
+
+    /// A writer into `buffer`, for state of the app's format `version` (change it when what is written changes).
+    public fn over(buffer: SliceMut<r, u8>, version: u32) -> SnapshotWriter<r> {
+        var w = SnapshotWriter { buffer: buffer, length: 0, full: false };
+        w.u32(SNAPSHOT_MAGIC);
+        w.u32(version);
+        return w;
+    }
+
+    /// The snapshot written so far.
+    public fn written(borrow this) -> Slice<u8> => this.buffer[0..this.length];
+
+    /// Whether everything written fitted.
+    public fn fits(borrow this) -> bool => !this.full;
+
+    fn put(borrow mut this, b: u8) {
+        if (this.length < this.buffer.length) {
+            this.buffer[this.length] = b;
+            this.length += 1;
+        } else {
+            this.full = true;
+        }
+    }
+
+    public fn u8(borrow mut this, v: u8) {
+        this.put(v);
+    }
+
+    public fn bool(borrow mut this, v: bool) {
+        this.put(if (v) 1 else 0);
+    }
+
+    public fn u32(borrow mut this, v: u32) {
+        for (k in 0u32..4) {
+            this.put(truncate<u8>(v >> (k * 8)));
+        }
+    }
+
+    public fn u64(borrow mut this, v: u64) {
+        for (k in 0u64..8) {
+            this.put(truncate<u8>(v >> (k * 8)));
+        }
+    }
+
+    public fn f32(borrow mut this, v: f32) {
+        this.u32(v.bits());
+    }
+
+    public fn f64(borrow mut this, v: f64) {
+        this.u64(v.bits());
+    }
+
+    /// Bytes, after their length.
+    public fn bytes(borrow mut this, v: Slice<u8>) {
+        this.u32(truncate<u32>(v.length));
+        for (b in v) {
+            this.put(b);
+        }
+    }
+}
+
+/// Reads a snapshot's values in the order they were written. Past its end, or when its header is not the app's
+/// (another format, or not a snapshot), every value is its default (0, false, empty) and `intact` is false.
+public struct SnapshotReader<region r> {
+    data: Slice<r, u8>;
+    at: usize;
+    broken: bool;
+
+    /// A reader of `data`, for state of the app's format `version`.
+    public fn over(data: Slice<r, u8>, version: u32) -> SnapshotReader<r> {
+        var reader = SnapshotReader { data: data, at: 0, broken: false };
+        if (reader.u32() != SNAPSHOT_MAGIC || reader.u32() != version) {
+            reader.broken = true;
+        }
+        return reader;
+    }
+
+    /// Whether every value read so far came from the snapshot (the header was the app's, and nothing ran past the
+    /// end): an app restores only from an intact snapshot.
+    public fn intact(borrow this) -> bool => !this.broken;
+
+    fn take(borrow mut this) -> u8 {
+        if (this.broken || this.at >= this.data.length) {
+            this.broken = true;
+            return 0;
+        }
+        let b = this.data[this.at];
+        this.at += 1;
+        return b;
+    }
+
+    public fn u8(borrow mut this) -> u8 => this.take();
+
+    public fn bool(borrow mut this) -> bool => this.take() != 0;
+
+    public fn u32(borrow mut this) -> u32 {
+        var v: u32 = 0;
+        for (k in 0u32..4) {
+            v |= (this.take() as u32) << (k * 8);
+        }
+        return v;
+    }
+
+    public fn u64(borrow mut this) -> u64 {
+        var v: u64 = 0;
+        for (k in 0u64..8) {
+            v |= (this.take() as u64) << (k * 8);
+        }
+        return v;
+    }
+
+    public fn f32(borrow mut this) -> f32 => f32.fromBits(this.u32());
+
+    public fn f64(borrow mut this) -> f64 => f64.fromBits(this.u64());
+
+    /// Bytes written by `bytes`, into `into` (as many as fit): how many.
+    public fn bytesInto(borrow mut this, into: SliceMut<u8>) -> usize {
+        let n = this.u32() as usize;
+        var kept: usize = 0;
+        for (i in 0..n) {
+            let b = this.take();
+            if (i < into.length) {
+                into[i] = b;
+                kept += 1;
+            }
+        }
+        return kept;
+    }
+}

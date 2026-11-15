@@ -256,3 +256,24 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   `nextEvent` or wait pumps, never reaches B's queue. Fixed in the same ADR: each event goes to the window it is
   for. Also met: macOS keeps at most 16 windows open (`CEE_MAC_WINDOWS`; the 17th `open` is `Resources`), which
   type-system.md §26.13 did not say; it does since 0.52.0 (ADR 0146).
+
+## M. Found while writing claywind-dev, the hot-reload runner (roadmap P3 step 7, 2026-11-15, ceesafec 0.52.0)
+
+- **M1. A `move` closure cannot keep a view of its capture in a local.** In a `move` closure's body (a
+  `Thread.spawn` literal or a boxed closure), `views.push(text.view())`, where `text` is a captured `String` and
+  `views` a `Vector<StringView>` local to the body, is N0272: "this stores a value borrowed from 'env.text' into what
+  'env' refers to, which outlives this call". Nothing goes into the environment: the vector is the body's own and dies
+  before the body returns. The same lines in a plain function check, and so do they after `let owned = text;` in the
+  body. Seven-line reproduction:
+  ```
+  fn main() -> i32 {
+      let text = String.from("hello")!;
+      let t = Thread.spawn(move () => {
+          var views = Vector<StringView>.create();
+          let pushed = views.push(text.view());
+      })!;
+      t.join();
+      return 0;
+  }
+  ```
+  ClayWind's claywind-dev passes its app's arguments to `Process.run` this way, from a thread.
