@@ -277,3 +277,10 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   }
   ```
   ClayWind's claywind-dev passes its app's arguments to `Process.run` this way, from a thread.
+- **M2. A CeeSafe program with a window opens a terminal window too on Windows.** Every executable `ceesafec build`
+  makes on Windows is a console program (the console subsystem; `main` its entry), so Windows gives it a console
+  window whenever it is not started from one: ClayWind's desktop host, double-clicked or started from Explorer or a
+  scheduled task, shows a terminal beneath its window (the owner saw it on the x64 laptop). There is no manifest
+  field or option for a GUI program (`-mwindows`, `/SUBSYSTEM:WINDOWS`). **Proposed:** a manifest field for a
+  windowed executable, which keeps `main` as the entry, and its output in the terminal that started it when there is
+  one (`AttachConsole(ATTACH_PARENT_PROCESS)`).
