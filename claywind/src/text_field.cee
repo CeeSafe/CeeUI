@@ -250,25 +250,30 @@ impl Controls {
         var caretX = metrics.caretX(buf[0..len], config, edit.caret);
         ui.open(Style.row().alignXY(AxisAlign.Start, AxisAlign.Center));
         if (composing) {
-            var text = [0u8; 256];
+            // One line: the text with the composition spliced in at the caret, the composition underlined, and
+            // the caret where the input method has it, all placed by the glyphs as drawn.
+            var line = [0u8; 1024];
             let comp = ui.composition();
-            let n = comp.length.min(256);
+            let before = edit.caret.min(1024);
+            let n = comp.length.min(1024 - before);
+            let after = (len - edit.caret).min(1024 - before - n);
+            for (i in 0..before) {
+                line[i] = buf[i];
+            }
             for (i in 0..n) {
-                text[i] = comp[i];
+                line[before + i] = comp[i];
             }
-            let caretInComposition = ui.compositionCaret().min(n);
-            if (edit.caret > 0) {
-                ui.labelBytes(buf[0..edit.caret], Text.of().color(SLATE_100));
+            for (i in 0..after) {
+                line[before + n + i] = buf[edit.caret + i];
             }
-            ui.open(Style.column());
-            ui.labelBytes(text[0..n], Text.of().color(SLATE_100));
-            ui.open(Style.box().w(Size.grow()).h(Size.fixed(1.0)).bg(SLATE_100));
+            let all = before + n + after;
+            ui.labelBytes(line[0..all], Text.of().color(SLATE_100));
+            let u0 = metrics.caretX(line[0..all], config, before);
+            let u1 = metrics.caretX(line[0..all], config, before + n);
+            ui.open(Style.box().absolute().passthrough().left(padX + u0.min(u1)).top(padY + FIELD_TEXT)
+                .w(Size.fixed((u1 - u0).abs())).h(Size.fixed(1.0)).bg(SLATE_100));
             ui.close();
-            ui.close();
-            if (edit.caret < len) {
-                ui.labelBytes(buf[edit.caret..len], Text.of().color(SLATE_100));
-            }
-            caretX += metrics.measure(text[0..caretInComposition], config).w;
+            caretX = metrics.caretX(line[0..all], config, before + ui.compositionCaret().min(n));
         } else if (len > 0) {
             ui.labelBytes(buf[0..len], Text.of().color(SLATE_100));
         }
