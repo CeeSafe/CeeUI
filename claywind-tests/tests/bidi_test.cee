@@ -56,13 +56,10 @@ fn hexValue(t: Slice<u8>) -> u32 {
     return v;
 }
 
-/// The decimal number in `t`, spaces ignored.
 fn decimalValue(t: Slice<u8>) -> u32 {
     var v: u32 = 0;
     for (d in t) {
-        if (d >= '0' && d <= '9') {
-            v = v * 10 + (d - '0') as u32;
-        }
+        v = v * 10 + (d - '0') as u32;
     }
     return v;
 }
@@ -167,7 +164,7 @@ fn bidiPassesBidiTest() -> Result<void, TestFailure> {
                 }
             }
         }
-        let bits = decimalValue(line[semi + 1..find(line, semi + 1, '#')]);
+        let bits = decimalValue(line[semi + 1..find(line, semi + 1, '#')].trim());
         for (b in 0usize..3) {
             if ((bits & (1u32 << truncate<u32>(b))) == 0) {
                 continue;
@@ -253,9 +250,9 @@ fn bidiPassesBidiCharacterTest() -> Result<void, TestFailure> {
             }
             w += len;
         }
-        let dir = decimalValue(line[f[1]..f[2] - 1]);
+        let dir = decimalValue(line[f[1]..f[2] - 1].trim());
         let direction: i32 = if (dir == 2) -1 else truncate<i32>(dir);
-        let wantPara = decimalValue(line[f[2]..f[3] - 1]);
+        let wantPara = decimalValue(line[f[2]..f[3] - 1].trim());
         let wantCount = parseLevels(line[f[3]..f[4] - 1], mut want);
         let orderCount = parseNumbers(line[f[4]..], mut order);
         cases += 1;
