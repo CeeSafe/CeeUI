@@ -165,5 +165,8 @@ public interface Platform {
     /// (hashId), or 0 when none is left: it is triggered as its key binding would be. A platform without menus leaves
     /// the default.
     @effects() fn nextChosenAction(borrow mut this) -> u32 => 0;
+    /// Files dragged from the system over the window this frame (drag.cee), or null when there is no such drag. A
+    /// platform without file drops leaves the default.
+    @effects() fn fileDrag(borrow this) -> FileDrag? => null;
     @effects() fn setCursor(borrow mut this, cursor: Cursor);
 }

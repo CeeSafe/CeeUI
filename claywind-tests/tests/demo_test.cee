@@ -107,3 +107,27 @@ fn onlyAHostWithWindowsOffersOne() -> Result<void, TestFailure> {
     Check.isTrue(offersWindow(true), "the desktop host's panel offers a window")?;
     return Check.isTrue(!offersWindow(false), "a host without windows offers none");
 }
+
+@test
+fn theDragTabLaysOut() -> Result<void, TestFailure> {
+    for (takes in [false, true]) {
+        var storage = heap(8388608);
+        let memory = FixedBufferAllocator.over(mut storage.viewMut());
+        var ui = Ui.create(memory, UiCapacity.of(2048))!;
+        var platform = ScriptPlatform.create("".bytes(), Dims { w: 1024.0, h: 640.0 });
+        let metrics = MetricMeasure { unused: 0 };
+        var app = DemoApp.create();
+        app.setTakesFileDrops(takes);
+        app.selectTab(1);
+        app.selectControlsTab(4);
+        for (f in 0..2) {
+            platform.beginFrame();
+            ui.begin(mut platform);
+            demoFrame(mut ui, mut app, metrics);
+            Check.isTrue(ui.endFrame(mut platform, metrics).isOk(), "the Drag tab fits")?;
+            platform.endFrame();
+        }
+        Check.isTrue((ui.boxOfHash(hashId("ci-files-drop")) != null) == takes, "the files' place only where files come")?;
+    }
+    return Ok();
+}

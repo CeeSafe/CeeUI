@@ -22,7 +22,12 @@ static PRIO_ITEMS: [StringView; 3] = ["Low", "Medium", "High"];
 static FILE_ITEMS: [StringView; 6] = ["README.md", "main.c", "clay.h", "renderer.h", "controls.h", "PARITY.md"];
 static THEME_ITEMS: [StringView; 3] = ["System", "Light", "Dark"];
 static CTX_ITEMS: [StringView; 4] = ["Cut", "Copy", "Paste", "Delete"];
-static CONTROLS_TABS: [StringView; 4] = ["Inputs", "Selection", "Lists", "Tasks"];
+static CONTROLS_TABS: [StringView; 5] = ["Inputs", "Selection", "Lists", "Tasks", "Drag"];
+/// The Drag tab's cards and its board's columns.
+static CARD_TITLES: [StringView; 6] = ["Layout engine", "Shaping", "Bidi", "GPU backends", "Menus", "Drag and drop"];
+static BOARD_COLUMNS: [StringView; 2] = ["To do", "Done"];
+/// What the board's cards are, as a drag's kind.
+const DRAG_CARD: u32 = 1;
 /// The Tasks tab's counts: the primes below each.
 static PRIME_LIMITS: [u64; 3] = [1000000, 5000000, 20000000];
 static PRIME_LABELS: [StringView; 3] = ["1 M", "5 M", "20 M"];
@@ -204,6 +209,14 @@ public struct DemoApp {
     drawsMenuBar: bool;
     menuModel: MenuModel;
     menuOpen: usize;
+    /// The Drag tab: each card's column, files dropped from the system (the host's number for the drop it has not
+    /// answered yet, 0 for none), and the names the last drop gave.
+    cardColumn: [u8; 6];
+    takesFileDrops: bool;
+    dropWanted: u64;
+    droppedNames: [u8; 240];
+    droppedLen: usize;
+    droppedCount: u32;
 
     /// main.c's initial state (and `ClayWind_darkMode = true`, which the host sets on the Ui).
     public fn create() -> DemoApp => DemoApp {
@@ -248,7 +261,54 @@ public struct DemoApp {
         drawsMenuBar: false,
         menuModel: MenuModel.create(),
         menuOpen: 0,
+        cardColumn: [0u8, 0, 1, 0, 1, 0],
+        takesFileDrops: false,
+        dropWanted: 0,
+        droppedNames: [0u8; 240],
+        droppedLen: 0,
+        droppedCount: 0,
     };
+
+    /// Opens the Controls page's tab `k` (Inputs, Selection, Lists, Tasks, Drag).
+    public fn selectControlsTab(borrow mut this, k: usize) {
+        if (k < CONTROLS_TABS.length) {
+            this.controlsTab = k;
+        }
+    }
+
+    /// The host passes on files dragged from the system (Platform.fileDrag): the Drag tab has a place for them.
+    public fn setTakesFileDrops(borrow mut this, takes: bool) {
+        this.takesFileDrops = takes;
+    }
+
+    /// Files the system dropped on the Drag tab: the host's number for the drop, whose paths the host gives back
+    /// (filesDropped), or null.
+    public fn takeFileDrop(borrow mut this) -> u64? {
+        let id = this.dropWanted;
+        this.dropWanted = 0;
+        return if (id == 0) null else id;
+    }
+
+    /// Starts the answer to a file drop: `count` files, whose names follow (fileDropped).
+    public fn filesDropped(borrow mut this, count: u32) {
+        this.droppedCount = count;
+        this.droppedLen = 0;
+    }
+
+    /// One dropped file's path (its name is shown).
+    public fn fileDropped(borrow mut this, path: Slice<u8>) {
+        let name = fileName(path);
+        if (this.droppedLen > 0 && this.droppedLen < 240) {
+            this.droppedNames[this.droppedLen] = '\n';
+            this.droppedLen += 1;
+        }
+        for (i in 0..name.length) {
+            if (this.droppedLen < 240) {
+                this.droppedNames[this.droppedLen] = name[i];
+                this.droppedLen += 1;
+            }
+        }
+    }
 
     /// The host has no native menus to give (X11): the demo draws its menus (demoMenu) in a bar of its own.
     public fn setDrawsMenuBar(borrow mut this, draws: bool) {
@@ -882,6 +942,102 @@ fn grouped(w: borrow mut TextWriter, n: u64) {
     }
 }
 
+/// The Drag tab: a board whose cards are dragged between its columns, and a place for files from the system.
+fn dragSection(ui: borrow mut Ui, app: borrow mut DemoApp) {
+    caption(
+        mut ui,
+        if (app.takesFileDrops) "Drag the cards between the columns; drop files from the system below."
+            else "Drag the cards between the columns.",
+    );
+    ui.open(Style.row().w(Size.grow()).gap(space(4.0)));
+    for (c in 0usize..2) {
+        let column = subName("ci-col", c);
+        let target = ui.dropTarget(column, DRAG_CARD);
+        let over = match (target) {
+            DropState.Over(_) => true,
+            _ => false,
+        };
+        match (target) {
+            DropState.Dropped(p) => {
+                if (p.value < 6) {
+                    app.cardColumn[p.value as usize] = truncate<u8>(c);
+                }
+            }
+            _ => {}
+        }
+        ui.open(Style.column().idHash(column).w(Size.grow()).h(Size.fixed(230.0)).p(space(3.0)).gap(space(2.0))
+            .rounded(Radius.Lg).bg(if (over) withAlpha(BLUE_500, 60) else SLATE_800).border(
+            1.0,
+            if (over) BLUE_500 else SLATE_700,
+        ));
+        ui.label(BOARD_COLUMNS[c], Text.of().color(muteCol(ui)).bold());
+        for (k in 0usize..6) {
+            if (app.cardColumn[k] as usize != c) {
+                continue;
+            }
+            let card = subName("ci-card", k);
+            ui.open(Style.box().idHash(card).w(Size.grow()).px(space(3.0)).py(space(2.0)).rounded(Radius.Md)
+                .bg(SLATE_700).cursor(Cursor.Pointer));
+            let dragged = ui.dragSource(card, DragPayload.of(DRAG_CARD, k as u64));
+            ui.label(CARD_TITLES[k], Text.of().color(if (dragged) SLATE_500 else SLATE_100));
+            ui.close();
+        }
+        ui.close();
+    }
+    ui.close();
+    // The card being dragged, under the pointer.
+    match (ui.dragging()) {
+        Some(p) => {
+            if (p.kind == DRAG_CARD && p.value < 6) {
+                let at = ui.dragPosition();
+                ui.open(Style.box().fixed().passthrough().left(at.x + 8.0).top(at.y + 8.0).z(500).px(space(3.0))
+                    .py(space(2.0)).rounded(Radius.Md).bg(BLUE_600));
+                ui.label(CARD_TITLES[p.value as usize], Text.of().color(SLATE_50));
+                ui.close();
+            }
+        }
+        null => {}
+    }
+    if (!app.takesFileDrops) {
+        return;
+    }
+    // Files from the system.
+    let zone = hashId("ci-files-drop");
+    let target = ui.dropTarget(zone, DRAG_FILES);
+    let over = match (target) {
+        DropState.Over(_) => true,
+        _ => false,
+    };
+    match (target) {
+        DropState.Dropped(p) => { app.dropWanted = p.value; }
+        _ => {}
+    }
+    ui.open(Style.column().idHash(zone).w(Size.grow()).h(Size.fixed(90.0)).p(space(3.0)).rounded(Radius.Lg)
+        .alignXY(AxisAlign.Center, AxisAlign.Center).bg(if (over) withAlpha(EMERALD_500, 60) else NONE)
+        .border(1.0, if (over) EMERALD_500 else SLATE_600));
+    if (app.droppedCount > 0) {
+        var head = [0u8; 48];
+        var w = TextWriter.create(mut head[..]);
+        w.decimal(app.droppedCount as u64);
+        w.text(if (app.droppedCount == 1) " file dropped:" else " files dropped:");
+        ui.labelBytes(w.written(), Text.of().color(inkCol(ui)));
+        ui.labelBytes(app.droppedNames[0..app.droppedLen], Text.of().color(muteCol(ui)).clamp(3));
+    } else {
+        ui.label(if (over) "Drop to list them" else "Drop files here", Text.of().color(muteCol(ui)));
+    }
+    ui.close();
+}
+
+/// `base` with `-k` after it, as an id.
+fn subName(base: StringView, k: usize) -> u32 {
+    var b = [0u8; 32];
+    var w = TextWriter.create(mut b[..]);
+    w.text(base);
+    w.byte('-');
+    w.decimal(k as u64);
+    return hashBytes(w.written());
+}
+
 /// The Tasks tab: counting primes on a background thread. Its reports wake the window, which otherwise sleeps.
 fn tasksSection<J: DemoJobs>(ui: borrow mut Ui, app: borrow mut DemoApp, jobs: borrow mut J) {
     if (!jobs.available()) {
@@ -1037,8 +1193,10 @@ fn controlsPage<M: TextMetrics, J: DemoJobs>(
         selectionSection(mut ui, mut app);
     } else if (app.controlsTab == 2) {
         listsSection(mut ui, mut app);
-    } else {
+    } else if (app.controlsTab == 3) {
         tasksSection(mut ui, mut app, mut jobs);
+    } else {
+        dragSection(mut ui, mut app);
     }
     ui.close();
     statePanel(mut ui, mut app, false);

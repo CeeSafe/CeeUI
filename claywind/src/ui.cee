@@ -90,6 +90,8 @@ public struct Ui<region r> {
     bindings: FixedList<r, Binding>;
     keystrokes: FixedList<r, Keystroke>;
     triggered: FixedList<r, u32>;
+    /// The drag under way, if any (drag.cee).
+    drag: DragState;
     /// Actions dispatched this frame, triggered at the next `begin` (actions.cee).
     queuedActions: [u32; 8];
     queuedCount: usize;
@@ -177,6 +179,7 @@ public struct Ui<region r> {
             bindings: FixedList<Binding>.over(bindings),
             keystrokes: FixedList<Keystroke>.over(keystrokes),
             triggered: FixedList<u32>.over(triggered),
+            drag: DragState.none(),
             queuedActions: [0u32; 8],
             queuedCount: 0,
             openDepth: 0,
@@ -249,6 +252,8 @@ public struct Ui<region r> {
         // Keystrokes to actions, through the key contexts around last frame's focused element.
         this.takeKeystrokes(mut platform);
         this.tree.hitTest(pointer.position);
+        // Drags (drag.cee): one starting, moving or dropped, or files dragged from the system over the window.
+        this.updateDrag(mut platform, pointer);
 
         // Clicks: an element is clicked when the pointer went down and came back up over it.
         this.clickedIds.clear();
@@ -264,7 +269,7 @@ public struct Ui<region r> {
                 this.pressedIds.push(this.tree.pointerOverAt(i));
             }
         }
-        if (pointer.released) {
+        if (pointer.released && !this.drag.active) {
             for (i in 0..this.pressedIds.length()) {
                 let id = this.pressedIds.get(i);
                 if (this.tree.isPointerOver(id)) {

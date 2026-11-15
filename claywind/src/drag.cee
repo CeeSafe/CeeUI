@@ -1,0 +1,140 @@
+// SPDX-License-Identifier: MIT
+// Drag and drop. An element becomes a drag source (`ui.dragSource`) with a payload the app chooses, a kind and a
+// value (a card's index, a row's id): pressed and moved a few points, it is dragged, and its release is no click.
+// A drop target (`ui.dropTarget`) names the kind it accepts and learns each frame whether such a drag is over it
+// (to show where it would land) and when one is dropped on it. Files dragged from the system over the window come
+// the same way, as a drag of kind DRAG_FILES whose value is the host's number for the drop (Platform.fileDrag): the
+// app asks its host for the paths.
+//
+//     ui.open(Style.box().id("card")...); ui.dragSource(hashId("card"), DragPayload.of(CARD, 3)); ui.close();
+//     ui.open(Style.box().id("done")...);
+//     match (ui.dropTarget(hashId("done"), CARD)) { DropState.Dropped(p) => move(p.value), _ => {} }
+
+/// How far the pointer moves, in points, with the button down on a drag source before the drag starts.
+const DRAG_THRESHOLD: f32 = 4.0;
+
+/// The kind of a drag of files from the system.
+public const DRAG_FILES: u32 = 0xF11E5;
+
+/// What a drag carries: a kind, which a drop target accepts or not, and a value the app reads.
+public struct DragPayload {
+    public kind: u32;
+    public value: u64;
+
+    public fn of(kind: u32, value: u64) -> DragPayload => DragPayload { kind: kind, value: value };
+}
+
+/// Files dragged from the system over the window, as a platform reports them each frame: where (in points), how
+/// many, whether they were dropped this frame, and the host's number for the drop (its paths are the host's).
+public struct FileDrag {
+    public position: Vec2;
+    public files: u32;
+    public dropped: bool;
+    public id: u64;
+}
+
+/// What a drop target learns this frame.
+public enum DropState {
+    /// No drag it accepts is over it.
+    Away,
+    /// A drag it accepts is over it: where it would land.
+    Over(DragPayload),
+    /// A drag it accepts was dropped on it this frame.
+    Dropped(DragPayload),
+}
+
+/// The drag under way: a press on a source that may become one, the drag itself, and whether it ends this frame.
+struct DragState {
+    candidate: u32;
+    candidatePayload: DragPayload;
+    start: Vec2;
+    active: bool;
+    source: u32;
+    payload: DragPayload;
+    position: Vec2;
+    dropped: bool;
+
+    fn none() -> DragState => DragState {
+        candidate: 0,
+        candidatePayload: DragPayload.of(0, 0),
+        start: Vec2.zero(),
+        active: false,
+        source: 0,
+        payload: DragPayload.of(0, 0),
+        position: Vec2.zero(),
+        dropped: false,
+    };
+}
+
+impl<region r> Ui<r> {
+    /// At `begin`, after the hit test: a drag dropped last frame is over; files from the system take the drag over
+    /// (and the hit test, at their position); a press on a source moved far enough starts a drag; a release drops it.
+    fn updateDrag(borrow mut this, platform: borrow mut dyn Platform, pointer: Pointer) {
+        if (this.drag.dropped) {
+            this.drag = DragState.none();
+        }
+        match (platform.fileDrag()) {
+            Some(f) => {
+                this.drag.active = true;
+                this.drag.source = 0;
+                this.drag.payload = DragPayload.of(DRAG_FILES, f.id);
+                this.drag.position = f.position;
+                this.drag.dropped = f.dropped;
+                this.tree.hitTest(f.position);
+                this.inputSeen = true;
+                return;
+            }
+            null => {}
+        }
+        if (this.drag.active && this.drag.payload.kind == DRAG_FILES) {
+            this.drag = DragState.none(); // the files left the window
+        }
+        if (this.drag.active) {
+            this.drag.position = pointer.position;
+            if (pointer.released || !pointer.down) {
+                this.drag.dropped = true;
+            }
+            return;
+        }
+        if (this.drag.candidate != 0) {
+            if (!pointer.down) {
+                this.drag.candidate = 0;
+            } else if ((pointer.position.x - this.drag.start.x).abs() > DRAG_THRESHOLD ||
+                (pointer.position.y - this.drag.start.y).abs() > DRAG_THRESHOLD) {
+                this.drag.active = true;
+                this.drag.source = this.drag.candidate;
+                this.drag.payload = this.drag.candidatePayload;
+                this.drag.position = pointer.position;
+                this.drag.candidate = 0;
+                this.pressedIds.clear(); // a drag's release is no click
+            }
+        }
+    }
+
+    /// Makes element `id` (open, or just closed) a drag source carrying `payload`: a press on it, moved a few points,
+    /// starts a drag. Whether it is the source of the drag under way (to dim it while it is dragged).
+    public fn dragSource(borrow mut this, id: u32, payload: DragPayload) -> bool {
+        if (this.pressedOn(id) && !this.drag.active) {
+            this.drag.candidate = id;
+            this.drag.candidatePayload = payload;
+            this.drag.start = this.pointerState.position;
+        }
+        return this.drag.active && this.drag.source == id;
+    }
+
+    /// Makes element `id` a drop target for drags of `kind` (DRAG_FILES for the system's files): whether one is over
+    /// it this frame, or was dropped on it.
+    public fn dropTarget(borrow this, id: u32, kind: u32) -> DropState {
+        if (!this.drag.active || this.drag.payload.kind != kind || !this.tree.isPointerOver(id)) {
+            return DropState.Away;
+        }
+        return if (this.drag.dropped) DropState.Dropped(this.drag.payload) else DropState.Over(this.drag.payload);
+    }
+
+    /// The drag under way this frame, if any (to draw what is dragged under the pointer, or show where it may go).
+    public fn dragging(borrow this) -> DragPayload? =>
+        if (this.drag.active && !this.drag.dropped) this.drag.payload else null;
+
+    /// Where the drag under way is, in points.
+    public fn dragPosition(borrow this) -> Vec2 => this.drag.position;
+}

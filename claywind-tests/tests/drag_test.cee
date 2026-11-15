@@ -1,0 +1,117 @@
+// SPDX-License-Identifier: MIT
+// Drag and drop (drag.cee): a press on a source moved a few points is a drag, and its release over a target that
+// accepts its kind drops it there (and is no click); a press without moving is still a click; files from the system
+// come as a drag of kind DRAG_FILES at the platform's position.
+
+import claywind;
+
+const CARD: u32 = 7;
+
+/// One frame: a source box at the left, a target box at the right; what the target saw, and whether the source was
+/// clicked.
+fn dragFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, accepts: u32) -> Result<[u32; 3], TestFailure> {
+    ui.begin(mut platform);
+    ui.open(Style.row().w(Size.fixed(400.0)).h(Size.fixed(100.0)).gap(100.0));
+    ui.open(Style.box().id("src").w(Size.fixed(100.0)).h(Size.fixed(100.0)));
+    let dragged = ui.dragSource(hashId("src"), DragPayload.of(CARD, 42));
+    ui.close();
+    ui.open(Style.box().id("dst").w(Size.fixed(100.0)).h(Size.fixed(100.0)));
+    let state: u32 = match (ui.dropTarget(hashId("dst"), accepts)) {
+        DropState.Away => 0,
+        DropState.Over(p) => if (p.value == 42 || p.kind == DRAG_FILES) 1 else 9,
+        DropState.Dropped(p) => if (p.value == 42 || p.kind == DRAG_FILES) 2 else 9,
+    };
+    ui.close();
+    ui.close();
+    let clicked: u32 = if (ui.clicked("src")) 1 else 0;
+    finish(mut ui, mut platform)?;
+    platform.pointerState.pressed = false;
+    platform.pointerState.released = false;
+    return Ok([state, clicked, if (dragged) 1 else 0]);
+}
+
+fn moveTo(platform: borrow mut FakePlatform, x: f32, y: f32) {
+    platform.pointerState.position = Vec2 { x: x, y: y };
+}
+
+@test
+fn aDragDropsOnATarget() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(32))!;
+    var platform = platformAt(400.0, 100.0, 50.0, 50.0);
+    dragFrame(mut ui, mut platform, CARD)?;
+    // Press on the source, move a little: not yet a drag.
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    dragFrame(mut ui, mut platform, CARD)?;
+    moveTo(mut platform, 52.0, 51.0);
+    var r = dragFrame(mut ui, mut platform, CARD)?;
+    Check.isTrue(r[2] == 0 && ui.dragging() == null, "two points is no drag")?;
+    // Further: a drag; over the target, Over; released there, Dropped, and no click.
+    moveTo(mut platform, 80.0, 50.0);
+    r = dragFrame(mut ui, mut platform, CARD)?;
+    Check.isTrue(r[2] == 1 && ui.dragging() != null, "a drag starts")?;
+    moveTo(mut platform, 250.0, 50.0);
+    r = dragFrame(mut ui, mut platform, CARD)?;
+    Check.equalU64(1, r[0] as u64)?;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    r = dragFrame(mut ui, mut platform, CARD)?;
+    Check.isTrue(r[0] == 2 && r[1] == 0, "dropped on the target, and the release is no click")?;
+    r = dragFrame(mut ui, mut platform, CARD)?;
+    Check.isTrue(r[0] == 0 && ui.dragging() == null, "the drag is over")?;
+    // A press and release without moving is a click, not a drag.
+    moveTo(mut platform, 50.0, 50.0);
+    dragFrame(mut ui, mut platform, CARD)?;
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    dragFrame(mut ui, mut platform, CARD)?;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    r = dragFrame(mut ui, mut platform, CARD)?;
+    return Check.isTrue(r[1] == 1 && r[0] == 0, "a click stays a click");
+}
+
+@test
+fn aTargetIgnoresOtherKinds() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(32))!;
+    var platform = platformAt(400.0, 100.0, 50.0, 50.0);
+    dragFrame(mut ui, mut platform, 99)?;
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    dragFrame(mut ui, mut platform, 99)?;
+    moveTo(mut platform, 250.0, 50.0);
+    dragFrame(mut ui, mut platform, 99)?;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    let r = dragFrame(mut ui, mut platform, 99)?;
+    return Check.equalU64(0, r[0] as u64);
+}
+
+@test
+fn filesFromTheSystemDropLikeADrag() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(32))!;
+    var platform = platformAt(400.0, 100.0, -1.0, -1.0);
+    dragFrame(mut ui, mut platform, DRAG_FILES)?;
+    // Files over the target (the pointer elsewhere: the system's drag has its own position).
+    platform.files = FileDrag { position: Vec2 { x: 250.0, y: 50.0 }, files: 2, dropped: false, id: 5 };
+    var r = dragFrame(mut ui, mut platform, DRAG_FILES)?;
+    Check.equalU64(1, r[0] as u64)?;
+    platform.files = FileDrag { position: Vec2 { x: 250.0, y: 50.0 }, files: 2, dropped: true, id: 5 };
+    r = dragFrame(mut ui, mut platform, DRAG_FILES)?;
+    Check.equalU64(2, r[0] as u64)?;
+    platform.files = null;
+    r = dragFrame(mut ui, mut platform, DRAG_FILES)?;
+    Check.isTrue(r[0] == 0 && ui.dragging() == null, "the drop is over")?;
+    // Files that only pass over and leave drop nothing.
+    platform.files = FileDrag { position: Vec2 { x: 250.0, y: 50.0 }, files: 1, dropped: false, id: 6 };
+    dragFrame(mut ui, mut platform, DRAG_FILES)?;
+    platform.files = null;
+    r = dragFrame(mut ui, mut platform, DRAG_FILES)?;
+    return Check.isTrue(r[0] == 0 && ui.dragging() == null, "files that leave drop nothing");
+}

@@ -182,6 +182,10 @@ separators), and a host shows them as the system's menus (a macOS menu bar, a Wi
 as its action. Where the system has no menu bar (X11), `Controls.menuBar` draws the same menus in the window. The
 demo's File menu opens and saves files through the system's dialogs (`FileDialog`).
 
+Drag and drop: an element becomes a drag source with a payload the app chooses (`Ui.dragSource`), and a drop
+target learns whether a drag of the kind it accepts is over it or was dropped on it (`Ui.dropTarget`); a drag's
+release is no click. The demo's Controls page has a board whose cards are dragged between columns.
+
 The demo (`claywind-demo/src/demo.cee`) uses most of the API. `claywind-hosts/desktop/src/main.cee` is a complete
 host loop in about 250 lines: window events, layout, incremental rendering, presenting only the changed boxes, and
 sleeping while nothing changes.
