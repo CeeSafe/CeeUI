@@ -85,6 +85,7 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 | `claywind-fonts/` | System font discovery for hosts (it reads files, as `claywind` cannot): fallback fonts for the characters a frame's fonts lack |
 | `claywind-tasks/` | Background work for a UI (hosted): a `Task` runs jobs on threads of their own, whose results wake the window (`Window.waitEvent`) and reach the frame through `poll`; a new job cancels the one before |
 | `claywind-demo/` | The demo app (the C version's `main.c`) and `ScriptPlatform`, a scripted input source for tests |
+| `claywind-dev/` | Hot reload: rebuilds an app when its sources change and restarts it where it was (`--hot`) |
 | `claywind-demo-tasks/` | The demo's background jobs on threads (`claywind-tasks`), for the desktop and GPU hosts: the Controls page's Tasks tab counts primes on one |
 | `claywind-hosts/desktop/` | The demo in a native window: AppKit, Win32 or X11, through CeeSafe's `Window`. The Controls page's Live state panel opens in a second window that shares the app's state and the renderer |
 | `claywind-hosts/headless/` | The demo rendered to files: screenshots, golden tests and benchmarks |
@@ -97,7 +98,7 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 
 ## Getting started
 
-Install the CeeSafe compiler, **ceesafec 0.52.0 or later** (the hosts use its window text input and clipboard, ADR 0141, sleep while nothing changes, ADRs 0142 and 0145, and show the system's menus and file dialogs, ADR 0146; ClayWind's array sizes are constant expressions, ADR 0143; 0.50.2 links with MinGW's gcc on Windows):
+Install the CeeSafe compiler, **ceesafec 0.54.0 or later** (the hosts use its window text input and clipboard, ADR 0141, sleep while nothing changes, ADRs 0142 and 0145, show the system's menus and file dialogs, ADR 0146, take files dropped from the system, ADR 0150, and are GUI programs on Windows, ADR 0151; ClayWind's array sizes are constant expressions, ADR 0143; 0.50.2 links with MinGW's gcc on Windows):
 
 ```sh
 curl -fsSL https://ceesafe.github.io/CeeSafe/install.sh | sh          # macOS and Linux
@@ -184,7 +185,19 @@ demo's File menu opens and saves files through the system's dialogs (`FileDialog
 
 Drag and drop: an element becomes a drag source with a payload the app chooses (`Ui.dragSource`), and a drop
 target learns whether a drag of the kind it accepts is over it or was dropped on it (`Ui.dropTarget`); a drag's
-release is no click. The demo's Controls page has a board whose cards are dragged between columns.
+release is no click. The demo's Controls page has a board whose cards are dragged between columns. Files dragged
+from the system come the same way, as a drag of kind `DRAG_FILES` (the host passes CeeSafe's `Window.dragOver` and
+`nextDrop` on through `Platform.fileDrag`), and the board's place for them lists what was dropped.
+
+Hot reload: `claywind-dev`, run in an app's package directory, builds the app, runs it with `--hot out/hot`, and
+watches the sources of the package and of every package it depends on by path. When a source changes it builds
+again; a build that fails prints its errors and leaves the app running, and one that succeeds asks the app to save
+its state (`SnapshotWriter`; the demo's `DemoApp.save`) and end, then starts the new build from that state. So a
+code change shows in the app where it was:
+
+```sh
+cd claywind-hosts/desktop && ../../claywind-dev/out/claywind_dev
+```
 
 The demo (`claywind-demo/src/demo.cee`) uses most of the API. `claywind-hosts/desktop/src/main.cee` is a complete
 host loop in about 250 lines: window events, layout, incremental rendering, presenting only the changed boxes, and

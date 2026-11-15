@@ -259,7 +259,7 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
 
 ## M. Found while writing claywind-dev, the hot-reload runner (roadmap P3 step 7, 2026-11-15, ceesafec 0.52.0)
 
-- **M1. A `move` closure cannot keep a view of its capture in a local.** In a `move` closure's body (a
+- **M1 (fixed in ceesafec 0.54.0). A `move` closure cannot keep a view of its capture in a local.** The cause was wider: any `borrow mut` parameter's placeholder loans, a closure's `env` among them, were taken as write targets through a shared view (type-system.md §25.7 rule 2 now says only mutable borrows are followed back); claywind-dev passes its app's arguments as written. The report as made: In a `move` closure's body (a
   `Thread.spawn` literal or a boxed closure), `views.push(text.view())`, where `text` is a captured `String` and
   `views` a `Vector<StringView>` local to the body, is N0272: "this stores a value borrowed from 'env.text' into what
   'env' refers to, which outlives this call". Nothing goes into the environment: the vector is the body's own and dies
@@ -277,10 +277,18 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   }
   ```
   ClayWind's claywind-dev passes its app's arguments to `Process.run` this way, from a thread.
-- **M2. A CeeSafe program with a window opens a terminal window too on Windows.** Every executable `ceesafec build`
+- **M2 (fixed in ceesafec 0.54.0, ADR 0151). A CeeSafe program with a window opens a terminal window too on Windows.** `windowed = true` (or `--windowed`) links a GUI program, `main` still its entry; started from a terminal it writes there, and without one its output goes to `NUL`. ClayWind's desktop and GPU hosts set it. The report as made: Every executable `ceesafec build`
   makes on Windows is a console program (the console subsystem; `main` its entry), so Windows gives it a console
   window whenever it is not started from one: ClayWind's desktop host, double-clicked or started from Explorer or a
   scheduled task, shows a terminal beneath its window (the owner saw it on the x64 laptop). There is no manifest
   field or option for a GUI program (`-mwindows`, `/SUBSYSTEM:WINDOWS`). **Proposed:** a manifest field for a
   windowed executable, which keeps `main` as the entry, and its output in the terminal that started it when there is
   one (`AttachConsole(ATTACH_PARENT_PROCESS)`).
+- **M3 (fixed in ceesafec 0.54.0). An unknown type in a struct field is reported again at a wrong place.** The cause: an impl's comparison built the interface's signature in the impl's file, so the interface's types were looked up there (the stray error carried an offset in the interface's file); it also let an impl in another package return a type of its own with the interface's type's name. The report as made: A field whose type is not imported
+  (`files: Drag?;`, `Drag` from another package, not named by the file's `import lib.X;` lines) gives the right
+  N0204 at the field, and a second N0204 for the same name at an unrelated place: inside a method's signature or a
+  struct literal elsewhere in the file (ClayWind's desktop host: at `y: saturatingTruncate<u32>(…)` in another
+  function). Reproduction: a library with `public struct Drag`, `public struct Point` and `public interface Source { fn
+  drag(borrow this) -> Drag? => null; }`; an app that imports `lib.Source` and `lib.Point` only, with `struct Thing {
+  a: u32; files: Drag?; fn create() -> Thing => Thing { a: 1, files: null }; }` and `impl Source for Thing { fn
+  drag(borrow this) -> Drag? => this.files; }`: three N0204, one of them at `create`'s `-> Thing` (13:17).

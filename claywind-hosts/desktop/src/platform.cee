@@ -12,6 +12,7 @@ import claywind.Ui;
 import claywind.EditCommand;
 import claywind.Keystroke;
 import claywind.Modifiers;
+import claywind.FileDrag;
 
 /// Wheel lines to ClayWind's wheel units: what the browser host's page sends for one notch.
 const WHEEL_UNITS: f32 = 2.5;
@@ -39,6 +40,8 @@ public struct DesktopPlatform {
     chosen: [u32; 8];
     chosenCount: usize;
     chosenRead: usize;
+    /// Files dragged from the system over the window this frame (the host sets it from Window.dragOver and nextDrop).
+    files: FileDrag?;
 
     public fn create(size: Dims) -> DesktopPlatform => DesktopPlatform {
         size: size,
@@ -59,7 +62,13 @@ public struct DesktopPlatform {
         chosen: [0u32; 8],
         chosenCount: 0,
         chosenRead: 0,
+        files: null,
     };
+
+    /// Files the system drags over the window this frame, or dropped (`dropped`), or none (null).
+    public fn setFileDrag(borrow mut this, files: FileDrag?) {
+        this.files = files;
+    }
 
     /// An action chosen in the window's menu (its name's hash), for the next frame.
     public fn choose(borrow mut this, action: u32) {
@@ -226,6 +235,7 @@ public struct DesktopPlatform {
 }
 
 impl Platform for DesktopPlatform {
+    fn fileDrag(borrow this) -> FileDrag? => this.files;
     fn nextChosenAction(borrow mut this) -> u32 {
         if (this.chosenRead >= this.chosenCount) {
             return 0;

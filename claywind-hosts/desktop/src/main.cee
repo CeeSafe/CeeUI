@@ -432,6 +432,10 @@ fn main() -> i32 {
     }
     app.setOpensWindows(true);
     app.setOpensFiles(true);
+    app.setTakesFileDrops(true);
+    // Files dropped from the system: the last drop's number and paths, until the app asks for them.
+    var dropNumber: u64 = 0;
+    var dropPaths = Vector<String>.create();
     // The menus: the system's (a macOS menu bar, a Windows window's menu), else drawn by the demo (X11, or
     // CLAYWIND_DRAWN_MENUS=1). They are set after the first frame, which binds their actions' keys.
     var menuModel = MenuModel.create();
@@ -482,6 +486,33 @@ fn main() -> i32 {
                 null => {}
             }
             return 0;
+        }
+        // Files from the system: a drag over the window, or a drop (kept under its number for the app to ask for).
+        match (window.nextDrop()) {
+            Some(d) => {
+                dropNumber += 1;
+                let count = truncate<u32>(d.paths.length);
+                dropPaths = d.paths;
+                main.platform.setFileDrag(FileDrag {
+                    position: Vec2 { x: d.x, y: d.y },
+                    files: count,
+                    dropped: true,
+                    id: dropNumber,
+                });
+            }
+            null => {
+                match (window.dragOver()) {
+                    Some(o) => {
+                        main.platform.setFileDrag(FileDrag {
+                            position: Vec2 { x: o.x, y: o.y },
+                            files: o.count,
+                            dropped: false,
+                            id: dropNumber + 1,
+                        });
+                    }
+                    null => { main.platform.setFileDrag(null); }
+                }
+            }
         }
         // A menu item chosen: its action, for this frame.
         loop {
@@ -534,6 +565,19 @@ fn main() -> i32 {
                 app.setDrawsMenuBar(true); // no menu bar from the system: the demo draws its own
                 main.ui.requestFrame();
             }
+        }
+        // A drop the app took (its place for files): the dropped files' paths.
+        match (app.takeFileDrop()) {
+            Some(n) => {
+                if (n == dropNumber) {
+                    app.filesDropped(truncate<u32>(dropPaths.length));
+                    for (p in dropPaths.view()) {
+                        app.fileDropped(p.view().bytes());
+                    }
+                    main.ui.requestFrame();
+                }
+            }
+            null => {}
         }
         // A file the app asked for (File > Open…, Save As…): the system's dialog, then the file.
         match (app.takeFileRequest()) {
