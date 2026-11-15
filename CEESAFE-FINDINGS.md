@@ -316,3 +316,19 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   i32`, the seconds east of UTC that the system's time zone gives at `at` (daylight saving included): `localtime_r`'s
   `tm_gmtoff` on POSIX systems, `GetTimeZoneInformationForYear` and `SystemTimeToTzSpecificLocalTime` on Windows, 0 in
   the interpreter (for reproducible runs) and where the system has no zone. Dates and formatting can stay out.
+- **N2 (fixed on CeeSafe's branch `fix/claywind-n2-n4`, awaiting a release). On Windows, git dependencies cannot be
+  fetched.** ceesafec ran `env GIT_TERMINAL_PROMPT=0 git …` (lib/std cannot set a child's environment, §26.9), and
+  Windows has no `env`: every git dependency failed with `'"env"' is not recognized` (seen with 0.54.0 and ADR 0152's
+  branch on the Windows 11 x64 laptop). Fixed: on Windows the variable is set by the batch file ceesafec already runs
+  tools through (`set "GIT_TERMINAL_PROMPT=0"`), and a `%` in an argument there is doubled, so a percent-encoded URL is
+  not read as a variable.
+- **N3 (fixed on the same branch). On Windows, a git dependency's checkout never matches `ceesafe.lock`.** Git for
+  Windows converts checkouts to CRLF by default (`core.autocrlf=true` in its system config), so the files' hash differs
+  from the lock's, written where they were LF: N0325, "its files changed". Fixed: ceesafec runs git with `-c
+  core.autocrlf=false -c core.eol=lf`.
+- **N4 (fixed on the same branch). On Windows, a program whose first socket is `AsyncTcpStream.connect` cannot
+  connect.** The connect creates its socket (`WSASocketW`) without starting Winsock, which only the blocking sockets,
+  the listeners and the resolver did, so the chat client (which never listens) failed with "Input/output error"
+  (WSANOTINITIALISED, unmapped). A server, which listens first, never met it. Fixed: the connect starts Winsock first.
+  Checked on the laptop: connect-and-write, connect then `Async.blocking`, and connect-write-read on a thread of their
+  own, all failing before and passing after; and the chat client live.
