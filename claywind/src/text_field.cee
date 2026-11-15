@@ -23,23 +23,22 @@ public struct TextEdit {
 /// The field's text size, as textInputEx measures it.
 const FIELD_TEXT: f32 = 18.0;
 
-/// The grapheme boundary of `text` nearest `x` points from its start.
+/// The grapheme boundary of `text` whose caret is nearest `x` points from its left edge (in right-to-left text the
+/// carets run the other way, so every boundary is tried).
 fn offsetAt<M: TextMetrics>(metrics: borrow M, text: Slice<u8>, x: f32) -> usize {
-    if (x <= 0.0) {
-        return 0;
-    }
-    var before: usize = 0;
-    var beforeX: f32 = 0.0;
-    while (before < text.length) {
-        let next = graphemeEnd(text, before);
-        let nextX = metrics.measure(text[0..next], TextConfig.of(FIELD_TEXT)).w;
-        if (nextX >= x) {
-            return if (x - beforeX <= nextX - x) before else next;
+    let config = TextConfig.of(FIELD_TEXT);
+    var best: usize = 0;
+    var bestDistance = (metrics.caretX(text, config, 0) - x).abs();
+    var at: usize = 0;
+    while (at < text.length) {
+        at = graphemeEnd(text, at);
+        let distance = (metrics.caretX(text, config, at) - x).abs();
+        if (distance < bestDistance) {
+            best = at;
+            bestDistance = distance;
         }
-        before = next;
-        beforeX = nextX;
     }
-    return text.length;
+    return best;
 }
 
 /// Whether byte `b` ends a word: ASCII space, punctuation or a symbol (a letter, digit or anything non-ASCII does
@@ -234,8 +233,10 @@ impl Controls {
         let config = TextConfig.of(FIELD_TEXT);
         // The selection, behind the text.
         if (focused && edit.selects()) {
-            let x0 = metrics.measure(buf[0..edit.from()], config).w;
-            let x1 = metrics.measure(buf[0..edit.to()], config).w;
+            let a = metrics.caretX(buf[0..len], config, edit.from());
+            let b = metrics.caretX(buf[0..len], config, edit.to());
+            let x0 = a.min(b);
+            let x1 = a.max(b);
             ui.open(
                 Style.box().absolute().passthrough().left(padX + x0).top(padY).w(
                     Size.fixed(x1 - x0),
@@ -246,7 +247,7 @@ impl Controls {
         }
         // The text, with the composition (underlined) at the caret while the input method composes.
         let composing = focused && ui.composition().length > 0;
-        var caretX = metrics.measure(buf[0..edit.caret], config).w;
+        var caretX = metrics.caretX(buf[0..len], config, edit.caret);
         ui.open(Style.row().alignXY(AxisAlign.Start, AxisAlign.Center));
         if (composing) {
             var text = [0u8; 256];

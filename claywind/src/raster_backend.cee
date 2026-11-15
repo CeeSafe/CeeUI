@@ -25,6 +25,11 @@ impl<region r> TextMetrics for Raster<r> {
             null => 0.8 * size,
         };
     }
+
+    fn caretX(borrow this, utf8: Slice<u8>, config: TextConfig, offset: usize) -> f32 {
+        let size = if (config.fontSize > 0.0) config.fontSize else 16.0;
+        return this.caretAt(utf8, config.fontId, size, config.letterSpacing, offset);
+    }
 }
 
 impl<region r> Backend for Raster<r> {

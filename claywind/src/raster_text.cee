@@ -46,9 +46,13 @@ struct StepGlyph {
     pen: f32;
     rise: f32;
     cluster: usize;
+    /// How far it moves the pen (in the run's font's units), and whether it is in a right-to-left run.
+    advance: f32;
+    rtl: bool;
 }
 
-fn emptyStep() -> StepGlyph => StepGlyph { slot: 0, glyph: 0, pen: 0.0, rise: 0.0, cluster: 0 };
+fn emptyStep() -> StepGlyph =>
+    StepGlyph { slot: 0, glyph: 0, pen: 0.0, rise: 0.0, cluster: 0, advance: 0.0, rtl: false };
 
 /// What shaping a line came to: the pen after it (the run's font's units) and how many glyphs it made.
 struct ShapeTotals {
@@ -669,7 +673,15 @@ impl<region r> Raster<r> {
                 b.g[k].placedY = y;
                 let at = if (rtl && emit && j < glyphs) first + glyphs - 1 - j else first + j;
                 if (emit && at >= skip && at - skip < out.length) {
-                    out[at - skip] = StepGlyph { slot: slot, glyph: g.glyph, pen: x, rise: y, cluster: g.cluster };
+                    out[at - skip] = StepGlyph {
+                        slot: slot,
+                        glyph: g.glyph,
+                        pen: x,
+                        rise: y,
+                        cluster: g.cluster,
+                        advance: advance,
+                        rtl: rtl,
+                    };
                 }
                 j += 1;
                 made += 1;
@@ -717,6 +729,58 @@ impl<region r> Raster<r> {
             }
         }
         return widest;
+    }
+
+    /// Where a caret before byte `offset` of one line `utf8` in font `fontId` at `fontSize` goes, in pixels from the
+    /// line's left edge, by the glyphs as drawn: at the left edge of the glyph of the first cluster at or after
+    /// `offset` in a left-to-right run, at its right edge in a right-to-left one; after the last character, past
+    /// the glyph of the last cluster on the side the line's reading direction ends on.
+    public fn caretAt(
+        borrow this,
+        utf8: Slice<u8>,
+        fontId: u32,
+        fontSize: f32,
+        letterSpacing: f32,
+        offset: usize,
+    ) -> f32 {
+        let primary = match (this.slotIndex(fontId)) {
+            Some(k) => k,
+            null => { return 0.5 * fontSize * round<f32>(offset.min(utf8.length)); }
+        };
+        let scale = fontSize / this.fonts.get(primary).info.unitsPerEm;
+        let spacing = this.spacingFactor(primary, utf8, fontSize, letterSpacing);
+        var chunk = [emptyStep(); 64];
+        var done: usize = 0;
+        var bestCluster: usize = 0xFFFFFFFF;
+        var bestX: f32 = 0.0;
+        var lastCluster: usize = 0;
+        var lastX: f32 = 0.0;
+        var any = false;
+        loop {
+            let totals = this.shapeLine(primary, utf8, spacing, done, mut chunk[..]);
+            let n = (totals.glyphs - done).min(64);
+            for (k in 0..n) {
+                let g = chunk[k];
+                let left = g.pen;
+                let right = g.pen + g.advance;
+                if (g.cluster >= offset && g.cluster < bestCluster) {
+                    bestCluster = g.cluster;
+                    bestX = if (g.rtl) right else left;
+                }
+                if (!any || g.cluster >= lastCluster) {
+                    lastCluster = g.cluster;
+                    lastX = if (g.rtl) left else right;
+                    any = true;
+                }
+            }
+            done += n;
+            if (n == 0 || done >= totals.glyphs) {
+                if (bestCluster != 0xFFFFFFFF) {
+                    return bestX * scale;
+                }
+                return if (any) lastX * scale else 0.0;
+            }
+        }
     }
 
     /// Shapes one line of `utf8` in font `fontId` at `fontSize` pixels per em, as `Command.Text` draws it: its glyphs

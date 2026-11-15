@@ -19,6 +19,11 @@ public interface TextMetrics {
     fn measure(borrow this, utf8: Slice<u8>, config: TextConfig) -> Dims;
     /// Distance from the top of a line to its baseline, or a negative value to let the engine synthesize it.
     fn baseline(borrow this, config: TextConfig) -> f32;
+    /// Where a caret before byte `offset` of one line `utf8` goes: its x from the line's left edge. By default the
+    /// width of the text before it; a shaper's metrics place it by the glyphs as drawn (right-to-left runs,
+    /// conjuncts, ligatures).
+    fn caretX(borrow this, utf8: Slice<u8>, config: TextConfig, offset: usize) -> f32 =>
+        this.measure(utf8[0..offset.min(utf8.length)], config).w;
 }
 
 /// One measured word of a text element (Clay__MeasuredWord). `newline` marks a line break (length 0).
