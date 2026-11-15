@@ -83,6 +83,7 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 |---|---|
 | `claywind/` | The library: `layout_*`, `raster_*`, `font`, `image`, `controls`, `ui`, `style`, `transition`, `damage` and the rest, under `src/` |
 | `claywind-fonts/` | System font discovery for hosts (it reads files, as `claywind` cannot): fallback fonts for the characters a frame's fonts lack |
+| `claywind-desktop/` | What a desktop app needs around ClayWind (hosted): `DesktopPlatform` over CeeSafe's `Window`, the system's fonts, `Pane` (a window's Ui, Damage and input; panes share one Raster), the system's menus from a `MenuModel`, file drops, and hot reload's `--hot` side. The desktop and GPU hosts use it, as an app would |
 | `claywind-tasks/` | Background work for a UI (hosted): a `Task` runs jobs on threads of their own, whose results wake the window (`Window.waitEvent`) and reach the frame through `poll`; a new job cancels the one before |
 | `claywind-demo/` | The demo app (the C version's `main.c`) and `ScriptPlatform`, a scripted input source for tests |
 | `claywind-dev/` | Hot reload: rebuilds an app when its sources change and restarts it where it was (`--hot`) |

@@ -1,0 +1,36 @@
+// SPDX-License-Identifier: MIT
+// Files and buffers for desktop apps: a whole file's bytes, a zeroed buffer for a Ui's or Raster's memory.
+
+/// The bytes of the file at `path`, or empty when it cannot be read.
+public fn readFile(path: StringView) -> Vector<u8> {
+    var bytes = Vector<u8>.create();
+    match (File.open(path)) {
+        Ok(f) => {
+            var file = f;
+            var chunk = [0u8; 65536];
+            loop {
+                let n = match (file.read(mut chunk[..])) {
+                    Ok(k) => k,
+                    Err(_) => 0,
+                };
+                if (n == 0) {
+                    break;
+                }
+                for (i in 0usize..n) {
+                    bytes.push(chunk[i])!;
+                }
+            }
+        }
+        Err(_) => {}
+    }
+    return bytes;
+}
+
+/// `count` zero bytes: memory for a FixedBufferAllocator (a Ui's, a Raster's, a Damage's).
+public fn zeros(count: usize) -> Vector<u8> {
+    var v = Vector<u8>.withCapacity(count)!;
+    for (i in 0..count) {
+        v.push(0)!;
+    }
+    return v;
+}

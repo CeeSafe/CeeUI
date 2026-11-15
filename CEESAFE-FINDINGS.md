@@ -292,3 +292,17 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   drag(borrow this) -> Drag? => null; }`; an app that imports `lib.Source` and `lib.Point` only, with `struct Thing {
   a: u32; files: Drag?; fn create() -> Thing => Thing { a: 1, files: null }; }` and `impl Source for Thing { fn
   drag(borrow this) -> Drag? => this.files; }`: three N0204, one of them at `create`'s `-> Thing` (13:17).
+- **M4. A git dependency must be the package at the repository's root.** tooling.md §4: "the dependency is the
+  package at the checkout's root". ClayWind is one repository of several packages in subdirectories (`claywind/`,
+  `claywind-fonts/`, `claywind-tasks/`, …), as most multi-package projects are, so an outside app (P3's gate, a chat
+  client in its own repository, "built on ClayWind's released packages only") cannot name `claywind` at a tag: only
+  path dependencies reach a subdirectory. **Proposed:** a git dependency may name a directory in the checkout
+  (`{ git = …, tag = …, dir = "claywind" }`), and a path dependency inside a checkout is the same package as that
+  checkout's directory named directly, so a package and its dependents in one repository resolve once.
+- **M5. On macOS a window program can crash when a file drag ends, after a menu choice (ceesafec 0.54.0).** ClayWind's
+  desktop host, after an item of its menu bar was chosen (System Events' `click menu item`) and a file was dropped on
+  its window by a dragging source that exits when the drag ends, crashed in AppKit's drag teardown
+  (`RemotePortInvalidationCallback` → `CoreDragTerminate` → `CoreDragEndDragging` → `objc_msgSend` on a dead object;
+  heap corruption detected by the allocator without Guard Malloc). Under Guard Malloc it crashes in about one run of
+  three; the drop alone, a second window, or a drop followed by a second window do not; a plain Cocoa window taking
+  the same drag never does. Being investigated in CeeSafe's macOS runtime (ADRs 0146, 0150).

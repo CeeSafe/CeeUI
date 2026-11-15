@@ -13,6 +13,10 @@ name = "claywind_demo_tasks"
 source = "path+../../claywind-demo-tasks"
 
 [[package]]
+name = "claywind_desktop"
+source = "path+../../claywind-desktop"
+
+[[package]]
 name = "claywind_fonts"
 source = "path+../../claywind-fonts"
 

@@ -1,0 +1,48 @@
+// SPDX-License-Identifier: MIT
+// Files dropped from the system (CeeSafe's Window.dragOver and nextDrop, ADR 0150) for a ClayWind frame: a drag of
+// files over the window, or a drop, reaches the Ui as a drag of kind DRAG_FILES (Platform.fileDrag), whose value is
+// the drop's number; the app asks for the paths of the drop it took by that number.
+
+import claywind;
+
+/// The last drop's number and paths.
+public struct Drops {
+    number: u64;
+    paths: Vector<String>;
+
+    public fn create() -> Drops => Drops { number: 0, paths: Vector<String>.create() };
+
+    /// Passes this frame's drag of files over `window`, or its drop, on to `platform`.
+    public fn poll(borrow mut this, window: borrow mut Window, platform: borrow mut DesktopPlatform) {
+        match (window.nextDrop()) {
+            Some(d) => {
+                this.number += 1;
+                let count = truncate<u32>(d.paths.length);
+                this.paths = d.paths;
+                platform.setFileDrag(FileDrag {
+                    position: Vec2 { x: d.x, y: d.y },
+                    files: count,
+                    dropped: true,
+                    id: this.number,
+                });
+            }
+            null => {
+                match (window.dragOver()) {
+                    Some(o) => {
+                        platform.setFileDrag(FileDrag {
+                            position: Vec2 { x: o.x, y: o.y },
+                            files: o.count,
+                            dropped: false,
+                            id: this.number + 1,
+                        });
+                    }
+                    null => { platform.setFileDrag(null); }
+                }
+            }
+        }
+    }
+
+    /// The paths of drop `number` (a DropState.Dropped payload's value), or null when it is not the last drop.
+    public fn pathsOf(borrow this, number: u64) -> borrow(this) Vector<String>? =>
+        if (number == this.number && number != 0) borrow this.paths else null;
+}

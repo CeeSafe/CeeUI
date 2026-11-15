@@ -21,298 +21,12 @@ import claywind;
 import claywind_demo;
 import claywind_fonts;
 import claywind_demo_tasks;
+import claywind_desktop;
 
 const START_WIDTH: u32 = 1024;
 const START_HEIGHT: u32 = 640;
 const INSPECTOR_WIDTH: u32 = 340;
 const INSPECTOR_HEIGHT: u32 = 600;
-/// Which window's frame the Raster holds: the main window's, the inspector's, or neither's.
-const MAIN: usize = 0;
-const INSPECTOR: usize = 1;
-const NEITHER: usize = 2;
-/// How long an idle window sleeps for want of an event (a wake or an event ends it sooner).
-const IDLE_MS: u32 = 0xFFFFFFFF;
-const MAX_PIXELS_WIDTH: usize = 2880;
-const MAX_PIXELS_HEIGHT: usize = 1800;
-
-fn readFile(path: StringView) -> Vector<u8> {
-    var bytes = Vector<u8>.create();
-    match (File.open(path)) {
-        Ok(f) => {
-            var file = f;
-            var chunk = [0u8; 65536];
-            loop {
-                let n = match (file.read(mut chunk[..])) {
-                    Ok(k) => k,
-                    Err(_) => 0,
-                };
-                if (n == 0) {
-                    break;
-                }
-                for (i in 0usize..n) {
-                    bytes.push(chunk[i])!;
-                }
-            }
-        }
-        Err(_) => {}
-    }
-    return bytes;
-}
-
-/// Loads `dir/file` as font `id`; false when it is missing or does not fit.
-fn loadFont(raster: borrow mut Raster, id: u32, dir: StringView, file: StringView) -> bool {
-    var path = [0u8; 512];
-    var w = TextWriter.create(mut path[..]);
-    w.text(dir);
-    w.byte('/');
-    w.text(file);
-    let name = match (StringView.fromUtf8(w.written())) {
-        Some(n) => n,
-        null => { return false; }
-    };
-    let bytes = readFile(name);
-    return bytes.length > 0 && raster.loadFont(id, bytes.view());
-}
-
-/// The regular, bold and monospaced faces from the first place that has them.
-fn loadFonts(raster: borrow mut Raster) -> bool {
-    match (Environment.variable("CLAYWIND_FONT_DIR")) {
-        Some(dir) => {
-            return loadFont(mut raster, FONT_18, dir, "Arial.ttf") &&
-                loadFont(mut raster, FONT_BOLD, dir, "Arial Bold.ttf") &&
-                loadFont(mut raster, FONT_MONO, dir, "Courier New.ttf");
-        }
-        null => {}
-    }
-    let places: [StringView; 16] = [
-        "/System/Library/Fonts/Supplemental",
-        "Arial.ttf",
-        "Arial Bold.ttf",
-        "Courier New.ttf",
-        "C:/Windows/Fonts",
-        "arial.ttf",
-        "arialbd.ttf",
-        "cour.ttf",
-        "/usr/share/fonts/truetype/msttcorefonts",
-        "Arial.ttf",
-        "Arial_Bold.ttf",
-        "Courier_New.ttf",
-        "/usr/share/fonts/truetype/dejavu",
-        "DejaVuSans.ttf",
-        "DejaVuSans-Bold.ttf",
-        "DejaVuSansMono.ttf",
-    ];
-    for (k in 0usize..4) {
-        let dir = places[k * 4];
-        if (loadFont(mut raster, FONT_18, dir, places[k * 4 + 1])) {
-            return loadFont(mut raster, FONT_BOLD, dir, places[k * 4 + 2]) &&
-                loadFont(mut raster, FONT_MONO, dir, places[k * 4 + 3]);
-        }
-    }
-    return false;
-}
-
-fn zeros(count: usize) -> Vector<u8> {
-    var v = Vector<u8>.withCapacity(count)!;
-    for (i in 0..count) {
-        v.push(0)!;
-    }
-    return v;
-}
-
-/// The ratio to draw at: the window's, lowered until `size` points fit the raster's pixels.
-fn ratioFor(size: WindowSize, scale: f32) -> f32 {
-    let w = round<f32>(if (size.width < 1) 1 else size.width);
-    let h = round<f32>(if (size.height < 1) 1 else size.height);
-    let wanted = if (scale >= 1.0) scale else 1.0;
-    let fitW = round<f32>(MAX_PIXELS_WIDTH) / w;
-    let fitH = round<f32>(MAX_PIXELS_HEIGHT) / h;
-    return wanted.min(fitW).min(fitH);
-}
-
-/// The pixel size and ratio `size` points at `scale` are drawn at (fitRaster's).
-fn pixelsFor(size: WindowSize, scale: f32) -> [usize; 2] {
-    let ratio = ratioFor(size, scale);
-    let w = saturatingTruncate<usize>(Math.round(round<f32>(size.width) * ratio));
-    let h = saturatingTruncate<usize>(Math.round(round<f32>(size.height) * ratio));
-    return [w.max(1).min(MAX_PIXELS_WIDTH), h.max(1).min(MAX_PIXELS_HEIGHT)];
-}
-
-/// One window's part of the host: its Ui, the Damage of its frames, its last frame while the Raster draws the other
-/// window's, its input, and its clock.
-struct Pane<region r> {
-    ui: Ui<r>;
-    damage: Damage<r>;
-    frame: RasterFrame<r>;
-    platform: DesktopPlatform;
-    last: u64;
-
-    fn create(
-        memory: borrow(r) FixedBufferAllocator,
-        elements: usize,
-        commands: usize,
-        pixels: usize,
-        size: WindowSize,
-    ) -> Result<Pane<r>, AllocError> {
-        return Ok(Pane {
-            ui: Ui.create(memory, UiCapacity.of(elements))?,
-            damage: Damage.create(memory, commands)?,
-            frame: RasterFrame.create(memory, pixels)?,
-            platform: DesktopPlatform.create(Dims { w: round<f32>(size.width), h: round<f32>(size.height) }),
-            last: Timer.now(),
-        });
-    }
-
-    /// Takes the window's events into the platform; true when the window asks to close.
-    fn takeEvents(borrow mut this, window: borrow mut Window) -> bool {
-        loop {
-            match (window.nextEvent()) {
-                Some(WindowEvent.Closed) => { return true; }
-                Some(e) => { this.platform.apply(e); }
-                null => { return false; }
-            }
-        }
-    }
-
-    /// Starts a frame: the clock, the input, and the text the window's input method has.
-    fn begin(borrow mut this, window: borrow mut Window) {
-        let now = Timer.now();
-        this.platform.setFrameTime(round<f32>(now - this.last) / 1000.0);
-        this.last = now;
-        this.ui.begin(mut this.platform);
-        this.platform.editInto(mut this.ui, mut window);
-    }
-
-    /// Ends a frame: layout, the text input's place and the cursor. False when the frame does not fit the Ui.
-    fn end(borrow mut this, window: borrow mut Window, raster: borrow Raster) -> bool {
-        match (this.ui.endFrame(mut this.platform, raster)) {
-            Ok() => {}
-            Err(_) => { return false; }
-        }
-        this.platform.editFrom(this.ui, mut window);
-        window.setCursor(windowCursor(this.platform.cursor));
-        return true;
-    }
-}
-
-/// Draws `pane`'s frame into `raster` and shows what changed in `window`: the raster takes this window's last frame
-/// back first when it holds the other window's (`holds`), keeping that one in `other`. False when the window refused
-/// the frame.
-fn drawPane(
-    raster: borrow mut Raster,
-    holds: borrow mut usize,
-    me: usize,
-    pane: borrow mut Pane,
-    other: borrow mut Pane,
-    window: borrow mut Window,
-) -> bool {
-    let clear = Color.hex(pageBg(pane.ui));
-    let size = window.size();
-    let scale = window.scale();
-    let px = pixelsFor(size, scale);
-    let ratio = ratioFor(size, scale);
-    var boxes = pane.damage.plan(pane.ui, clear, px[0], px[1], ratio);
-    if (boxes == 0) {
-        return true;
-    }
-    if (holds != me) {
-        if (holds != NEITHER && !raster.keepFrame(mut other.frame)) {
-            other.damage.invalidate(); // its frame did not fit: drawn whole next time
-        }
-        if (!raster.takeFrame(mut pane.frame)) {
-            pane.damage.invalidate(); // no frame of its own to draw over: draw it whole
-            boxes = pane.damage.plan(pane.ui, clear, px[0], px[1], ratio);
-        }
-        holds = me;
-    }
-    raster.setPixelRatio(ratio);
-    raster.resize(px[0], px[1]);
-    pane.damage.draw(mut raster, pane.ui, clear);
-    // Only the boxes Damage redrew changed: the window shows just those (Window.presentChanged).
-    var shown = [WindowBox { x: 0, y: 0, width: 0, height: 0 }; 4];
-    for (k in 0..boxes) {
-        let r = pane.damage.redrawn(k);
-        shown[k] = WindowBox {
-            x: saturatingTruncate<u32>(r.x),
-            y: saturatingTruncate<u32>(r.y),
-            width: saturatingTruncate<u32>(r.w),
-            height: saturatingTruncate<u32>(r.h),
-        };
-    }
-    let width = truncate<u32>(raster.frameWidth());
-    let height = truncate<u32>(raster.frameHeight());
-    return window.presentChanged(raster.pixels(), width, height, shown[0..boxes]).isOk();
-}
-
-/// A Key as the window's menus name it.
-fn windowKeyOf(k: Key) -> WindowKey? => match (k) {
-    Key.Tab => WindowKey.Tab,
-    Key.Enter => WindowKey.Enter,
-    Key.Escape => WindowKey.Escape,
-    Key.Backspace => WindowKey.Backspace,
-    Key.Delete => WindowKey.Delete,
-    Key.Left => WindowKey.Left,
-    Key.Right => WindowKey.Right,
-    Key.Up => WindowKey.Up,
-    Key.Down => WindowKey.Down,
-    Key.Home => WindowKey.Home,
-    Key.End => WindowKey.End,
-    Key.PageUp => WindowKey.PageUp,
-    Key.PageDown => WindowKey.PageDown,
-    Key.F1 => WindowKey.Function(1),
-    Key.F2 => WindowKey.Function(2),
-    Key.F3 => WindowKey.Function(3),
-    Key.F4 => WindowKey.Function(4),
-    Key.F5 => WindowKey.Function(5),
-    Key.F6 => WindowKey.Function(6),
-    Key.F7 => WindowKey.Function(7),
-    Key.F8 => WindowKey.Function(8),
-    Key.F9 => WindowKey.Function(9),
-    Key.F10 => WindowKey.Function(10),
-    Key.F11 => WindowKey.Function(11),
-    Key.F12 => WindowKey.Function(12),
-    _ => null,
-};
-
-/// A key binding as a menu item's shortcut.
-fn shortcutOf(binding: KeyBinding?) -> MenuShortcut? {
-    let b = match (binding) {
-        Some(x) => x,
-        null => { return null; }
-    };
-    let key = match (b.key) {
-        Some(k) => match (windowKeyOf(k)) {
-            Some(w) => w,
-            null => { return null; }
-        },
-        null => WindowKey.Character(b.character),
-    };
-    let m = b.modifiers;
-    return MenuShortcut {
-        key: key,
-        modifiers: WindowModifiers { shift: m.shift, control: m.control, alt: m.alt, command: m.command },
-    };
-}
-
-/// The app's menus (`model`) as the system's: each item's id is its place in the model, its shortcut its action's
-/// key binding in `ui`.
-fn systemMenu(model: borrow MenuModel, ui: borrow Ui) -> Result<Menu, AllocError> {
-    var menu = Menu.create();
-    for (k in 0..model.partCount()) {
-        let title = match (StringView.fromUtf8(model.partTitle(k))) {
-            Some(t) => t,
-            null => "?",
-        };
-        match (model.partKind(k)) {
-            MenuPartKind.Menu => { menu.addMenu(title)?; }
-            MenuPartKind.Item => {
-                menu.addItem(truncate<u32>(k), title, shortcutOf(ui.bindingForHash(model.partAction(k))))?;
-            }
-            MenuPartKind.Separator => { menu.addSeparator()?; }
-        }
-    }
-    return Ok(menu);
-}
 
 /// Shows the system's file dialog the app asked for, then reads or writes the file and tells the app.
 fn answerFileRequest(request: FileRequest, app: borrow mut DemoApp, window: borrow mut Window) {
@@ -355,14 +69,6 @@ fn answerFileRequest(request: FileRequest, app: borrow mut DemoApp, window: borr
     }
 }
 
-/// The message for a window that does not open.
-fn windowError(e: WindowError) -> StringView => match (e) {
-    WindowError.Unsupported => "this system has no window support",
-    WindowError.NoDisplay => "no display",
-    WindowError.NotMainThread => "not on the main thread",
-    WindowError.Resources => "the system refused",
-};
-
 fn main() -> i32 {
     // Hot reload (claywind-dev, `--hot DIR`): the state the previous build saved, its window's size included.
     let hotDir = hotDirectory();
@@ -402,7 +108,7 @@ fn main() -> i32 {
     let inspectorMemory = FixedBufferAllocator.over(mut inspectorStorage.viewMut());
     let rasterMemory = FixedBufferAllocator.over(mut rasterStorage.viewMut());
     let full = MAX_PIXELS_WIDTH * MAX_PIXELS_HEIGHT;
-    var main = match (Pane.create(mainMemory, 4096, 16384, full, window.size())) {
+    var main = match (Pane.create(mainMemory, 1, 4096, 16384, full, window.size())) {
         Ok(p) => p,
         Err(_) => {
             Console.writeErrorLine("desktop: not enough memory for the UI");
@@ -410,32 +116,29 @@ fn main() -> i32 {
         }
     };
     let small = WindowSize { width: INSPECTOR_WIDTH, height: INSPECTOR_HEIGHT };
-    var inspector = match (Pane.create(inspectorMemory, 512, 2048, full / 2, small)) {
+    var inspector = match (Pane.create(inspectorMemory, 2, 512, 2048, full / 2, small)) {
         Ok(p) => p,
         Err(_) => {
             Console.writeErrorLine("desktop: not enough memory for the inspector");
             return 1;
         }
     };
-    var capacity = RasterCapacity.of(MAX_PIXELS_WIDTH, MAX_PIXELS_HEIGHT);
-    capacity.fontBytes = 100663296; // room for fallback fonts from the system: a CJK font is tens of megabytes
-    var raster = match (Raster.create(rasterMemory, capacity)) {
+    var raster = match (Raster.create(rasterMemory, desktopRasterCapacity())) {
         Ok(r) => r,
         Err(_) => {
             Console.writeErrorLine("desktop: not enough memory for the renderer");
             return 1;
         }
     };
-    if (!loadFonts(mut raster)) {
+    if (!loadSystemFonts(mut raster)) {
         Console.writeErrorLine("desktop: no fonts found; set CLAYWIND_FONT_DIR");
         return 1;
     }
     app.setOpensWindows(true);
     app.setOpensFiles(true);
     app.setTakesFileDrops(true);
-    // Files dropped from the system: the last drop's number and paths, until the app asks for them.
-    var dropNumber: u64 = 0;
-    var dropPaths = Vector<String>.create();
+    // Files dropped from the system: the last drop's paths, until the app asks for them.
+    var drops = Drops.create();
     // The menus: the system's (a macOS menu bar, a Windows window's menu), else drawn by the demo (X11, or
     // CLAYWIND_DRAWN_MENUS=1). They are set after the first frame, which binds their actions' keys.
     var menuModel = MenuModel.create();
@@ -464,7 +167,7 @@ fn main() -> i32 {
     inspector.ui.setDarkMode(dark);
     inspector.ui.setSecondaryIsCommand(command);
     var second: Window? = null; // the inspector's window, while it is open
-    var holds = NEITHER;
+    var share = RasterShare.create();
     // Fonts from the system for characters the loaded ones lack, found as the frames need them.
     var systemFonts = SystemFonts.create();
     loop {
@@ -487,44 +190,9 @@ fn main() -> i32 {
             }
             return 0;
         }
-        // Files from the system: a drag over the window, or a drop (kept under its number for the app to ask for).
-        match (window.nextDrop()) {
-            Some(d) => {
-                dropNumber += 1;
-                let count = truncate<u32>(d.paths.length);
-                dropPaths = d.paths;
-                main.platform.setFileDrag(FileDrag {
-                    position: Vec2 { x: d.x, y: d.y },
-                    files: count,
-                    dropped: true,
-                    id: dropNumber,
-                });
-            }
-            null => {
-                match (window.dragOver()) {
-                    Some(o) => {
-                        main.platform.setFileDrag(FileDrag {
-                            position: Vec2 { x: o.x, y: o.y },
-                            files: o.count,
-                            dropped: false,
-                            id: dropNumber + 1,
-                        });
-                    }
-                    null => { main.platform.setFileDrag(null); }
-                }
-            }
-        }
-        // A menu item chosen: its action, for this frame.
-        loop {
-            match (window.nextMenuChoice()) {
-                Some(id) => {
-                    if ((id as usize) < menuModel.partCount()) {
-                        main.platform.choose(menuModel.partAction(id as usize));
-                    }
-                }
-                null => { break; }
-            }
-        }
+        // Files from the system (a drag over the window, or a drop), and the items chosen in the menu.
+        drops.poll(mut window, mut main.platform);
+        takeMenuChoices(mut window, menuModel, mut main.platform);
         var closeSecond = false;
         match (borrow mut second) {
             Some(w) => { closeSecond = inspector.takeEvents(mut w); }
@@ -532,11 +200,8 @@ fn main() -> i32 {
         }
         if (closeSecond) {
             second = null; // the inspector's window closes
-            inspector.frame.clear();
-            inspector.damage.invalidate();
-            if (holds == INSPECTOR) {
-                holds = NEITHER;
-            }
+            inspector.forget(mut share);
+            share.setWindows(1);
             app.inspectorClosed();
         }
         // Both windows draw the same state, so each frame runs in both: one whose frame did not change draws nothing.
@@ -550,7 +215,7 @@ fn main() -> i32 {
             main.damage.invalidate(); // the same commands draw other glyphs now (the next frame lays them out)
             inspector.damage.invalidate();
         }
-        if (!drawPane(mut raster, mut holds, MAIN, mut main, mut inspector, mut window)) {
+        if (!main.draw(mut raster, mut share, mut window, Color.hex(pageBg(main.ui)))) {
             Console.writeErrorLine("desktop: the window refused a frame");
             return 1;
         }
@@ -569,12 +234,15 @@ fn main() -> i32 {
         // A drop the app took (its place for files): the dropped files' paths.
         match (app.takeFileDrop()) {
             Some(n) => {
-                if (n == dropNumber) {
-                    app.filesDropped(truncate<u32>(dropPaths.length));
-                    for (p in dropPaths.view()) {
-                        app.fileDropped(p.view().bytes());
+                match (drops.pathsOf(n)) {
+                    Some(paths) => {
+                        app.filesDropped(truncate<u32>(paths.length));
+                        for (p in paths.view()) {
+                            app.fileDropped(p.view().bytes());
+                        }
+                        main.ui.requestFrame();
                     }
-                    main.ui.requestFrame();
+                    null => {}
                 }
             }
             null => {}
@@ -591,7 +259,8 @@ fn main() -> i32 {
             match (Window.open("Live state", INSPECTOR_WIDTH, INSPECTOR_HEIGHT)) {
                 Ok(w) => {
                     second = w;
-                    inspector.damage.invalidate();
+                    inspector.forget(mut share);
+                    share.setWindows(2);
                 }
                 Err(e) => {
                     Console.writeError("desktop: cannot open the inspector: ");
@@ -609,7 +278,7 @@ fn main() -> i32 {
                     Console.writeErrorLine("desktop: the inspector's frame does not fit its UI capacity");
                     return 1;
                 }
-                if (!drawPane(mut raster, mut holds, INSPECTOR, mut inspector, mut main, mut w)) {
+                if (!inspector.draw(mut raster, mut share, mut w, Color.hex(pageBg(inspector.ui)))) {
                     Console.writeErrorLine("desktop: the inspector's window refused a frame");
                     return 1;
                 }

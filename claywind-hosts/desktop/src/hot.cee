@@ -6,41 +6,10 @@
 
 import claywind;
 import claywind_demo;
+import claywind_desktop;
 
 /// The format of DIR/state: the host's part (version 1) and the demo's (DEMO_STATE_VERSION).
 const HOT_STATE_VERSION: u32 = (1u32 << 16) | DEMO_STATE_VERSION;
-
-/// How often the watcher looks at DIR/reload.
-const HOT_POLL_MS: u64 = 200;
-
-/// The watcher's flag: watching, a reload asked for, or stop (the app ends).
-const HOT_WATCHING: u32 = 0;
-const HOT_RELOAD: u32 = 1;
-const HOT_STOP: u32 = 2;
-
-/// The directory `--hot DIR` names, if the app was started so.
-public fn hotDirectory() -> StringView? {
-    for (i in 1usize..Process.argumentCount()) {
-        match (Process.argument(i)) {
-            Some(a) => {
-                if (a == "--hot") {
-                    return Process.argument(i + 1);
-                }
-            }
-            null => {}
-        }
-    }
-    return null;
-}
-
-/// `dir/name`.
-fn hotPath(dir: StringView, name: StringView) -> String {
-    var s = String.create();
-    s.append(dir)!;
-    s.append("/")!;
-    s.append(name)!;
-    return s;
-}
 
 /// The state a previous build saved, as read back: the window's size, the theme, and whether the app's state came
 /// back too (it is restored into `app`).
@@ -53,8 +22,7 @@ public struct HotStart {
 
 /// Reads DIR/state into `app`, if it is there and of this format; null otherwise (the app starts afresh).
 public fn hotRestore(dir: StringView, app: borrow mut DemoApp) -> HotStart? {
-    let path = hotPath(dir, "state");
-    let data = readFile(path.view());
+    let data = hotReadState(dir);
     if (data.length == 0) {
         return null;
     }
@@ -79,63 +47,5 @@ public fn hotSave(dir: StringView, size: WindowSize, dark: bool, app: borrow Dem
     if (!w.fits()) {
         return false;
     }
-    let path = hotPath(dir, "state");
-    return match (File.create(path.view())) {
-        Ok(f) => f.writeAt(w.written(), 0).isOk(),
-        Err(_) => false,
-    };
-}
-
-/// When DIR/reload was last modified, in milliseconds (0 when it is not there).
-fn reloadStamp(path: borrow String) -> i64 => match (File.modified(path.view())) {
-    Ok(t) => t.millis(),
-    Err(_) => 0,
-};
-
-/// The watcher: waits for DIR/reload to change, then asks for the reload and wakes the window; stops when asked.
-async fn watchReload(path: String, flag: Arc<AtomicU32>, waker: WindowWaker) -> Result<void, AsyncError> {
-    let first = await Async.blocking(() => reloadStamp(path));
-    loop {
-        await Timer.sleep(HOT_POLL_MS)?;
-        if (flag.get().load() == HOT_STOP) {
-            return Ok();
-        }
-        let now = await Async.blocking(() => reloadStamp(path));
-        if (now != first) {
-            flag.get().store(HOT_RELOAD);
-            waker.wake();
-            return Ok();
-        }
-    }
-}
-
-/// The watcher of DIR/reload and its flag.
-public struct HotWatch {
-    flag: Arc<AtomicU32>;
-    watcher: Thread<void>;
-
-    /// Starts watching `dir`'s reload file, waking the window of `waker` when it changes.
-    public fn start(dir: StringView, waker: WindowWaker) -> HotWatch? {
-        let flag = match (Arc<AtomicU32>.create(AtomicU32.create(HOT_WATCHING))) {
-            Ok(f) => f,
-            Err(_) => { return null; }
-        };
-        let theirs = flag.clone();
-        let path = hotPath(dir, "reload");
-        let thread = match (Thread.spawn(move () => {
-            let ignored = Async.run(watchReload(path, theirs, waker));
-        })) {
-            Ok(t) => t,
-            Err(_) => { return null; }
-        };
-        return HotWatch { flag: flag, watcher: thread };
-    }
-
-    /// Whether a new build is waiting for this one to save its state and end.
-    public fn reloadAsked(borrow this) -> bool => this.flag.get().load() == HOT_RELOAD;
-
-    drop {
-        // Stop the watcher (it looks again within HOT_POLL_MS), then its thread is joined as it is dropped.
-        this.flag.get().store(HOT_STOP);
-    }
+    return hotWriteState(dir, w.written());
 }
