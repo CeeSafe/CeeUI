@@ -299,6 +299,7 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
         platform.setFrameTime(round<f32>(now - last) / 1000.0);
         last = now;
         ui.begin(mut platform);
+        platform.editInto(mut ui, mut window);
         demoFrame(mut ui, mut app, gpu.raster);
         match (ui.endFrame(mut platform, gpu.raster)) {
             Ok() => {}
@@ -307,6 +308,7 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
                 return 1;
             }
         }
+        platform.editFrom(ui, mut window);
         window.setCursor(windowCursor(platform.cursor));
         if (systemFonts.supplyFrame(mut gpu.raster, ui) > 0) {
             damage.invalidate(); // the same commands draw other glyphs now (the next frame lays them out)

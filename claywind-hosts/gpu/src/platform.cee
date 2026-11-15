@@ -8,6 +8,8 @@ import claywind.Key;
 import claywind.Dims;
 import claywind.Vec2;
 import claywind.keyIndex;
+import claywind.Ui;
+import claywind.EditCommand;
 
 /// Wheel lines to ClayWind's wheel units: what the browser host's page sends for one notch.
 const WHEEL_UNITS: f32 = 2.5;
@@ -25,6 +27,10 @@ public struct DesktopPlatform {
     dt: f32;
     clock: f64;
     public cursor: Cursor;
+    /// The editing shortcuts given this frame (bits: 1 copy, 2 cut, 4 paste, 8 select all), and whether the
+    /// input method was on after the last frame.
+    commands: u32;
+    textInput: bool;
 
     public fn create(size: Dims) -> DesktopPlatform => DesktopPlatform {
         size: size,
@@ -38,6 +44,8 @@ public struct DesktopPlatform {
         dt: 0.0,
         clock: 0.0,
         cursor: Cursor.Default,
+        commands: 0,
+        textInput: false,
     };
 
     /// Seconds since the previous frame (the host measures it).
@@ -56,6 +64,56 @@ public struct DesktopPlatform {
         this.repeated = 0;
         this.typedCount = 0;
         this.typedRead = 0;
+        this.commands = 0;
+    }
+
+    /// After `ui.begin`: the frame's editing shortcuts, the clipboard's text for a Paste, and the input method's
+    /// composition, into the Ui.
+    public fn editInto(borrow this, ui: borrow mut Ui, window: borrow mut Window) {
+        if ((this.commands & 1) != 0) {
+            ui.editCommand(EditCommand.Copy);
+        }
+        if ((this.commands & 2) != 0) {
+            ui.editCommand(EditCommand.Cut);
+        }
+        if ((this.commands & 8) != 0) {
+            ui.editCommand(EditCommand.SelectAll);
+        }
+        if ((this.commands & 4) != 0) {
+            var text = String.create();
+            if (window.clipboardText(mut text)) {
+                ui.paste(text.view().bytes());
+            }
+        }
+        ui.setComposition(window.composition().bytes(), window.compositionCaret());
+    }
+
+    /// After the frame: what it copied onto the clipboard, and the input method on while a text field has focus,
+    /// its candidate window at the field's caret (in points).
+    public fn editFrom(borrow mut this, ui: borrow Ui, window: borrow mut Window) {
+        match (ui.copiedText()) {
+            Some(bytes) => {
+                match (StringView.fromUtf8(bytes)) {
+                    Some(text) => { let ignored = window.setClipboardText(text); }
+                    null => {}
+                }
+            }
+            null => {}
+        }
+        let wanted = ui.wantsTextInput();
+        if (wanted != this.textInput) {
+            window.setTextInput(wanted);
+            this.textInput = wanted;
+        }
+        if (wanted) {
+            let area = ui.textInputArea();
+            window.setTextInputArea(WindowBox {
+                x: saturatingTruncate<u32>(area.x.max(0.0)),
+                y: saturatingTruncate<u32>(area.y.max(0.0)),
+                width: saturatingTruncate<u32>(area.w.max(1.0)),
+                height: saturatingTruncate<u32>(area.h.max(1.0)),
+            });
+        }
     }
 
     /// Folds one window event into this frame's state (Closed is the host's).
@@ -90,6 +148,24 @@ public struct DesktopPlatform {
                 this.hold(Key.LeftShift, modifiers.shift);
                 this.hold(Key.LeftControl, modifiers.control);
                 this.hold(Key.LeftAlt, modifiers.alt);
+                // Copy, Cut, Paste and Select All: Command with C, X, V, A on macOS, Control elsewhere.
+                if (down && (modifiers.command || modifiers.control)) {
+                    match (key) {
+                        WindowKey.Character(c) => {
+                            let lower = if (c >= 'A' && c <= 'Z') c + 32 else c;
+                            if (lower == 'c') {
+                                this.commands |= 1;
+                            } else if (lower == 'x') {
+                                this.commands |= 2;
+                            } else if (lower == 'v') {
+                                this.commands |= 4;
+                            } else if (lower == 'a') {
+                                this.commands |= 8;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 match (claywindKey(key)) {
                     Some(k) => {
                         let bit = 1u64 << (keyIndex(k) as u64);
@@ -120,6 +196,8 @@ public struct DesktopPlatform {
                 }
             }
             WindowEvent.Closed => {}
+            // The window keeps the composition; editInto passes it on every frame.
+            WindowEvent.Composition => {}
         }
     }
 

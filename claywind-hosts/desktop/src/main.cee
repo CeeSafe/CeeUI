@@ -199,6 +199,7 @@ fn main() -> i32 {
         platform.setFrameTime(round<f32>(now - last) / 1000.0);
         last = now;
         ui.begin(mut platform);
+        platform.editInto(mut ui, mut window);
         demoFrame(mut ui, mut app, raster);
         match (ui.endFrame(mut platform, raster)) {
             Ok() => {}
@@ -207,6 +208,7 @@ fn main() -> i32 {
                 return 1;
             }
         }
+        platform.editFrom(ui, mut window);
         window.setCursor(windowCursor(platform.cursor));
         if (systemFonts.supplyFrame(mut raster, ui) > 0) {
             damage.invalidate(); // the same commands draw other glyphs now (the next frame lays them out)
