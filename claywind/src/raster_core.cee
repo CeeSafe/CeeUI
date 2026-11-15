@@ -116,6 +116,8 @@ public struct Raster<region r> {
     fallbackCount: usize;
     /// The shaping buffer (raster_text.cee, font_layout.cee): borrowed while a line is shaped, even by measuring.
     layout: RefCell<LayoutBuffer>;
+    /// The bidi buffer (raster_text.cee): borrowed while a line with right-to-left text is shaped.
+    bidi: RefCell<BidiBuffer>;
     width: i32;
     height: i32;
     /// The largest frame `create` made room for; `resize` stays within it.
@@ -193,6 +195,7 @@ public struct Raster<region r> {
             fallbacks: [0u32; 24],
             fallbackCount: 0,
             layout: RefCell<LayoutBuffer>.create(emptyLayoutBuffer()),
+            bidi: RefCell<BidiBuffer>.create(emptyBidiBuffer()),
             width: truncate<i32>(capacity.width),
             height: truncate<i32>(capacity.height),
             capacityWidth: truncate<i32>(capacity.width),

@@ -217,3 +217,43 @@ fn marksSitOnTheirBases() -> Result<void, TestFailure> {
     expect("the accent takes no width", run.width, e)?;
     return Ok();
 }
+
+@test
+fn rightToLeftRunsReadRightToLeft() -> Result<void, TestFailure> {
+    let arial = readFile(arialPath());
+    if (arial.length == 0) {
+        Console.writeLine("  (Arial not found: skipped)");
+        return Ok();
+    }
+    var storage = heap(8388608);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(64, 64);
+    c.imagePixels = 4;
+    c.fontBytes = 2097152;
+    var ras = Raster.create(memory, c)!;
+    Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 8];
+    // "a", a space, then Hebrew alef bet: the a on the left, then bet, then alef at the right end.
+    let run = ras.shapeRun("a \u{5D0}\u{5D1}".bytes(), 0, 40.0, 0.0, mut out[..])!;
+    Check.equalU64(4, run.count as u64)?;
+    Check.equalU64(0, out[0].cluster as u64)?;
+    Check.equalU64(4, out[2].cluster as u64)?;
+    Check.equalU64(2, out[3].cluster as u64)?;
+    Check.isTrue(out[2].x < out[3].x, "bet is left of alef")?;
+    expect("the width is the characters' own", run.width, ras.measure("a \u{5D0}\u{5D1}".bytes(), TextConfig.of(40.0)).w)?;
+    // In a right-to-left run a bracket takes its mirrored glyph: "(" shows as ")".
+    var close = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 2];
+    let one = ras.shapeRun(")".bytes(), 0, 40.0, 0.0, mut close[..])!;
+    let mixed = ras.shapeRun("\u{5D0}(\u{5D1})".bytes(), 0, 40.0, 0.0, mut out[..])!;
+    Check.equalU64(4, mixed.count as u64)?;
+    var opened = false;
+    for (k in 0..4) {
+        if (out[k].cluster == 2) {
+            opened = out[k].glyph == close[0].glyph;
+        }
+    }
+    Check.isTrue(opened, "the opening bracket draws as a closing one")?;
+    // Visual order: ")", bet, "(", alef, so alef's cluster comes last.
+    Check.equalU64(0, out[3].cluster as u64)?;
+    return Ok();
+}

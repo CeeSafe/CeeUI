@@ -111,6 +111,47 @@ const POS_TAGS: [u32; 4] = [0x6B65726E, 0x6D61726B, 0x6D6B6D6B, 0x64697374];
 const POS_TAGS_NO_KERN: [u32; 3] = [0x6D61726B, 0x6D6B6D6B, 0x64697374];
 const POS_MASKS: [u32; 4] = [1, 1, 1, 1];
 
+/// The code points a line's bidi pass resolves at once; a longer line is resolved in pieces this long.
+const BIDI_CAPACITY: usize = 1024;
+
+/// A line's bidi levels, its directional runs (byte ranges and levels) and their visual order.
+struct BidiBuffer {
+    levels: [u8; 1024];
+    scratch: [u32; 8192];
+    runStart: [usize; 1024];
+    runEnd: [usize; 1024];
+    runLevel: [u8; 1024];
+    order: [u32; 1024];
+}
+
+fn emptyBidiBuffer() -> BidiBuffer => BidiBuffer {
+    levels: [0u8; 1024],
+    scratch: [0u32; 8192],
+    runStart: [0usize; 1024],
+    runEnd: [0usize; 1024],
+    runLevel: [0u8; 1024],
+    order: [0u32; 1024],
+};
+
+/// Whether `utf8` has right-to-left text or controls (R, AL, RLE, RLO, RLI, FSI), without which every level is even
+/// and the line reads left to right.
+fn needsBidi(utf8: Slice<u8>) -> bool {
+    var i: usize = 0;
+    while (i < utf8.length) {
+        if (utf8[i] < 0x80) {
+            i += 1;
+            continue;
+        }
+        let cp = decodeUtf8(utf8, i);
+        let c = bidiClass(cp[0]);
+        if (c == BIDI_R || c == BIDI_AL || c == BIDI_RLE || c == BIDI_RLO || c == BIDI_RLI || c == BIDI_FSI) {
+            return true;
+        }
+        i += cp[1] as usize;
+    }
+    return false;
+}
+
 impl<region r> Raster<r> {
     /// The fonts tried, in order, for a character a run's font lacks (font ids, as `loadFont` took them); up to 24.
     /// A character no font has is drawn as the run's font's missing-glyph box.
@@ -197,9 +238,10 @@ impl<region r> Raster<r> {
         return [truncate<u32>(primary), 0];
     }
 
-    /// Shapes one line of `utf8` in a run in font `primary`: each stretch of characters that one font draws (the
-    /// run's, or a fallback's) goes through that font's GSUB and GPOS, then its glyphs are placed in order. `spacing`
-    /// scales every advance (letter spacing). Glyphs from the `skip`-th on go into `out` as far as it reaches.
+    /// Shapes one line of `utf8` in a run in font `primary`, in visual order: its directional runs (UAX #9, the line
+    /// as its own paragraph) left to right, each run's stretches of characters that one font draws (the run's, or a
+    /// fallback's) through that font's GSUB and GPOS. `spacing` scales every advance (letter spacing). Glyphs from
+    /// the `skip`-th on go into `out` as far as it reaches.
     fn shapeLine(
         borrow this,
         primary: usize,
@@ -210,30 +252,166 @@ impl<region r> Raster<r> {
     ) -> ShapeTotals {
         var guard = this.layout.write();
         let b = guard.data();
+        var t = ShapeTotals { pen: 0.0, glyphs: 0 };
+        if (!needsBidi(utf8)) {
+            t.pen = this.shapeSpan(
+                b,
+                primary,
+                utf8,
+                0,
+                utf8.length,
+                false,
+                true,
+                0.0,
+                spacing,
+                0,
+                skip,
+                out,
+                mut t.glyphs,
+            );
+            return t;
+        }
+        var bidiGuard = this.bidi.write();
+        let bb = bidiGuard.data();
+        var start: usize = 0;
+        while (start < utf8.length) {
+            // A piece of at most BIDI_CAPACITY code points, resolved as a paragraph.
+            var end = start;
+            var n: usize = 0;
+            while (end < utf8.length && n < BIDI_CAPACITY) {
+                end += decodeUtf8(utf8, end)[1] as usize;
+                n += 1;
+            }
+            let para = bidiLevels(utf8[start..end], -1, mut bb.levels[0..n], mut bb.scratch[..]);
+            // Its level runs (a character X9 removes goes with the one before it), then L2 on them.
+            var runs: usize = 0;
+            var at = start;
+            var previous: u8 = if (para > 0) 1 else 0;
+            for (k in 0..n) {
+                var l = bb.levels[k];
+                if (l == BIDI_REMOVED) {
+                    l = previous;
+                }
+                if (runs == 0 || l != bb.runLevel[runs - 1]) {
+                    bb.runStart[runs] = at;
+                    bb.runLevel[runs] = l;
+                    runs += 1;
+                }
+                at += decodeUtf8(utf8, at)[1] as usize;
+                bb.runEnd[runs - 1] = at;
+                previous = l;
+            }
+            let ordered = bidiVisualOrder(bb.runLevel[0..runs], mut bb.order[0..runs]);
+            for (v in 0..ordered) {
+                let r = bb.order[v] as usize;
+                let from = bb.runStart[r];
+                let to = bb.runEnd[r];
+                if ((bb.runLevel[r] & 1) == 0) {
+                    t.pen += this.shapeSpan(
+                        b,
+                        primary,
+                        utf8,
+                        from,
+                        to,
+                        false,
+                        true,
+                        t.pen,
+                        spacing,
+                        0,
+                        skip,
+                        out,
+                        mut t.glyphs,
+                    );
+                } else {
+                    // Right to left: measured first, then laid from its right edge leftwards.
+                    var none = [emptyStep(); 1];
+                    var count: usize = 0;
+                    let width = this.shapeSpan(
+                        b,
+                        primary,
+                        utf8,
+                        from,
+                        to,
+                        true,
+                        false,
+                        0.0,
+                        spacing,
+                        0,
+                        0,
+                        mut none[0..0],
+                        mut count,
+                    );
+                    let placed = this.shapeSpan(
+                        b,
+                        primary,
+                        utf8,
+                        from,
+                        to,
+                        true,
+                        true,
+                        t.pen + width,
+                        spacing,
+                        count,
+                        skip,
+                        out,
+                        mut t.glyphs,
+                    );
+                    t.pen += width;
+                }
+            }
+            start = end;
+        }
+        return t;
+    }
+
+    /// Shapes `utf8[from..to]`, one direction's run of a line: each stretch of characters that one font draws through
+    /// that font's GSUB and GPOS. Left to right, glyphs go right from `origin`; right to left (`rtl`: characters
+    /// with a mirrored form take it), leftwards from `origin`, its right edge. The glyphs are counted in `made`; when
+    /// `emit`, those from the `skip`-th on also go into `out` as far as it reaches, in visual order (right to left,
+    /// the run's `glyphs` glyphs, as a pass without `emit` counted them, reversed). The run's width, in the run's
+    /// font's units.
+    fn shapeSpan(
+        borrow this,
+        b: borrow mut LayoutBuffer,
+        primary: usize,
+        utf8: Slice<u8>,
+        from: usize,
+        to: usize,
+        rtl: bool,
+        emit: bool,
+        origin: f32,
+        spacing: f32,
+        glyphs: usize,
+        skip: usize,
+        out: SliceMut<StepGlyph>,
+        made: borrow mut usize,
+    ) -> f32 {
         let primaryUpem = this.fonts.get(primary).info.unitsPerEm;
         var pen: f32 = 0.0;
-        var made: usize = 0;
-        var cur = ShapeCursor { at: 0, pen: 0.0, previousSlot: 0, previousGlyph: 0, hasPrevious: false };
-        while (cur.at < utf8.length) {
+        let first: usize = made;
+        var j: usize = 0;
+        var cur = ShapeCursor { at: from, pen: 0.0, previousSlot: 0, previousGlyph: 0, hasPrevious: false };
+        while (cur.at < to) {
             // A stretch of characters in one font, up to the buffer's size.
             b.count = 0;
             b.nextLig = 1;
             var slot: usize = 0;
             var script: u32 = 0;
-            while (cur.at < utf8.length && b.count < LAYOUT_CAPACITY) {
+            while (cur.at < to && b.count < LAYOUT_CAPACITY) {
                 let cp = decodeUtf8(utf8, cur.at);
                 if (ignorable(cp[0])) {
                     cur.at += cp[1] as usize;
                     continue;
                 }
-                let pick = this.fontFor(primary, cur, cp[0]);
+                let c = if (rtl) bidiMirror(cp[0]) else cp[0];
+                let pick = this.fontFor(primary, cur, c);
                 let k = pick[0] as usize;
                 if (b.count > 0 && k != slot) {
                     break;
                 }
                 slot = k;
-                if (script == 0 && !combining(cp[0]) && cp[0] > 0x40) {
-                    script = scriptTag(cp[0]);
+                if (script == 0 && !combining(c) && c > 0x40) {
+                    script = scriptTag(c);
                 }
                 var g = emptyLayoutGlyph();
                 g.glyph = pick[1];
@@ -277,7 +455,9 @@ impl<region r> Raster<r> {
                 if (info.kern != 0 && k > 0) {
                     kernX = kerning(d, info, b.g[k - 1].glyph, g.glyph) * units;
                 }
-                var x = pen + kernX + g.xOffset * units;
+                let advance = (g.xAdvance * units + kernX) * spacing;
+                var x =
+                    if (rtl) origin - pen - advance + g.xOffset * units else origin + pen + kernX + g.xOffset * units;
                 var y = g.yOffset * units;
                 if (g.attachTo >= 0 && truncate<usize>(g.attachTo) < k) {
                     let base = b.g[truncate<usize>(g.attachTo)];
@@ -286,14 +466,16 @@ impl<region r> Raster<r> {
                 }
                 b.g[k].placedX = x;
                 b.g[k].placedY = y;
-                if (made >= skip && made - skip < out.length) {
-                    out[made - skip] = StepGlyph { slot: slot, glyph: g.glyph, pen: x, rise: y, cluster: g.cluster };
+                let at = if (rtl && emit && j < glyphs) first + glyphs - 1 - j else first + j;
+                if (emit && at >= skip && at - skip < out.length) {
+                    out[at - skip] = StepGlyph { slot: slot, glyph: g.glyph, pen: x, rise: y, cluster: g.cluster };
                 }
+                j += 1;
                 made += 1;
-                pen += (g.xAdvance * units + kernX) * spacing;
+                pen += advance;
             }
         }
-        return ShapeTotals { pen: pen, glyphs: made };
+        return pen;
     }
 
     /// The natural width of one line of `utf8` (no newlines) in font `primary`, in its units, and its glyph count.

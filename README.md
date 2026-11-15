@@ -41,6 +41,11 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 - **Unicode text segmentation:** lines break at UAX #14's opportunities (so CJK wraps between ideographs and a
   line breaks after a hyphen), and the caret, Backspace and line clamping work in UAX #29 grapheme clusters. Both
   pass Unicode 16's own test files.
+- **Bidirectional text:** each line goes through the Unicode Bidirectional Algorithm (UAX #9, all of it: explicit
+  embeddings, overrides and isolates, paired brackets), so Hebrew and other right-to-left text reads right to left
+  inside a left-to-right line and as a line of its own, brackets mirrored. It passes Unicode 16's BidiTest.txt and
+  BidiCharacterTest.txt in full. Not yet: right-aligned right-to-left paragraphs, caret movement and selection in
+  visual order.
 - **Retina output.** `Raster.setPixelRatio` draws at the display's pixel ratio while layout stays in points.
 - **Incremental rendering.** `Damage` works out what changed between frames, and the raster redraws only those
   boxes. The result is byte-identical to a full redraw.

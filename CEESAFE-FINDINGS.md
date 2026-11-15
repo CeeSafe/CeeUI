@@ -199,3 +199,14 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
     unused parameter `s`; and the generated `main.c` has `'t_9' may be used uninitialized` (GCC 16,
     `-Wmaybe-uninitialized`).
 
+
+## K. Found while building text shaping and bidi (2026-11-15, ceesafec 0.48.0)
+
+- **K1. An array length cannot be a constant expression.** `[0u32; 256 * 8]` is refused: "an array length must be
+  an integer literal, a 'usize' constant or a const parameter" (N0259). So a buffer sized as "8 u32s for each of
+  1,024 characters" has to be written `[0u32; 8192]`, and the two numbers can drift apart. The same goes for
+  `[u8; BIDI_CAPACITY]`-style fields whose size should follow another constant times a factor. **Proposed:** accept
+  any constant expression of type `usize` (arithmetic on literals and `usize` constants) as an array length.
+- **K2. `Slice<u8>` has no `trim`.** Parsing Unicode's test files (fields like ` 2 ` between semicolons) needs one;
+  the slice methods are `copyFrom`, `fill`, `swap`, `sortBy`, `forEach`, `any`, `all`, `partitionPoint`, `splitAt`
+  and `splitAtMut`, so the tests skip spaces by hand. **Proposed:** `trimmed()` (ASCII whitespace) on `Slice<u8>`.

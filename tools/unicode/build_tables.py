@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Builds claywind/src/unicode_data.cee from the Unicode Character Database: the properties line breaking (UAX #14)
-and grapheme clusters (UAX #29) need, for every code point, as one sorted table of ranges. The generated file is
+"""Builds claywind/src/unicode_data.cee from the Unicode Character Database: the properties line breaking (UAX #14),
+grapheme clusters (UAX #29), the bidirectional algorithm (UAX #9) and Arabic joining need, for every code point, as
+one sorted table of ranges; and the bidi paired brackets and mirrored glyphs, as sorted pairs. The generated file is
 checked in, so building ClayWind needs neither this script nor the UCD. Run it after a Unicode update:
 
     python3 tools/unicode/build_tables.py UCD_DIR
 
 UCD_DIR holds, from https://www.unicode.org/Public/<version>/ucd/: LineBreak.txt, EastAsianWidth.txt,
 DerivedCoreProperties.txt, extracted/DerivedGeneralCategory.txt (as DerivedGeneralCategory.txt),
-auxiliary/GraphemeBreakProperty.txt and emoji/emoji-data.txt.
+auxiliary/GraphemeBreakProperty.txt, emoji/emoji-data.txt, extracted/DerivedBidiClass.txt,
+extracted/DerivedJoiningType.txt, BidiBrackets.txt and BidiMirroring.txt.
 
 Each range's value packs:
   bits 0-5    Line_Break class (LB_* below)
@@ -17,6 +19,8 @@ Each range's value packs:
   bit 11      East_Asian_Width F, W or H (UAX #14's $EastAsian)
   bits 12-13  Indic_Conjunct_Break: 0 None, 1 Consonant, 2 Extend, 3 Linker
   bits 14-16  General_Category, as far as the rules ask: 0 other, 1 Mn, 2 Mc, 3 Me, 4 Pi, 5 Pf, 6 Cn
+  bits 17-21  Bidi_Class (BIDI_* below)
+  bits 22-24  Joining_Type: 0 U, 1 C, 2 D, 3 L, 4 R, 5 T
 """
 
 import os
@@ -30,6 +34,11 @@ GCB = ["Other", "CR", "LF", "Control", "Extend", "ZWJ", "Regional_Indicator", "P
        "LV", "LVT"]
 INCB = {"None": 0, "Consonant": 1, "Extend": 2, "Linker": 3}
 GC = {"Mn": 1, "Mc": 2, "Me": 3, "Pi": 4, "Pf": 5, "Cn": 6}
+BIDI = ["L", "R", "AL", "EN", "ES", "ET", "AN", "CS", "NSM", "BN", "B", "S", "WS", "ON", "LRE", "LRO", "RLE", "RLO",
+        "PDF", "LRI", "RLI", "FSI", "PDI"]
+BIDI_LONG = {"Left_To_Right": "L", "Right_To_Left": "R", "Arabic_Letter": "AL", "European_Terminator": "ET",
+             "Boundary_Neutral": "BN"}
+JT = {"U": 0, "C": 1, "D": 2, "L": 3, "R": 4, "T": 5, "Non_Joining": 0, "Transparent": 5}
 LIMIT = 0x110000
 
 
@@ -79,15 +88,29 @@ def main():
          lambda f: INCB[f[1]] if f[0] == "InCB" and len(f) > 1 else None)
     gc = [GC["Cn"]] * LIMIT
     fill(gc, os.path.join(ucd, "DerivedGeneralCategory.txt"), lambda f: GC.get(f[0], 0))
+    bidi = [0] * LIMIT
+    fill(bidi, os.path.join(ucd, "DerivedBidiClass.txt"), lambda f: BIDI.index(BIDI_LONG.get(f[0], f[0])))
+    jt = [0] * LIMIT
+    fill(jt, os.path.join(ucd, "DerivedJoiningType.txt"), lambda f: JT[f[0]])
+    brackets = []
+    for first, last, fields in entries(os.path.join(ucd, "BidiBrackets.txt"))[1]:
+        brackets.append((first, int(fields[0], 16), 1 if fields[1] == "c" else 0))
+    mirrors = []
+    for first, last, fields in entries(os.path.join(ucd, "BidiMirroring.txt"))[1]:
+        mirrors.append((first, int(fields[0], 16)))
     version = "?"
     m = re.search(r"LineBreak-([0-9.]+)\.txt", open(os.path.join(ucd, "LineBreak.txt"), encoding="utf-8").readline())
     if m:
         version = m.group(1)
 
+    def pack(cp):
+        return (lb[cp] | gcb[cp] << 6 | pict[cp] << 10 | wide[cp] << 11 | incb[cp] << 12 | gc[cp] << 14 |
+                bidi[cp] << 17 | jt[cp] << 22)
+
     ranges = []
     previous = None
     for cp in range(LIMIT):
-        v = lb[cp] | gcb[cp] << 6 | pict[cp] << 10 | wide[cp] << 11 | incb[cp] << 12 | gc[cp] << 14
+        v = pack(cp)
         if v != previous:
             ranges.append((cp, v))
             previous = v
@@ -117,10 +140,15 @@ def main():
         "const GC_PF: u32 = 5;",
         "const GC_CN: u32 = 6;",
         "",
+    ]
+    for i, name in enumerate(BIDI):
+        lines.append(f"const BIDI_{name}: u32 = {i};")
+    lines += [
+        "",
         "/// ASCII's properties, for a lookup without the search.",
         "const UNICODE_ASCII: [u32; 128] = [",
     ]
-    ascii = [lb[cp] | gcb[cp] << 6 | pict[cp] << 10 | wide[cp] << 11 | incb[cp] << 12 | gc[cp] << 14 for cp in range(128)]
+    ascii = [pack(cp) for cp in range(128)]
     for k in range(0, 128, 8):
         lines.append("    " + ", ".join(f"0x{v:X}" for v in ascii[k:k + 8]) + ",")
     lines += [
@@ -141,6 +169,28 @@ def main():
             row = []
     if row:
         lines.append("    " + ", ".join(row) + ",")
+    lines.append("];")
+    lines += [
+        "",
+        f"/// How many paired brackets BIDI_BRACKETS holds.",
+        f"const BIDI_BRACKET_COUNT: usize = {len(brackets)};",
+        "",
+        "/// The bidi paired brackets (BidiBrackets.txt) as (code point, its pair, 1 for a closing bracket), sorted.",
+        f"const BIDI_BRACKETS: [u32; {len(brackets) * 3}] = [",
+    ]
+    for k in range(0, len(brackets), 6):
+        lines.append("    " + ", ".join(f"0x{a:X}, 0x{b:X}, {c}" for a, b, c in brackets[k:k + 6]) + ",")
+    lines += [
+        "];",
+        "",
+        f"/// How many mirrored characters BIDI_MIRRORS holds.",
+        f"const BIDI_MIRROR_COUNT: usize = {len(mirrors)};",
+        "",
+        "/// Each character with a mirrored glyph (BidiMirroring.txt) and that glyph's character, sorted.",
+        f"const BIDI_MIRRORS: [u32; {len(mirrors) * 2}] = [",
+    ]
+    for k in range(0, len(mirrors), 8):
+        lines.append("    " + ", ".join(f"0x{a:X}, 0x{b:X}" for a, b in mirrors[k:k + 8]) + ",")
     lines.append("];")
     lines.append("")
     open(out, "w", encoding="utf-8").write("\n".join(lines))
