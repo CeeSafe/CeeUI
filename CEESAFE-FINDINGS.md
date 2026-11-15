@@ -306,3 +306,13 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   heap corruption detected by the allocator without Guard Malloc). Under Guard Malloc it crashes in about one run of
   three; the drop alone, a second window, or a drop followed by a second window do not; a plain Cocoa window taking
   the same drag never does. Being investigated in CeeSafe's macOS runtime (ADRs 0146, 0150).
+
+## N. Found while writing the chat client (roadmap P3's gate, 2026-11-15, ceesafec 0.54.0 and ADR 0152's branch)
+
+- **N1. lib/std cannot tell the local time zone.** A chat client shows each message's time ("22:50"), but
+  `Clock.now()` is UTC and §26.11 says "calendar dates, time zones and formatting are not part of the library" (ADR
+  0055), so the client prints UTC times (`claywind-chat`'s `clock`): three hours off here (UTC+3). An app cannot work
+  it out itself without reading the time zone database or calling C. **Proposed:** `Clock.localOffset(at: UnixTime) ->
+  i32`, the seconds east of UTC that the system's time zone gives at `at` (daylight saving included): `localtime_r`'s
+  `tm_gmtoff` on POSIX systems, `GetTimeZoneInformationForYear` and `SystemTimeToTzSpecificLocalTime` on Windows, 0 in
+  the interpreter (for reproducible runs) and where the system has no zone. Dates and formatting can stay out.
