@@ -20,6 +20,8 @@ public struct RasterCapacity {
     /// Pixels for all registered images.
     public imagePixels: usize;
     public images: usize;
+    /// Colour glyphs (emoji) kept, each also an image: its pixels count in `imagePixels`.
+    public colorGlyphs: usize;
     /// Bytes for loaded fonts (default 4 MB: about five Latin TrueType faces).
     public fontBytes: usize;
 
@@ -31,6 +33,7 @@ public struct RasterCapacity {
         pathPoints: 8192,
         imagePixels: 262144,
         images: 32,
+        colorGlyphs: 256,
         fontBytes: 4194304,
     };
 }
@@ -82,6 +85,9 @@ struct FontSlot {
     offset: usize;
     size: usize;
     info: FontInfo;
+    /// A colour-bitmap face's strikes (pixels per em), whose bitmaps the host supplies (raster_color.cee).
+    strikes: [u32; 16];
+    strikeCount: usize;
 }
 
 /// One path point in device space.
@@ -111,6 +117,8 @@ public struct Raster<region r> {
     fontPool: SliceMut<r, u8>;
     fontTop: usize;
     fonts: FixedList<r, FontSlot>;
+    /// Colour glyphs: bitmaps the host supplied, and COLR glyphs drawn for a GPU (raster_color.cee).
+    colorBitmaps: FixedList<r, ColorBitmapRecord>;
     /// The fallback chain (raster_text.cee): font ids tried for a character a run's font lacks.
     fallbacks: [u32; 24];
     fallbackCount: usize;
@@ -169,8 +177,14 @@ public struct Raster<region r> {
             gsub: 0,
             gpos: 0,
             gdef: 0,
+            colr: 0,
+            cpal: 0,
         };
-        let fonts = memory.allocArray(32, FontSlot { id: 0, offset: 0, size: 0, info: noFont })?;
+        let fonts = memory.allocArray(
+            32,
+            FontSlot { id: 0, offset: 0, size: 0, info: noFont, strikes: [0u32; 16], strikeCount: 0 },
+        )?;
+        let bitmaps = memory.allocArray(capacity.colorGlyphs, emptyColorBitmapRecord())?;
         return Ok(Raster {
             pool: pool,
             poolTop: frame,
@@ -192,6 +206,7 @@ public struct Raster<region r> {
             fontPool: fontPool,
             fontTop: 0,
             fonts: FixedList<FontSlot>.over(fonts),
+            colorBitmaps: FixedList<ColorBitmapRecord>.over(bitmaps),
             fallbacks: [0u32; 24],
             fallbackCount: 0,
             layout: RefCell<LayoutBuffer>.create(emptyLayoutBuffer()),
@@ -361,7 +376,9 @@ public struct Raster<region r> {
             this.fontPool[offset + i] = bytes[i];
         }
         this.fontTop += bytes.length;
-        this.fonts.push(FontSlot { id: id, offset: offset, size: bytes.length, info: info });
+        this.fonts.push(
+            FontSlot { id: id, offset: offset, size: bytes.length, info: info, strikes: [0u32; 16], strikeCount: 0 },
+        );
         return true;
     }
 

@@ -401,6 +401,8 @@ impl<region r> GpuBackend<r> {
 
     /// Starts a frame of `width` × `height` pixels at `ratio` pixels per point.
     public fn begin(borrow mut this, width: u32, height: u32, ratio: f32) {
+        // The Raster shapes and measures for this backend: at the frame's ratio it names the emoji strikes drawn.
+        this.raster.setPixelRatio(ratio);
         this.stream.clear();
         this.layerData.clear();
         this.records.clear();
@@ -1101,6 +1103,26 @@ impl<region r> GpuBackend<r> {
         let top = area.y * s;
         for (k in 0..shaped.count) {
             let g = this.shaped[k];
+            // A colour glyph is an image: a bitmap the host supplied, or COLR layers drawn once at this size.
+            var colored: ColorGlyph? = null;
+            if (this.raster.isBitmapFont(g.font)) {
+                colored = this.raster.colorBitmap(g.font, g.glyph, size, 1.0);
+                if (colored == null) {
+                    continue;
+                }
+            } else if (this.raster.isColrGlyph(g.font, g.glyph)) {
+                colored = this.raster.colorGlyphImage(g.font, g.glyph, size);
+            }
+            match (colored) {
+                Some(c) => {
+                    let ox = area.x * s + g.x;
+                    let baseline = top + shaped.ascent + g.y;
+                    let box = Rect { x: (ox + c.x) / s, y: (baseline + c.y) / s, w: c.w / s, h: c.h / s };
+                    this.picture(box, Color.rgba(255, 255, 255, 255), Corners.all(0.0), c.handle);
+                    continue;
+                }
+                null => {}
+            }
             // A mark GPOS raised or lowered sits off the line by g.y.
             let y = top + g.y;
             let iy = y.floor();

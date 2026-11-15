@@ -29,6 +29,22 @@ struct Face {
     size: usize;
     /// How many code points it maps in each block of 256 (claywind's cmapCoverage).
     coverage: Vector<u16>;
+    /// A colour-bitmap face (sbix or CBDT): loaded without its bitmaps, which are read as frames draw them.
+    bitmap: bool;
+    /// A colour face (sbix, CBDT or COLR): an emoji's first choice.
+    color: bool;
+}
+
+/// A colour-bitmap face loaded into a Raster: where its bitmaps are in its file.
+struct BitmapFace {
+    id: u32;
+    path: String;
+    /// sbix: each strike's offset in the file and its pixels per em (empty for CBDT).
+    strikeAt: Vector<usize>;
+    strikePpem: Vector<u32>;
+    /// CBDT's offset in the file, and the CBLC table that indexes it (0 and empty for sbix).
+    cbdt: usize;
+    cblc: Vector<u8>;
 }
 
 /// The system's fonts, as a catalog and a supplier of fallbacks.
@@ -42,6 +58,8 @@ public struct SystemFonts {
     public loaded: u32;
     /// Their files, in the order they were first loaded.
     files: Vector<String>;
+    /// The colour-bitmap faces loaded, by font id.
+    bitmaps: Vector<BitmapFace>;
     /// How long building the catalog took, in milliseconds (0 until it was built).
     public scanMs: f64;
 }
@@ -67,7 +85,32 @@ fn readAt(file: borrow File, offset: usize, out: borrow mut Vector<u8>, length: 
     return true;
 }
 
+/// Reads `out.length` bytes at `offset` straight into `out`.
+fn readInto(file: borrow File, offset: usize, out: SliceMut<u8>) -> bool {
+    var got: usize = 0;
+    while (got < out.length) {
+        let n = match (file.readAt(mut out[got..out.length], (offset + got) as u64)) {
+            Ok(k) => k,
+            Err(_) => { return false; }
+        };
+        if (n == 0) {
+            return false;
+        }
+        got += n;
+    }
+    return true;
+}
+
 fn u16be(d: Slice<u8>, at: usize) -> u32 => ((d[at] as u32) << 8) | (d[at + 1] as u32);
+
+/// A signed 16-bit big-endian value, as a float.
+fn i16be(d: Slice<u8>, at: usize) -> f32 {
+    let v = u16be(d, at);
+    return if (v >= 0x8000) round<f32>(v) - 65536.0 else round<f32>(v);
+}
+
+/// A signed byte, as a float.
+fn i8f(b: u8) -> f32 => if (b >= 0x80) round<f32>(b as u32) - 256.0 else round<f32>(b as u32);
 
 fn u32be(d: Slice<u8>, at: usize) -> u32 => (u16be(d, at) << 16) | u16be(d, at + 2);
 
@@ -102,6 +145,7 @@ impl SystemFonts {
         cmap: Vector<u8>.create(),
         loaded: 0,
         files: Vector<String>.create(),
+        bitmaps: Vector<BitmapFace>.create(),
         scanMs: 0.0,
     };
 
@@ -157,6 +201,93 @@ impl SystemFonts {
                 _ => {}
             }
         }
+        for (k in 0..ui.commandCount()) {
+            let command = ui.commandAt(k);
+            match (command) {
+                Command.Text(_, run) => {
+                    let size = if (run.fontSize > 0.0) run.fontSize else 16.0;
+                    added += this.supplyBitmaps(raster, ui.textOf(command), run.fontId, size, run.letterSpacing);
+                }
+                _ => {}
+            }
+        }
+        return added;
+    }
+
+    /// Supplies `raster` the colour bitmaps that `utf8`, drawn in font `fontId` at `size` units per em (at the
+    /// Raster's pixel ratio), takes from colour-bitmap faces and it lacks, read from their files: how many.
+    public fn supplyBitmaps(
+        borrow mut this,
+        raster: borrow mut Raster,
+        utf8: Slice<u8>,
+        fontId: u32,
+        size: f32,
+        letterSpacing: f32,
+    ) -> u32 {
+        if (this.bitmaps.length == 0 || utf8.length == 0) {
+            return 0;
+        }
+        var glyphs = Vector<ShapedGlyph>.create();
+        for (i in 0..utf8.length) {
+            if (glyphs.push(ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }).isErr()) {
+                return 0;
+            }
+        }
+        let run = match (raster.shapeRun(utf8, fontId, size, letterSpacing, mut glyphs.viewMut())) {
+            Some(r) => r,
+            null => { return 0; }
+        };
+        var added: u32 = 0;
+        var png = Vector<u8>.create();
+        var scratch = Vector<u8>.create();
+        for (k in 0..run.count) {
+            let g = glyphs[k];
+            if (!raster.isBitmapFont(g.font)) {
+                continue;
+            }
+            let strike = raster.bitmapStrike(g.font, size * raster.pixelRatio());
+            if (raster.hasColorBitmap(g.font, g.glyph, strike)) {
+                continue;
+            }
+            var place: [f32; 2]? = null;
+            for (b in 0..this.bitmaps.length) {
+                let index = match (raster.fontIndex(this.bitmaps[b].id)) {
+                    Some(i) => i,
+                    null => 0xFFFFFFFF,
+                };
+                if (index == g.font) {
+                    place = readBitmap(borrow this.bitmaps[b], strike, g.glyph, mut png);
+                }
+            }
+            let at = match (place) {
+                Some(p) => p,
+                null => {
+                    let none = Vector<u8>.create();
+                    let recorded = raster.addColorBitmap(
+                        g.font,
+                        g.glyph,
+                        strike,
+                        none.view(),
+                        0.0,
+                        0.0,
+                        mut scratch.viewMut(),
+                    );
+                    continue;
+                }
+            };
+            let needed = match (imageInfo(png.view())) {
+                Ok(info) => info.scratchBytes,
+                Err(_) => 0,
+            };
+            while (scratch.length < needed) {
+                if (scratch.push(0).isErr()) {
+                    return added;
+                }
+            }
+            if (raster.addColorBitmap(g.font, g.glyph, strike, png.view(), at[0], at[1], mut scratch.viewMut())) {
+                added += 1;
+            }
+        }
         return added;
     }
 
@@ -169,8 +300,12 @@ impl SystemFonts {
         return false;
     }
 
-    /// Catalog face `k` into `raster` as font `id` (the whole file: a collection's faces share its tables).
+    /// Catalog face `k` into `raster` as font `id` (the whole file: a collection's faces share its tables; a
+    /// colour-bitmap face without its bitmaps).
     fn load(borrow mut this, raster: borrow mut Raster, k: usize, id: u32) -> bool {
+        if (this.faces[k].bitmap) {
+            return this.loadBitmapFace(raster, k, id);
+        }
         let face = this.faces[k].face;
         let file = match (File.open(this.faces[k].path.view())) {
             Ok(f) => f,
@@ -187,6 +322,12 @@ impl SystemFonts {
         if (!raster.loadFontFace(id, bytes.view(), face)) {
             return false;
         }
+        this.remember(k);
+        return true;
+    }
+
+    /// Adds catalog face `k`'s file to the files loaded, once.
+    fn remember(borrow mut this, k: usize) {
         var known = false;
         for (f in this.files) {
             known = known || f.view() == this.faces[k].path.view();
@@ -197,6 +338,136 @@ impl SystemFonts {
                 Err(_) => {}
             }
         }
+    }
+
+    /// Colour-bitmap face `k` into `raster` as font `id`: a font of its own tables but the bitmaps (sbix, CBDT),
+    /// its strikes named to the Raster, and where its bitmaps are kept for `supplyBitmaps`.
+    fn loadBitmapFace(borrow mut this, raster: borrow mut Raster, k: usize, id: u32) -> bool {
+        let file = match (File.open(this.faces[k].path.view())) {
+            Ok(f) => f,
+            Err(_) => { return false; }
+        };
+        var head = Vector<u8>.create();
+        if (!readAt(file, 0, mut head, 12)) {
+            return false;
+        }
+        let faces = fontFaceCount(head.view());
+        if (faces > 1 && !readAt(file, 0, mut head, 12 + (faces as usize) * 4)) {
+            return false;
+        }
+        let at = match (faceDirectory(head.view(), this.faces[k].face)) {
+            Some(a) => a,
+            null => { return false; }
+        };
+        var dir = Vector<u8>.create();
+        if (!readAt(file, at, mut dir, 12)) {
+            return false;
+        }
+        let tables = u16be(dir.view(), 4) as usize;
+        if (!readAt(file, at, mut dir, 12 + tables * 16)) {
+            return false;
+        }
+        // The kept tables, in the directory's (sorted) order, each at a 4-byte boundary after the new directory.
+        var kept: usize = 0;
+        var total: usize = 0;
+        for (t in 0..tables) {
+            let r = 12 + t * 16;
+            if (!isBitmapData(dir.view(), r)) {
+                kept += 1;
+                total += (u32be(dir.view(), r + 12) as usize + 3) & 0xFFFFFFFC;
+            }
+        }
+        var font = Vector<u8>.create();
+        let start = 12 + kept * 16;
+        for (i in 0..start + total) {
+            if (font.push(0).isErr()) {
+                return false;
+            }
+        }
+        for (i in 0..4) {
+            font[i] = dir[i];
+        }
+        font[4] = truncate<u8>(kept >> 8);
+        font[5] = truncate<u8>(kept);
+        var next = start;
+        var w: usize = 12;
+        for (t in 0..tables) {
+            let r = 12 + t * 16;
+            if (isBitmapData(dir.view(), r)) {
+                continue;
+            }
+            let offset = u32be(dir.view(), r + 8) as usize;
+            let length = u32be(dir.view(), r + 12) as usize;
+            for (i in 0..8) {
+                font[w + i] = dir[r + i];
+            }
+            putU32(mut font, w + 8, next);
+            putU32(mut font, w + 12, length);
+            if (!readInto(file, offset, mut font.viewMut()[next..next + length])) {
+                return false;
+            }
+            w += 16;
+            next += (length + 3) & 0xFFFFFFFC;
+        }
+        if (!raster.loadFontFace(id, font.view(), 0)) {
+            return false;
+        }
+        var b = BitmapFace {
+            id: id,
+            path: match (this.faces[k].path.clone()) {
+                Ok(p) => p,
+                Err(_) => { return false; }
+            },
+            strikeAt: Vector<usize>.create(),
+            strikePpem: Vector<u32>.create(),
+            cbdt: 0,
+            cblc: Vector<u8>.create(),
+        };
+        var ppems = Vector<u32>.create();
+        var bytes = Vector<u8>.create();
+        match (findTable(dir.view(), ['s', 'b', 'i', 'x'])) {
+            Some(t) => {
+                if (readAt(file, t.offset, mut bytes, 8)) {
+                    let strikes = (u32be(bytes.view(), 4) as usize).min(16);
+                    if (readAt(file, t.offset, mut bytes, 8 + strikes * 4)) {
+                        var offsets = Vector<usize>.create();
+                        for (s in 0..strikes) {
+                            let ignored = offsets.push(t.offset + u32be(bytes.view(), 8 + s * 4) as usize);
+                        }
+                        for (o in offsets) {
+                            if (readAt(file, o, mut bytes, 4)) {
+                                let ppem = u16be(bytes.view(), 0);
+                                let a = b.strikeAt.push(o);
+                                let p = b.strikePpem.push(ppem);
+                                let q = ppems.push(ppem);
+                            }
+                        }
+                    }
+                }
+            }
+            null => {}
+        }
+        match (findTable(dir.view(), ['C', 'B', 'D', 'T'])) {
+            Some(t) => { b.cbdt = t.offset; }
+            null => {}
+        }
+        match (findTable(dir.view(), ['C', 'B', 'L', 'C'])) {
+            Some(t) => {
+                if (t.length >= 8 && readAt(file, t.offset, mut b.cblc, t.length)) {
+                    let sizes = (u32be(b.cblc.view(), 4) as usize).min(16);
+                    for (i in 0..sizes) {
+                        let r = 8 + i * 48;
+                        if (r + 48 <= b.cblc.length) {
+                            let q = ppems.push(b.cblc[r + 45] as u32);
+                        }
+                    }
+                }
+            }
+            null => {}
+        }
+        let named = raster.setBitmapStrikes(id, ppems.view());
+        let ignored = this.bitmaps.push(b);
+        this.remember(k);
         return true;
     }
 
@@ -206,6 +477,8 @@ impl SystemFonts {
         if (block >= BLOCKS) {
             return null;
         }
+        // An emoji comes from a colour face when one covers it, before a monochrome symbol font.
+        let emoji = isPictographic(cp);
         var most: u32 = 0;
         for (f in this.faces) {
             most = most.max(f.coverage[block] as u32);
@@ -220,7 +493,7 @@ impl SystemFonts {
                 }
                 match (best) {
                     Some(b) => {
-                        if (better(f, borrow this.faces[b], block, most)) {
+                        if (better(f, borrow this.faces[b], block, most, emoji)) {
                             best = k;
                         }
                     }
@@ -320,8 +593,8 @@ impl SystemFonts {
         }
     }
 
-    /// Each face of the font file at `path` with outlines claywind draws (TrueType or CFF): its weight, style and
-    /// coverage. CFF2 faces and colour-bitmap faces (sbix, CBDT: not drawn yet) are left out.
+    /// Each face of the font file at `path` that claywind draws (TrueType or CFF outlines, or sbix or CBDT colour
+    /// bitmaps): its weight, style and coverage. CFF2 faces are left out.
     fn addFile(borrow mut this, path: String) {
         let file = match (File.open(path.view())) {
             Ok(f) => f,
@@ -349,13 +622,15 @@ impl SystemFonts {
                 continue;
             }
             let tables = u16be(dir.view(), 4) as usize;
-            if (!readAt(file, at, mut dir, 12 + tables * 16) || !drawableFace(dir.view())) {
+            if (!readAt(file, at, mut dir, 12 + tables * 16)) {
                 continue;
             }
-            if (findTable(
-                dir.view(),
-                ['s', 'b', 'i', 'x'],
-            ) != null || findTable(dir.view(), ['C', 'B', 'D', 'T']) != null) {
+            let bitmap = findTable(dir.view(), ['s', 'b', 'i', 'x']) != null ||
+                (findTable(
+                    dir.view(),
+                    ['C', 'B', 'D', 'T'],
+                ) != null && findTable(dir.view(), ['C', 'B', 'L', 'C']) != null);
+            if (!drawableFace(dir.view()) && !bitmap) {
                 continue;
             }
             var weight: u32 = 400;
@@ -398,6 +673,8 @@ impl SystemFonts {
                 sans: sans,
                 size: size,
                 coverage: coverage,
+                bitmap: bitmap,
+                color: bitmap || findTable(dir.view(), ['C', 'O', 'L', 'R']) != null,
             });
         }
     }
@@ -439,9 +716,12 @@ fn contains(v: borrow Vector<usize>, x: usize) -> bool {
 }
 
 /// Whether face `a` is a better choice for `block` than face `b`, when the best covers `most` of its code points:
-/// covering nearly as much as the best (90 %), then sans-serif, then the weight nearer 400, then upright, then the
+/// for an emoji, a colour face first; then covering nearly as much as the best (90 %), then sans-serif, then the weight nearer 400, then upright, then the
 /// smaller file, then covering more.
-fn better(a: borrow Face, b: borrow Face, block: usize, most: u32) -> bool {
+fn better(a: borrow Face, b: borrow Face, block: usize, most: u32, emoji: bool) -> bool {
+    if (emoji && a.color != b.color) {
+        return a.color;
+    }
     let ca = a.coverage[block] as u32;
     let cb = b.coverage[block] as u32;
     let fullA = ca * 10 >= most * 9;
@@ -464,4 +744,174 @@ fn better(a: borrow Face, b: borrow Face, block: usize, most: u32) -> bool {
         return a.size < b.size;
     }
     return ca > cb;
+}
+
+/// Whether the table record at `r` of a face's directory holds colour bitmaps (sbix, CBDT), which a Raster is
+/// loaded without.
+fn isBitmapData(dir: Slice<u8>, r: usize) -> bool {
+    let tag = u32be(dir, r);
+    return tag == 0x73626978 || tag == 0x43424454;
+}
+
+fn putU32(v: borrow mut Vector<u8>, at: usize, x: usize) {
+    v[at] = truncate<u8>(x >> 24);
+    v[at + 1] = truncate<u8>(x >> 16);
+    v[at + 2] = truncate<u8>(x >> 8);
+    v[at + 3] = truncate<u8>(x);
+}
+
+/// Glyph `glyph`'s bitmap in face `b` at strike `ppem`, as PNG bytes into `png`: its left edge's offset right of the
+/// glyph's origin and its top edge's above the baseline, in the strike's pixels. Null when it has none there.
+fn readBitmap(b: borrow BitmapFace, ppem: u32, glyph: u32, png: borrow mut Vector<u8>) -> [f32; 2]? {
+    let file = match (File.open(b.path.view())) {
+        Ok(f) => f,
+        Err(_) => { return null; }
+    };
+    for (s in 0..b.strikeAt.length) {
+        if (b.strikePpem[s] == ppem) {
+            return sbixBitmap(file, b.strikeAt[s], glyph, png);
+        }
+    }
+    if (b.cbdt != 0) {
+        return cbdtBitmap(file, b, ppem, glyph, png);
+    }
+    return null;
+}
+
+/// An sbix strike's (at `strike` in the file) PNG for `glyph`, following one 'dupe'.
+fn sbixBitmap(file: borrow File, strike: usize, glyph: u32, png: borrow mut Vector<u8>) -> [f32; 2]? {
+    var g = glyph;
+    var bytes = Vector<u8>.create();
+    for (hop in 0..2) {
+        if (!readAt(file, strike + 4 + (g as usize) * 4, mut bytes, 8)) {
+            return null;
+        }
+        let o0 = u32be(bytes.view(), 0) as usize;
+        let o1 = u32be(bytes.view(), 4) as usize;
+        if (o1 <= o0 + 8 || o1 - o0 > 4194304 || !readAt(file, strike + o0, mut png, o1 - o0)) {
+            return null;
+        }
+        let kind = u32be(png.view(), 4);
+        if (kind == 0x64757065) { // 'dupe': the bitmap of another glyph
+            g = u16be(png.view(), 8);
+            continue;
+        }
+        if (kind != 0x706E6720) { // 'png '
+            return null;
+        }
+        let left = i16be(png.view(), 0);
+        let bottom = i16be(png.view(), 2);
+        let n = png.length;
+        for (i in 8..n) {
+            png[i - 8] = png[i];
+        }
+        while (png.length > n - 8) {
+            png.pop();
+        }
+        let h = match (imageInfo(png.view())) {
+            Ok(info) => round<f32>(info.h),
+            Err(_) => { return null; }
+        };
+        return [left, bottom + h];
+    }
+    return null;
+}
+
+/// A CBDT bitmap for `glyph` at strike `ppem`, found through face `b`'s CBLC (index formats 1 to 5; image formats
+/// 17, 18 and 19, the PNG ones).
+fn cbdtBitmap(file: borrow File, b: borrow BitmapFace, ppem: u32, glyph: u32, png: borrow mut Vector<u8>) -> [f32; 2]? {
+    let c = b.cblc.view();
+    if (c.length < 8) {
+        return null;
+    }
+    let sizes = u32be(c, 4) as usize;
+    for (i in 0..sizes) {
+        let r = 8 + i * 48;
+        if (r + 48 > c.length || (c[r + 45] as u32) != ppem || glyph < u16be(c, r + 40) || glyph > u16be(c, r + 42)) {
+            continue;
+        }
+        let array = u32be(c, r) as usize;
+        let count = u32be(c, r + 8) as usize;
+        for (j in 0..count) {
+            let e = array + j * 8;
+            if (e + 8 > c.length) {
+                return null;
+            }
+            let first = u16be(c, e);
+            let last = u16be(c, e + 2);
+            if (glyph < first || glyph > last) {
+                continue;
+            }
+            let sub = array + (u32be(c, e + 4) as usize);
+            if (sub + 8 > c.length) {
+                return null;
+            }
+            let indexFormat = u16be(c, sub);
+            let imageFormat = u16be(c, sub + 2);
+            let data = b.cbdt + (u32be(c, sub + 4) as usize);
+            let k = (glyph - first) as usize;
+            var offset: usize = 0;
+            var length: usize = 0;
+            var metrics: usize = 0; // big metrics in the index (formats 2 and 5)
+            if (indexFormat == 1 && sub + 16 + k * 4 <= c.length) {
+                offset = u32be(c, sub + 8 + k * 4) as usize;
+                length = (u32be(c, sub + 12 + k * 4) as usize) - offset;
+            } else if (indexFormat == 3 && sub + 12 + k * 2 <= c.length) {
+                offset = u16be(c, sub + 8 + k * 2) as usize;
+                length = (u16be(c, sub + 10 + k * 2) as usize) - offset;
+            } else if (indexFormat == 2 && sub + 20 <= c.length) {
+                length = u32be(c, sub + 8) as usize;
+                offset = k * length;
+                metrics = sub + 12;
+            } else if (indexFormat == 4 && sub + 12 <= c.length) {
+                let n = u32be(c, sub + 8) as usize;
+                for (p in 0..n) {
+                    let q = sub + 12 + p * 4;
+                    if (q + 8 <= c.length && u16be(c, q) == glyph) {
+                        offset = u16be(c, q + 2) as usize;
+                        length = (u16be(c, q + 6) as usize) - offset;
+                    }
+                }
+            } else if (indexFormat == 5 && sub + 24 <= c.length) {
+                length = u32be(c, sub + 8) as usize;
+                metrics = sub + 12;
+                let n = u32be(c, sub + 20) as usize;
+                for (p in 0..n) {
+                    if (sub + 24 + p * 2 + 2 <= c.length && u16be(c, sub + 24 + p * 2) == glyph) {
+                        offset = p * length;
+                    }
+                }
+            }
+            if (length == 0 || length > 4194304 || !readAt(file, data + offset, mut png, length)) {
+                return null;
+            }
+            var left: f32 = 0.0;
+            var top: f32 = 0.0;
+            var skip: usize = 0;
+            if (imageFormat == 17 && length > 9) {
+                left = i8f(png[2]);
+                top = i8f(png[3]);
+                skip = 9;
+            } else if (imageFormat == 18 && length > 12) {
+                left = i8f(png[2]);
+                top = i8f(png[3]);
+                skip = 12;
+            } else if (imageFormat == 19 && length > 4 && metrics != 0) {
+                left = i8f(c[metrics + 2]);
+                top = i8f(c[metrics + 3]);
+                skip = 4;
+            } else {
+                return null;
+            }
+            let n = png.length;
+            for (q in skip..n) {
+                png[q - skip] = png[q];
+            }
+            while (png.length > n - skip) {
+                png.pop();
+            }
+            return [left, top];
+        }
+    }
+    return null;
 }

@@ -84,6 +84,8 @@ struct TextRuns {
     bytes: Vector<u8>;
     ends: Vector<usize>;
     fonts: Vector<u32>;
+    sizes: Vector<f32>;
+    spacings: Vector<f32>;
 }
 
 impl TextRuns {
@@ -91,13 +93,21 @@ impl TextRuns {
         bytes: Vector<u8>.create(),
         ends: Vector<usize>.create(),
         fonts: Vector<u32>.create(),
+        sizes: Vector<f32>.create(),
+        spacings: Vector<f32>.create(),
     };
 
-    /// Loads into `raster` the system fonts these runs need.
+    /// Loads into `raster` the system fonts these runs need, then the colour bitmaps they draw.
     fn supplyTo(borrow this, fonts: borrow mut SystemFonts, raster: borrow mut Raster) {
         var start: usize = 0;
         for (k in 0..this.ends.length) {
             let ignored = fonts.supply(raster, this.bytes.view()[start..this.ends[k]], this.fonts[k]);
+            start = this.ends[k];
+        }
+        start = 0;
+        for (k in 0..this.ends.length) {
+            let text = this.bytes.view()[start..this.ends[k]];
+            let ignored = fonts.supplyBitmaps(raster, text, this.fonts[k], this.sizes[k], this.spacings[k]);
             start = this.ends[k];
         }
     }
@@ -112,6 +122,8 @@ impl Backend for TextRuns {
                 }
                 this.ends.push(this.bytes.length)!;
                 this.fonts.push(run.fontId)!;
+                this.sizes.push(if (run.fontSize > 0.0) run.fontSize else 16.0)!;
+                this.spacings.push(run.letterSpacing)!;
             }
             _ => {}
         }
@@ -391,6 +403,7 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
     // Fonts from the system for what the regular ones lack, loaded into both renderers alike as text needs them.
     var systemFonts = SystemFonts.create();
     reference.setPixelRatio(ratio);
+    gpu.raster.setPixelRatio(ratio);
     var pixels = Vector<u32>.withCapacity((width * height) as usize)!;
     for (i in 0..width * height) {
         pixels.push(0)!;
@@ -972,8 +985,8 @@ fn line<B: Backend>(b: borrow mut B, y: f32, size: f32, spacing: f32, font: u32,
 /// Text the demo never draws: kerning, precomposed and combining accents, Greek and Cyrillic, CJK and Hangul from
 /// the fallback font (and in the bold and monospaced runs), letter spacing across fallback glyphs, and a character
 /// no font has (the run's missing-glyph box), and Hebrew right to left inside a left-to-right line and as a
-/// right-to-left line of its own, brackets mirrored; and Arabic, its letters joined and lam-alef ligated. In points,
-/// 1024 × 640.
+/// right-to-left line of its own, brackets mirrored; Arabic, its letters joined and lam-alef ligated; and colour
+/// emoji. In points, 1024 × 640.
 fn drawText<B: Backend>(b: borrow mut B) {
     line(mut b, 30.0, 28.0, 0.0, FONT_18, "AVATAR Wave Tokyo  café naïve  cafe\u{301} n\u{303}");
     line(mut b, 80.0, 28.0, 0.0, FONT_18, "Ωμέγα  Привет, мир  你好，世界  漢字かなカナ  한국어");
@@ -986,6 +999,7 @@ fn drawText<B: Backend>(b: borrow mut B) {
     line(mut b, 450.0, 28.0, 0.0, FONT_18, "bidi: שלום (עולם) 2026 and back");
     line(mut b, 510.0, 28.0, 0.0, FONT_18, "עברית מימין לשמאל, with English");
     line(mut b, 570.0, 28.0, 0.0, FONT_18, "مرحبا بالعالم (١٢٣) لا Arabic joins");
+    line(mut b, 610.0, 22.0, 0.0, FONT_18, "emoji: 😀🎉🚀 🍣 ✅ ❤ in text");
 }
 
 fn tabName(tab: usize) -> StringView => match (tab) {

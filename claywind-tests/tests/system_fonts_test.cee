@@ -31,3 +31,53 @@ fn systemFontsSupplyWhatTheLoadedOnesLack() -> Result<void, TestFailure> {
     Check.equalU64(0, fonts.supply(mut ras, "中文\u{E000}".bytes(), 0) as u64)?;
     return Check.isTrue(!ras.covers(0, 0xE000), "private use stays the missing-glyph box");
 }
+
+@test
+fn emojiComeInColourFromTheSystemsEmojiFont() -> Result<void, TestFailure> {
+    let arial = readFile(arialPath());
+    if (arial.length == 0) {
+        Console.writeLine("  (Arial not found: skipped)");
+        return Ok();
+    }
+    var storage = heap(134217728);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(120, 60);
+    c.imagePixels = 262144;
+    c.fontBytes = 100663296;
+    var ras = Raster.create(memory, c)!;
+    Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
+    var fonts = SystemFonts.create();
+    let text = "a\u{1F600}";
+    let loaded = fonts.supply(mut ras, text.bytes(), 0);
+    if (!ras.covers(0, 0x1F600)) {
+        Console.writeLine("  (no emoji font on this system: skipped)");
+        return Ok();
+    }
+    Check.equalU64(1, loaded as u64)?;
+    // Its bitmap is read from the font's file once the frame needs it, and only once.
+    Check.equalU64(1, fonts.supplyBitmaps(mut ras, text.bytes(), 0, 40.0, 0.0) as u64)?;
+    Check.equalU64(0, fonts.supplyBitmaps(mut ras, text.bytes(), 0, 40.0, 0.0) as u64)?;
+    let run = TextRun {
+        start: 0,
+        length: text.length,
+        color: Color.hex(0x000000ff),
+        fontId: 0,
+        fontSize: 40.0,
+        letterSpacing: 0.0,
+        lineHeight: 0.0,
+    };
+    ras.begin(Color.rgba(255, 255, 255, 255));
+    ras.draw(Command.Text(Rect { x: 4.0, y: 4.0, w: 110.0, h: 52.0 }, run), text.bytes());
+    ras.finish();
+    // The smiling face is yellow: some pixel is strongly yellow, which black text never is.
+    var yellow = 0;
+    for (y in 0usize..60) {
+        for (x in 0usize..120) {
+            let p = ras.pixelAt(x, y);
+            if (p.r > 200 && p.g > 150 && p.b < 90) {
+                yellow += 1;
+            }
+        }
+    }
+    return Check.isTrue(yellow > 50, "the emoji is drawn in its own colours");
+}

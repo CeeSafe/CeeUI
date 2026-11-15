@@ -37,6 +37,11 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   combining marks placed on their base by the font's anchors. Arabic letters take their joining forms (isol, fina,
   medi, init by Unicode's joining types, ZWJ and ZWNJ honoured) in HarfBuzz's feature stages, and cursive
   attachment hangs Nastaliq's letters off one another.
+- **Colour emoji:** bitmap emoji fonts (sbix, as Apple Color Emoji; CBDT, as Noto Color Emoji) and layered ones
+  (COLR version 0 with CPAL, as Segoe UI Emoji) draw in their own colours, in Raster and on the GPU (as images). A
+  bitmap face is loaded without its bitmaps, which are most of its file: `claywind-fonts` reads the PNG of each
+  glyph a frame draws from the strike nearest its size (`SystemFonts.supplyFrame`). Not yet: emoji sequences (ZWJ,
+  skin tones, flags, keycaps, VS16) and COLR version 1.
 - **System fonts as fallbacks:** `claywind-fonts` (hosted; `SystemFonts.supply`) finds, among the OS's own fonts, a
   face for each character the loaded ones lack, and loads it into the fallback chain. Its catalog (each face's
   coverage, weight and style, read from its cmap and OS/2 tables) is built the first time a character is missing.

@@ -723,6 +723,38 @@ fn drawText(r: borrow mut Raster, area: Rect, run: TextRun, utf8: Slice<u8>) {
         for (k in 0..n) {
             let g = chunk[k];
             let slot = r.fonts.get(g.slot);
+            // A colour glyph: a bitmap drawn as an image, or COLR layers filled in their colours.
+            let glyphX = originX + g.pen * scale;
+            let glyphY = originY - g.rise * scale;
+            if (slot.strikeCount > 0) {
+                match (r.colorBitmap(truncate<u32>(g.slot), g.glyph, size, r.ratio)) {
+                    Some(c) => {
+                        fillPath(mut r, solidPaint(run.color), FillTarget.Layer);
+                        drawImage(
+                            mut r,
+                            Rect { x: glyphX + c.x, y: glyphY + c.y, w: c.w, h: c.h },
+                            Color.rgba(255, 255, 255, 255),
+                            Corners.all(0.0),
+                            c.handle,
+                        );
+                        beginPath(mut r);
+                    }
+                    null => {}
+                }
+                continue;
+            }
+            if (slot.info.colr != 0) {
+                let layers = colrLayers(r.fontPool[slot.offset..slot.offset + slot.size], slot.info, g.glyph);
+                match (layers) {
+                    Some(l) => {
+                        fillPath(mut r, solidPaint(run.color), FillTarget.Layer);
+                        fillColrLayers(mut r, g.slot, l, glyphX, glyphY, size / slot.info.unitsPerEm, run.color);
+                        beginPath(mut r);
+                        continue;
+                    }
+                    null => {}
+                }
+            }
             var outline = emptyOutline();
             {
                 let d = r.fontPool[slot.offset..slot.offset + slot.size];

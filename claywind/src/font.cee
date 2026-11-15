@@ -31,6 +31,9 @@ public struct FontInfo {
     gsub: usize;
     gpos: usize;
     gdef: usize;
+    /// Colour layers and their palettes (COLR version 0, CPAL), or 0.
+    colr: usize;
+    cpal: usize;
 }
 
 /// One glyph's outline in font units (y already flipped, as ThorVG builds it): ops 0 = move, 1 = line,
@@ -203,7 +206,9 @@ public fn parseFontFace(d: Slice<u8>, face: u32) -> FontInfo? {
     var cffInfo = CffInfo { charStrings: 0, globalSubrs: 0, localSubrs: 0, fdArray: 0, fdSelect: 0 };
     if (cff != 0) {
         cffInfo = parseCff(d, cff)?;
-    } else if (loca == 0 || glyf == 0) {
+    } else if ((loca == 0 || glyf == 0) && tableOffset(d, dir, ['C', 'B', 'L', 'C']) == 0 &&
+        tableOffset(d, dir, ['s', 'b', 'i', 'x']) == 0) {
+        // No outlines: only a colour-bitmap face (its bitmaps come from the host, raster_color.cee) has none.
         return null;
     }
     return FontInfo {
@@ -224,6 +229,8 @@ public fn parseFontFace(d: Slice<u8>, face: u32) -> FontInfo? {
         gsub: tableOffset(d, dir, ['G', 'S', 'U', 'B']),
         gpos: tableOffset(d, dir, ['G', 'P', 'O', 'S']),
         gdef: tableOffset(d, dir, ['G', 'D', 'E', 'F']),
+        colr: tableOffset(d, dir, ['C', 'O', 'L', 'R']),
+        cpal: tableOffset(d, dir, ['C', 'P', 'A', 'L']),
     };
 }
 
@@ -599,6 +606,9 @@ fn decodeGlyph(
     if (f.cff != 0) {
         return decodeCffGlyph(d, f.cff, f.cffInfo, glyph, ox, oy, mut out);
     }
+    if (f.glyf == 0 || f.loca == 0) {
+        return true;
+    }
     let at = outlineOffset(d, f, glyph);
     if (at == 0) {
         return true;
@@ -780,6 +790,9 @@ fn decodeGlyph(
 }
 
 /// TtfReader::composite: components placed by their x/y offsets (scales are read past, as ThorVG does).
+/// An F2Dot14 number at `at`.
+fn f2dot14(d: Slice<u8>, at: usize) -> f32 => round<f32>(i16at(d, at)) / 16384.0;
+
 fn decodeComposite(
     d: Slice<u8>,
     f: FontInfo,
@@ -818,15 +831,46 @@ fn decodeComposite(
             }
             p += 2;
         }
-        if ((flags & 0x0008) != 0) {
+        // A scaled component (WE_HAVE_A_SCALE, X_AND_Y_SCALE, TWO_BY_TWO): its 2x2 transform, in F2Dot14.
+        var xx: f32 = 1.0;
+        var xy: f32 = 0.0;
+        var yx: f32 = 0.0;
+        var yy: f32 = 1.0;
+        var scaled = false;
+        if ((flags & 0x0008) != 0 && valid(d, p, 2)) {
+            xx = f2dot14(d, p);
+            yy = xx;
+            scaled = true;
             p += 2;
-        } else if ((flags & 0x0040) != 0) {
+        } else if ((flags & 0x0040) != 0 && valid(d, p, 4)) {
+            xx = f2dot14(d, p);
+            yy = f2dot14(d, p + 2);
+            scaled = true;
             p += 4;
-        } else if ((flags & 0x0080) != 0) {
+        } else if ((flags & 0x0080) != 0 && valid(d, p, 8)) {
+            xx = f2dot14(d, p);
+            xy = f2dot14(d, p + 2);
+            yx = f2dot14(d, p + 4);
+            yy = f2dot14(d, p + 6);
+            scaled = true;
             p += 8;
         }
-        if (!decodeGlyph(d, f, component, ox + cx, oy + cy, depth, mut out)) {
-            return false;
+        if (!scaled) {
+            if (!decodeGlyph(d, f, component, ox + cx, oy + cy, depth, mut out)) {
+                return false;
+            }
+        } else {
+            // Decoded at the origin, then transformed (y is stored negated) and moved into place.
+            let first = out.ptCount;
+            if (!decodeGlyph(d, f, component, 0.0, 0.0, depth, mut out)) {
+                return false;
+            }
+            for (i in first..out.ptCount) {
+                let x = out.xs[i];
+                let y = out.ys[i];
+                out.xs[i] = ox + cx + xx * x - yx * y;
+                out.ys[i] = oy + cy - xy * x + yy * y;
+            }
         }
         if ((flags & 0x0020) == 0) {
             return true;

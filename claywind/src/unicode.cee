@@ -35,6 +35,9 @@ fn wideOf(p: u32) -> bool => ((p >> 11) & 1) != 0;
 fn incbOf(p: u32) -> u32 => (p >> 12) & 3;
 fn gcOf(p: u32) -> u32 => (p >> 14) & 7;
 
+/// Whether `cp` is Extended_Pictographic: an emoji, or a character that may become one.
+public fn isPictographic(cp: u32) -> bool => pictOf(unicodeProps(cp));
+
 /// `codepoint` as UTF-8 into `out`; its length (1 to 4). A surrogate or a value past U+10FFFF is U+FFFD.
 public fn encodeUtf8(codepoint: u32, out: borrow mut [u8; 4]) -> usize {
     var cp = codepoint;

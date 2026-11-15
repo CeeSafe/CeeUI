@@ -42,4 +42,13 @@ public struct FixedList<region r, T: Copy> {
     }
 
     public fn last(borrow this) -> T => this.get(this.count - 1);
+
+    /// Replaces element `i` (below `length()`; one past it stops the program, as `get` does).
+    public fn set(borrow mut this, i: usize, value: T) {
+        if (i >= this.count) {
+            this.items[this.items.length] = value;
+            return;
+        }
+        this.items[i] = value;
+    }
 }
