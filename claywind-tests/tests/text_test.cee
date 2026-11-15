@@ -257,3 +257,66 @@ fn rightToLeftRunsReadRightToLeft() -> Result<void, TestFailure> {
     Check.equalU64(0, out[3].cluster as u64)?;
     return Ok();
 }
+
+@test
+fn arabicLettersJoin() -> Result<void, TestFailure> {
+    let arial = readFile(arialPath());
+    if (arial.length == 0) {
+        Console.writeLine("  (Arial not found: skipped)");
+        return Ok();
+    }
+    var storage = heap(8388608);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(64, 64);
+    c.imagePixels = 4;
+    c.fontBytes = 2097152;
+    var ras = Raster.create(memory, c)!;
+    Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
+    if (!ras.covers(0, 0x628)) {
+        Console.writeLine("  (this Arial has no Arabic: skipped)");
+        return Ok();
+    }
+    var alone = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 2];
+    let one = ras.shapeRun("\u{628}".bytes(), 0, 40.0, 0.0, mut alone[..])!;
+    // beh beh beh, right to left: final, medial and initial forms. (Arial draws the final beh with the isolated
+    // glyph, and the medial with the initial one.)
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 4];
+    let run = ras.shapeRun("\u{628}\u{628}\u{628}".bytes(), 0, 40.0, 0.0, mut out[..])!;
+    Check.equalU64(3, run.count as u64)?;
+    Check.equalU64(4, out[0].cluster as u64)?;
+    Check.equalU64(0, out[2].cluster as u64)?;
+    Check.isTrue(out[1].glyph != alone[0].glyph && out[2].glyph != alone[0].glyph, "joined letters leave the isolated form")?;
+    // A zero-width non-joiner keeps them apart: both isolated.
+    let apart = ras.shapeRun("\u{628}\u{200C}\u{628}".bytes(), 0, 40.0, 0.0, mut out[..])!;
+    Check.equalU64(2, apart.count as u64)?;
+    Check.isTrue(out[0].glyph == alone[0].glyph && out[1].glyph == alone[0].glyph, "ZWNJ breaks the join")?;
+    return Ok();
+}
+
+@test
+fn nastaliqHangsLettersByCursiveAttachment() -> Result<void, TestFailure> {
+    let nastaliq = readFile("/System/Library/Fonts/NotoNastaliq.ttc");
+    if (nastaliq.length == 0) {
+        Console.writeLine("  (Noto Nastaliq not found: skipped)");
+        return Ok();
+    }
+    var storage = heap(8388608);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(64, 64);
+    c.imagePixels = 4;
+    c.fontBytes = 2097152;
+    var ras = Raster.create(memory, c)!;
+    Check.isTrue(ras.loadFont(0, nastaliq.view()), "Noto Nastaliq loads")?;
+    // "pakistan": its letters join, and Nastaliq sets each joined letter higher than the next.
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 16];
+    let run = ras.shapeRun("\u{67E}\u{627}\u{6A9}\u{633}\u{62A}\u{627}\u{646}".bytes(), 0, 40.0, 0.0, mut out[..])!;
+    var raised = false;
+    for (k in 0..run.count) {
+        if (out[k].y < -1.0) {
+            raised = true;
+        }
+    }
+    Check.isTrue(run.count >= 5, "the word shapes")?;
+    Check.isTrue(raised, "cursive attachment raises the joined letters")?;
+    return Ok();
+}

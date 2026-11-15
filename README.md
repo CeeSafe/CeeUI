@@ -32,9 +32,11 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   is shaped into glyphs that measuring and drawing share, and a character the run's font lacks comes from a
   fallback chain (`Raster.setFallbacks`), so CJK, Hangul, Greek and Cyrillic draw in a Latin run.
 - **OpenType shaping:** each font run goes through the font's own GSUB and GPOS lookups (all substitution
-  types, and single, pair, mark-to-base, mark-to-ligature, mark-to-mark and contextual positioning) for the
-  run's script, with GDEF glyph classes and lookup flags: ligatures, contextual alternates, GPOS kerning, and
-  combining marks placed on their base by the font's anchors.
+  types, and single, pair, cursive, mark-to-base, mark-to-ligature, mark-to-mark and contextual positioning) for
+  the run's script, with GDEF glyph classes and lookup flags: ligatures, contextual alternates, GPOS kerning, and
+  combining marks placed on their base by the font's anchors. Arabic letters take their joining forms (isol, fina,
+  medi, init by Unicode's joining types, ZWJ and ZWNJ honoured) in HarfBuzz's feature stages, and cursive
+  attachment hangs Nastaliq's letters off one another.
 - **System fonts as fallbacks:** `claywind-fonts` (hosted; `SystemFonts.supply`) finds, among the OS's own fonts, a
   face for each character the loaded ones lack, and loads it into the fallback chain. Its catalog (each face's
   coverage, weight and style, read from its cmap and OS/2 tables) is built the first time a character is missing.
@@ -43,7 +45,7 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   pass Unicode 16's own test files.
 - **Bidirectional text:** each line goes through the Unicode Bidirectional Algorithm (UAX #9, all of it: explicit
   embeddings, overrides and isolates, paired brackets), so Hebrew and other right-to-left text reads right to left
-  inside a left-to-right line and as a line of its own, brackets mirrored. It passes Unicode 16's BidiTest.txt and
+  inside a left-to-right line and as a line of its own, brackets mirrored, and Arabic joins. It passes Unicode 16's BidiTest.txt and
   BidiCharacterTest.txt in full. Not yet: right-aligned right-to-left paragraphs, caret movement and selection in
   visual order.
 - **Retina output.** `Raster.setPixelRatio` draws at the display's pixel ratio while layout stays in points.

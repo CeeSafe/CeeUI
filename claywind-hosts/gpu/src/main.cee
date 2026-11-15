@@ -972,7 +972,8 @@ fn line<B: Backend>(b: borrow mut B, y: f32, size: f32, spacing: f32, font: u32,
 /// Text the demo never draws: kerning, precomposed and combining accents, Greek and Cyrillic, CJK and Hangul from
 /// the fallback font (and in the bold and monospaced runs), letter spacing across fallback glyphs, and a character
 /// no font has (the run's missing-glyph box), and Hebrew right to left inside a left-to-right line and as a
-/// right-to-left line of its own, brackets mirrored. In points, 1024 × 640.
+/// right-to-left line of its own, brackets mirrored; and Arabic, its letters joined and lam-alef ligated. In points,
+/// 1024 × 640.
 fn drawText<B: Backend>(b: borrow mut B) {
     line(mut b, 30.0, 28.0, 0.0, FONT_18, "AVATAR Wave Tokyo  café naïve  cafe\u{301} n\u{303}");
     line(mut b, 80.0, 28.0, 0.0, FONT_18, "Ωμέγα  Привет, мир  你好，世界  漢字かなカナ  한국어");
@@ -984,6 +985,7 @@ fn drawText<B: Backend>(b: borrow mut B) {
     line(mut b, 390.0, 28.0, 0.0, FONT_18, "missing: [\u{E000}] zero\u{200B}width\u{FEFF}joined");
     line(mut b, 450.0, 28.0, 0.0, FONT_18, "bidi: שלום (עולם) 2026 and back");
     line(mut b, 510.0, 28.0, 0.0, FONT_18, "עברית מימין לשמאל, with English");
+    line(mut b, 570.0, 28.0, 0.0, FONT_18, "مرحبا بالعالم (١٢٣) لا Arabic joins");
 }
 
 fn tabName(tab: usize) -> StringView => match (tab) {

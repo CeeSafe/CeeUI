@@ -103,13 +103,71 @@ fn scriptTag(cp: u32) -> u32 {
     return 0x6C61746E; // latn
 }
 
-// The features shaped by default: GSUB's, and GPOS's (kern only for a font without a legacy kern table, which is
-// what ThorVG kerns by, so Latin text keeps its pixels).
+// The features shaped by default: GSUB's (ccmp, locl, rlig, liga, clig, calt, in one stage), and GPOS's (curs, kern,
+// mark, mkmk, dist; kern only for a font without a legacy kern table, which is what ThorVG kerns by, so Latin text
+// keeps its pixels).
 const SUBST_TAGS: [u32; 6] = [0x63636D70, 0x6C6F636C, 0x726C6967, 0x6C696761, 0x636C6967, 0x63616C74];
 const SUBST_MASKS: [u32; 6] = [1, 1, 1, 1, 1, 1];
-const POS_TAGS: [u32; 4] = [0x6B65726E, 0x6D61726B, 0x6D6B6D6B, 0x64697374];
-const POS_TAGS_NO_KERN: [u32; 3] = [0x6D61726B, 0x6D6B6D6B, 0x64697374];
-const POS_MASKS: [u32; 4] = [1, 1, 1, 1];
+const SUBST_STAGES: [u32; 6] = [0, 0, 0, 0, 0, 0];
+const POS_TAGS: [u32; 5] = [0x63757273, 0x6B65726E, 0x6D61726B, 0x6D6B6D6B, 0x64697374];
+const POS_TAGS_NO_KERN: [u32; 4] = [0x63757273, 0x6D61726B, 0x6D6B6D6B, 0x64697374];
+const POS_MASKS: [u32; 5] = [1, 1, 1, 1, 1];
+
+// Arabic's GSUB features, in HarfBuzz's stages: ccmp and locl; then the joining forms isol, fina, medi and init, each
+// a stage of its own and each only on the letters in that form; rlig; then calt, rclt, liga, clig and mset.
+const ARABIC_SUBST_TAGS: [u32; 12] = [
+    0x63636D70, 0x6C6F636C, 0x69736F6C, 0x66696E61, 0x6D656469, 0x696E6974, 0x726C6967, 0x63616C74, 0x72636C74,
+    0x6C696761, 0x636C6967, 0x6D736574,
+];
+const ARABIC_SUBST_MASKS: [u32; 12] = [1, 1, FEAT_ISOL, FEAT_FINA, FEAT_MEDI, FEAT_INIT, 1, 1, 1, 1, 1, 1];
+const ARABIC_SUBST_STAGES: [u32; 12] = [0, 0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 6];
+const SCRIPT_ARABIC: u32 = 0x61726162;
+
+// Joining_Type, as unicode_data.cee packs it.
+const JT_U: u32 = 0;
+const JT_C: u32 = 1;
+const JT_D: u32 = 2;
+const JT_L: u32 = 3;
+const JT_R: u32 = 4;
+const JT_T: u32 = 5;
+
+/// `cp`'s Joining_Type (below U+0600 every character is non-joining, or transparent if it is a mark).
+fn joiningType(cp: u32) -> u32 {
+    if (cp < 0x600) {
+        return if (cp >= 0x300 && combining(cp)) JT_T else JT_U;
+    }
+    return joiningOf(unicodeProps(cp));
+}
+
+/// Arabic joining (ArabicShaping.txt's rules), a character at a time: which form each joining letter takes.
+struct Joining {
+    /// Whether the last character that is not transparent joins to what follows, and was joined to what preceded.
+    joinsNext: bool;
+    joinedPrevious: bool;
+    /// The buffer index of that character's glyph, while its form may still change; -1 otherwise.
+    glyph: i32;
+}
+
+/// The next character, of Joining_Type `jt` and with glyph `at` in `b` (-1 for none): it joins the one before if
+/// both sides allow, which turns that one's form from isol or fina to init or medi; its own form is fina or isol.
+fn join(j: borrow mut Joining, jt: u32, at: i32, b: borrow mut LayoutBuffer) {
+    if (jt == JT_T) {
+        return;
+    }
+    let joins = j.joinsNext && (jt == JT_D || jt == JT_R || jt == JT_C);
+    if (joins && j.glyph >= 0) {
+        let k = truncate<usize>(j.glyph);
+        b.g[k].mask = FEAT_ALL | (if (j.joinedPrevious) FEAT_MEDI else FEAT_INIT);
+    }
+    let letter = jt == JT_D || jt == JT_R || jt == JT_L;
+    if (letter && at >= 0) {
+        let k = truncate<usize>(at);
+        b.g[k].mask = FEAT_ALL | (if (joins) FEAT_FINA else FEAT_ISOL);
+    }
+    j.joinsNext = jt == JT_D || jt == JT_L || jt == JT_C;
+    j.joinedPrevious = joins;
+    j.glyph = if (letter) at else -1;
+}
 
 /// The code points a line's bidi pass resolves at once; a longer line is resolved in pieces this long.
 const BIDI_CAPACITY: usize = 1024;
@@ -388,6 +446,7 @@ impl<region r> Raster<r> {
     ) -> f32 {
         let primaryUpem = this.fonts.get(primary).info.unitsPerEm;
         var pen: f32 = 0.0;
+        var joining = Joining { joinsNext: false, joinedPrevious: false, glyph: -1 };
         let first: usize = made;
         var j: usize = 0;
         var cur = ShapeCursor { at: from, pen: 0.0, previousSlot: 0, previousGlyph: 0, hasPrevious: false };
@@ -397,9 +456,12 @@ impl<region r> Raster<r> {
             b.nextLig = 1;
             var slot: usize = 0;
             var script: u32 = 0;
+            joining.glyph = -1;
             while (cur.at < to && b.count < LAYOUT_CAPACITY) {
                 let cp = decodeUtf8(utf8, cur.at);
                 if (ignorable(cp[0])) {
+                    // No glyph, but a joiner (ZWJ) or non-joiner (ZWNJ) still decides how its neighbours join.
+                    join(mut joining, joiningType(cp[0]), -1, b);
                     cur.at += cp[1] as usize;
                     continue;
                 }
@@ -418,6 +480,7 @@ impl<region r> Raster<r> {
                 g.cluster = cur.at;
                 g.mask = FEAT_ALL;
                 b.g[b.count] = g;
+                join(mut joining, joiningType(cp[0]), truncate<i32>(b.count), b);
                 b.count += 1;
                 cur.previousSlot = k;
                 cur.previousGlyph = pick[1];
@@ -432,20 +495,45 @@ impl<region r> Raster<r> {
             let info = fs.info;
             // The lookup cache knows a run by its font (its pool offset), script and kerning.
             let key = ((fs.offset as u64) << 32) | (script as u64);
+            let arabic = script == SCRIPT_ARABIC;
+            // The constants bound to locals, to be sliced.
+            let arabicTags = ARABIC_SUBST_TAGS;
+            let arabicMasks = ARABIC_SUBST_MASKS;
+            let arabicStages = ARABIC_SUBST_STAGES;
+            let plainTags = SUBST_TAGS;
+            let plainMasks = SUBST_MASKS;
+            let plainStages = SUBST_STAGES;
+            let substTags = if (arabic) arabicTags[..] else plainTags[..];
+            let substMasks = if (arabic) arabicMasks[..] else plainMasks[..];
+            let substStages = if (arabic) arabicStages[..] else plainStages[..];
             if (info.kern != 0) {
                 layoutRun(
                     d,
                     info,
                     key,
                     script,
-                    SUBST_TAGS[..],
-                    SUBST_MASKS[..],
+                    substTags,
+                    substMasks,
+                    substStages,
                     POS_TAGS_NO_KERN[..],
-                    POS_MASKS[0..3],
+                    POS_MASKS[0..4],
+                    rtl,
                     b,
                 );
             } else {
-                layoutRun(d, info, key, script, SUBST_TAGS[..], SUBST_MASKS[..], POS_TAGS[..], POS_MASKS[..], b);
+                layoutRun(
+                    d,
+                    info,
+                    key,
+                    script,
+                    substTags,
+                    substMasks,
+                    substStages,
+                    POS_TAGS[..],
+                    POS_MASKS[..],
+                    rtl,
+                    b,
+                );
             }
             // Advances and kerning in the run's font's units.
             let units = if (slot == primary) 1.0 else primaryUpem / info.unitsPerEm;

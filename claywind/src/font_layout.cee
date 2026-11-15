@@ -3,8 +3,13 @@
 // (pair kerning, marks on their bases), over a buffer of glyphs, for the features a script asks for. GDEF gives the
 // glyph classes lookups skip by. Offsets are in the font file; a malformed table changes nothing.
 
-/// Feature masks: a glyph takes a feature's lookups only where its mask has the feature's bit.
+/// Feature masks: a glyph takes a feature's lookups only where its mask has the feature's bit. Every glyph has
+/// FEAT_ALL; a joining letter also has the bit of its form (Arabic's isol, fina, medi and init).
 const FEAT_ALL: u32 = 1;
+const FEAT_ISOL: u32 = 2;
+const FEAT_FINA: u32 = 4;
+const FEAT_MEDI: u32 = 8;
+const FEAT_INIT: u32 = 16;
 
 /// One glyph in the shaping buffer.
 struct LayoutGlyph {
@@ -26,6 +31,8 @@ struct LayoutGlyph {
     attachTo: i32;
     attachX: f32;
     attachY: f32;
+    /// A glyph GPOS cursive attachment hangs off another (an index), whose vertical offset it then shares.
+    cursiveTo: i32;
     /// Where the shaper placed it: pen and rise, in the run's own font's units.
     placedX: f32;
     placedY: f32;
@@ -45,6 +52,7 @@ fn emptyLayoutGlyph() -> LayoutGlyph => LayoutGlyph {
     attachTo: -1,
     attachX: 0.0,
     attachY: 0.0,
+    cursiveTo: -1,
     placedX: 0.0,
     placedY: 0.0,
 };
@@ -57,6 +65,8 @@ struct LayoutBuffer {
     count: usize;
     /// The next ligature number.
     nextLig: u32;
+    /// Whether the run reads right to left (cursive attachment depends on it).
+    rtl: bool;
     /// Each lookup's feature mask, while lookups are collected (collectLookups).
     masks: [u32; 2048];
     /// The lookups recent runs used, by font, script and kerning: 4 entries of each table's active lookups (index
@@ -78,6 +88,7 @@ fn emptyLayoutBuffer() -> LayoutBuffer => LayoutBuffer {
     g: [emptyLayoutGlyph(); 256],
     count: 0,
     nextLig: 1,
+    rtl: false,
     masks: [0u32; 2048],
     cacheKeys: [0u64; 4],
     cacheNext: 0,
@@ -331,6 +342,7 @@ fn collectLookups(
     script: u32,
     tags: Slice<u32>,
     featureMasks: Slice<u32>,
+    required: bool,
     masks: borrow mut [u32; 2048],
 ) {
     for (k in 0..2048) {
@@ -367,16 +379,16 @@ fn collectLookups(
         return;
     }
     let featureCount = u16at(d, features) as usize;
-    let required = u16at(d, langSys + 2);
+    let requiredIndex = u16at(d, langSys + 2);
     let count = u16at(d, langSys + 4) as usize;
     for (k in 0..count + 1) {
         var fi: usize = 0;
         var mask: u32 = 0;
         if (k == count) {
-            if (required == 0xFFFF) {
+            if (requiredIndex == 0xFFFF || !required) {
                 break;
             }
-            fi = required as usize;
+            fi = requiredIndex as usize;
             mask = 0xFFFFFFFF;
         } else {
             if (!valid(d, langSys + 6 + k * 2, 2)) {
@@ -1060,6 +1072,58 @@ fn applyPos(
         }
         return -1;
     }
+    if (kind == 3) { // cursive: this glyph's entry joins the exit of the glyph before it
+        let cover = offset16(d, st, st + 2);
+        let count = u16at(d, st + 4) as usize;
+        let ci = coverageIndex(d, cover, glyph);
+        if (ci < 0 || truncate<usize>(ci) >= count) {
+            return -1;
+        }
+        let entry = match (anchorAt(d, offset16(d, st, st + 6 + truncate<usize>(ci) * 4))) {
+            Some(a) => a,
+            null => { return -1; }
+        };
+        let p = previousUnskipped(d, gdef, l, b, i);
+        if (p < 0) {
+            return -1;
+        }
+        let up = truncate<usize>(p);
+        let pi = coverageIndex(d, cover, b.g[up].glyph);
+        if (pi < 0 || truncate<usize>(pi) >= count) {
+            return -1;
+        }
+        let exit = match (anchorAt(d, offset16(d, st, st + 6 + truncate<usize>(pi) * 4 + 2))) {
+            Some(a) => a,
+            null => { return -1; }
+        };
+        // The advances meet at the anchors (HarfBuzz's arithmetic, by direction).
+        if (b.rtl) {
+            let dx = exit[0] + b.g[up].xOffset;
+            b.g[up].xAdvance -= dx;
+            b.g[up].xOffset -= dx;
+            b.g[ui].xAdvance = entry[0] + b.g[ui].xOffset;
+        } else {
+            b.g[up].xAdvance = exit[0] + b.g[up].xOffset;
+            let dx = entry[0] + b.g[ui].xOffset;
+            b.g[ui].xAdvance -= dx;
+            b.g[ui].xOffset -= dx;
+        }
+        // Vertically, the child hangs off its parent: the earlier glyph off the later with RightToLeft set.
+        var child = up;
+        var parent = ui;
+        var dy = entry[1] - exit[1];
+        if ((l.flags & 1) == 0) {
+            child = ui;
+            parent = up;
+            dy = 0.0 - dy;
+        }
+        if (b.g[parent].cursiveTo == truncate<i32>(child)) {
+            b.g[parent].cursiveTo = -1;
+        }
+        b.g[child].cursiveTo = truncate<i32>(parent);
+        b.g[child].yOffset = dy;
+        return i + 1;
+    }
     if (kind == 4 || kind == 6) { // mark to base, mark to mark
         let mi = coverageIndex(d, offset16(d, st, st + 2), glyph);
         if (mi < 0 || !valid(d, st, 12)) {
@@ -1341,7 +1405,26 @@ fn lookupCount(d: Slice<u8>, table: usize) -> usize {
     return if (list == 0 || !valid(d, list, 2)) 0 else (u16at(d, list) as usize).min(2048);
 }
 
-/// The cache entry for `key`, collecting it (the lookups of the features asked for, in lookup order) on a miss.
+/// Appends the GSUB lookups collectLookups marked (in lookup order) to cache entry `e`, with their digests.
+fn collectStage(d: Slice<u8>, gsub: usize, e: usize, b: borrow mut LayoutBuffer) {
+    for (li in 0..lookupCount(d, gsub)) {
+        let n = b.substCount[e];
+        if (b.masks[li] != 0 && n < 192) {
+            b.substIndex[e][n] = truncate<u16>(li);
+            b.substMask[e][n] = b.masks[li];
+            let dg = match (lookupAt(d, gsub, li)) {
+                Some(l) => lookupDigest(d, l, true),
+                null => ALL_GLYPHS,
+            };
+            b.substDigest[e][n * 2] = dg[0];
+            b.substDigest[e][n * 2 + 1] = dg[1];
+            b.substCount[e] = n + 1;
+        }
+    }
+}
+
+/// The cache entry for `key`, collecting it on a miss: GSUB's lookups for the features asked for, a stage at a time
+/// (each feature's stage in `substStages`; within a stage, in lookup order), then GPOS's in lookup order.
 fn cachedLookups(
     d: Slice<u8>,
     f: FontInfo,
@@ -1349,6 +1432,7 @@ fn cachedLookups(
     script: u32,
     substTags: Slice<u32>,
     substMasks: Slice<u32>,
+    substStages: Slice<u32>,
     posTags: Slice<u32>,
     posMasks: Slice<u32>,
     b: borrow mut LayoutBuffer,
@@ -1363,25 +1447,33 @@ fn cachedLookups(
     b.cacheKeys[e] = key;
     b.substCount[e] = 0;
     b.posCount[e] = 0;
-    if (f.gsub != 0) {
-        collectLookups(d, f.gsub, script, substTags, substMasks, mut b.masks);
-        for (li in 0..lookupCount(d, f.gsub)) {
-            let n = b.substCount[e];
-            if (b.masks[li] != 0 && n < 192) {
-                b.substIndex[e][n] = truncate<u16>(li);
-                b.substMask[e][n] = b.masks[li];
-                let dg = match (lookupAt(d, f.gsub, li)) {
-                    Some(l) => lookupDigest(d, l, true),
-                    null => ALL_GLYPHS,
-                };
-                b.substDigest[e][n * 2] = dg[0];
-                b.substDigest[e][n * 2 + 1] = dg[1];
-                b.substCount[e] = n + 1;
+    // GSUB's lookups stage by stage (substStages), each stage's in lookup order.
+    var stage: u32 = 0;
+    while (f.gsub != 0) {
+        var tags = [0u32; 16];
+        var tagMasks = [0u32; 16];
+        var count: usize = 0;
+        var later = false;
+        for (t in 0..substTags.length) {
+            if (substStages[t] == stage && count < 16) {
+                tags[count] = substTags[t];
+                tagMasks[count] = substMasks[t];
+                count += 1;
+            } else if (substStages[t] > stage) {
+                later = true;
             }
         }
+        if (count > 0) {
+            collectLookups(d, f.gsub, script, tags[0..count], tagMasks[0..count], stage == 0, mut b.masks);
+            collectStage(d, f.gsub, e, b);
+        }
+        if (!later) {
+            break;
+        }
+        stage += 1;
     }
     if (f.gpos != 0) {
-        collectLookups(d, f.gpos, script, posTags, posMasks, mut b.masks);
+        collectLookups(d, f.gpos, script, posTags, posMasks, true, mut b.masks);
         for (li in 0..lookupCount(d, f.gpos)) {
             let n = b.posCount[e];
             if (b.masks[li] != 0 && n < 192) {
@@ -1401,8 +1493,9 @@ fn cachedLookups(
 }
 
 /// Shapes the glyphs in `b` (cmap glyphs, clusters, masks) with face `f`'s GSUB and GPOS for script `script`
-/// (an OpenType script tag), applying the features `substTags` and `posTags` with their masks; `key` names the face,
-/// script and feature set for the lookup cache. Then every glyph has its advance and offsets in font units; marks
+/// (an OpenType script tag), applying the features `substTags` (in stages, `substStages`) and `posTags` with their
+/// masks, in direction `rtl`; `key` names the face, script and feature set for the lookup cache. Then every glyph has
+/// its advance and offsets in font units; marks
 /// GPOS attached have no advance of their own.
 fn layoutRun(
     d: Slice<u8>,
@@ -1411,12 +1504,15 @@ fn layoutRun(
     script: u32,
     substTags: Slice<u32>,
     substMasks: Slice<u32>,
+    substStages: Slice<u32>,
     posTags: Slice<u32>,
     posMasks: Slice<u32>,
+    rtl: bool,
     b: borrow mut LayoutBuffer,
 ) {
+    b.rtl = rtl;
     assignClasses(d, f.gdef, b);
-    let e = cachedLookups(d, f, key, script, substTags, substMasks, posTags, posMasks, b);
+    let e = cachedLookups(d, f, key, script, substTags, substMasks, substStages, posTags, posMasks, b);
     for (k in 0..b.substCount[e]) {
         let li = b.substIndex[e][k] as usize;
         let mask = b.substMask[e][k];
@@ -1428,6 +1524,7 @@ fn layoutRun(
         b.g[i].xOffset = 0.0;
         b.g[i].yOffset = 0.0;
         b.g[i].attachTo = -1;
+        b.g[i].cursiveTo = -1;
     }
     for (k in 0..b.posCount[e]) {
         let li = b.posIndex[e][k] as usize;
@@ -1435,9 +1532,24 @@ fn layoutRun(
         let dg = [b.posDigest[e][k * 2], b.posDigest[e][k * 2 + 1]];
         applyLookup(d, f.gpos, f.gdef, false, li, mask, dg, b);
     }
-    for (i in 0..b.count) {
-        if (b.g[i].attachTo >= 0) {
-            b.g[i].xAdvance = 0.0;
+    // A cursive chain hangs each glyph off its parent: parents later in the run first, then those earlier.
+    var i = b.count;
+    while (i > 0) {
+        i -= 1;
+        let p = b.g[i].cursiveTo;
+        if (p > truncate<i32>(i) && truncate<usize>(p) < b.count) {
+            b.g[i].yOffset += b.g[truncate<usize>(p)].yOffset;
+        }
+    }
+    for (j in 0..b.count) {
+        let p = b.g[j].cursiveTo;
+        if (p >= 0 && p < truncate<i32>(j)) {
+            b.g[j].yOffset += b.g[truncate<usize>(p)].yOffset;
+        }
+    }
+    for (k in 0..b.count) {
+        if (b.g[k].attachTo >= 0) {
+            b.g[k].xAdvance = 0.0;
         }
     }
 }
