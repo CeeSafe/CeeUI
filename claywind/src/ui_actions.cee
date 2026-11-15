@@ -1,0 +1,309 @@
+// SPDX-License-Identifier: MIT
+// Actions and key bindings. A binding ties a keystroke ("secondary-shift-p": Command on macOS, Control elsewhere;
+// "ctrl-alt-left", "f5", "escape") to a named action, globally or in a key context, a name an element gives its
+// subtree (Ui.keyContext). Each frame's keystrokes are resolved through the contexts around the focused element,
+// innermost first, then the global bindings; a frame asks `ui.action("palette")` whether one was triggered. Copy,
+// Cut, Paste and Select All are bound by default ("secondary-c" to "copy" and so on) and become the Ui's edit
+// commands, which an app may bind elsewhere.
+//
+//     ui.bind("secondary-shift-p", "palette", "");          // once
+//     ui.open(Style.column().id("editor")); ui.keyContext("editor"); ...
+//     if (ui.action("palette")) { app.showPalette = true; }
+
+/// The modifier keys held with a keystroke.
+public struct Modifiers {
+    public shift: bool;
+    public control: bool;
+    public alt: bool;
+    public command: bool;
+
+    public fn none() -> Modifiers => Modifiers { shift: false, control: false, alt: false, command: false };
+}
+
+/// A key pressed with its modifiers: a named key, or the character the key gives without modifiers (a lowercase
+/// letter, a digit, punctuation).
+public struct Keystroke {
+    public key: Key?;
+    public character: u32;
+    public modifiers: Modifiers;
+}
+
+/// A key binding: the keystroke (a named key's index + 1, or 0 and a character), its modifiers (`secondary`:
+/// Command on macOS, Control elsewhere), the action and the key context it is bound in (0: everywhere).
+struct Binding {
+    key: u32;
+    character: u32;
+    shift: bool;
+    control: bool;
+    alt: bool;
+    command: bool;
+    secondary: bool;
+    action: u32;
+    context: u32;
+}
+
+fn emptyBinding() -> Binding => Binding {
+    key: 0,
+    character: 0,
+    shift: false,
+    control: false,
+    alt: false,
+    command: false,
+    secondary: false,
+    action: 0,
+    context: 0,
+};
+
+/// The named keys a binding may use.
+fn namedKey(name: Slice<u8>) -> Key? {
+    let names: [StringView; 14] = [
+        "escape", "enter", "tab", "backspace", "delete", "left", "right", "up", "down", "home", "end", "pageup",
+        "pagedown", "space",
+    ];
+    for (k in 0usize..14) {
+        if (sameText(name, names[k].bytes())) {
+            return if (k == 0) Key.Escape
+                else if (k == 1) Key.Enter
+                else if (k == 2) Key.Tab
+                else if (k == 3) Key.Backspace
+                else if (k == 4) Key.Delete
+                else if (k == 5) Key.Left
+                else if (k == 6) Key.Right
+                else if (k == 7) Key.Up
+                else if (k == 8) Key.Down
+                else if (k == 9) Key.Home
+                else if (k == 10) Key.End
+                else if (k == 11) Key.PageUp
+                else if (k == 12) Key.PageDown
+                else null;
+        }
+    }
+    if (name.length >= 2 && name.length <= 3 && name[0] == 'f') {
+        var n: u32 = 0;
+        for (i in 1..name.length) {
+            if (name[i] < '0' || name[i] > '9') {
+                return null;
+            }
+            n = n * 10 + (name[i] - '0') as u32;
+        }
+        let fs = [Key.F1, Key.F2, Key.F3, Key.F4, Key.F5, Key.F6, Key.F7, Key.F8, Key.F9, Key.F10, Key.F11, Key.F12];
+        return if (n >= 1 && n <= 12) fs[(n - 1) as usize] else null;
+    }
+    return null;
+}
+
+fn sameText(a: Slice<u8>, b: Slice<u8>) -> bool {
+    if (a.length != b.length) {
+        return false;
+    }
+    for (i in 0..a.length) {
+        if (a[i] != b[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// "secondary-shift-p" as a binding (action and context left 0), or null when it does not parse.
+fn parseKeystroke(text: Slice<u8>) -> Binding? {
+    var b = emptyBinding();
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i <= text.length) {
+        // A '-' separates parts, but a last part may itself be "-".
+        if (i == text.length || (text[i] == '-' && i > start)) {
+            let part = text[start..i];
+            let last = i == text.length;
+            if (last) {
+                match (namedKey(part)) {
+                    Some(k) => { b.key = keyIndex(k) + 1; }
+                    null => {
+                        if (part.length != 1 && !(part.length > 1 && decodeUtf8(part, 0)[1] as usize == part.length)) {
+                            return null;
+                        }
+                        let c = decodeUtf8(part, 0)[0];
+                        b.character = if (c >= 'A' && c <= 'Z') c + 32 else c;
+                    }
+                }
+            } else if (sameText(part, "cmd".bytes()) || sameText(part, "command".bytes())) {
+                b.command = true;
+            } else if (sameText(part, "ctrl".bytes()) || sameText(part, "control".bytes())) {
+                b.control = true;
+            } else if (sameText(part, "alt".bytes()) || sameText(part, "option".bytes())) {
+                b.alt = true;
+            } else if (sameText(part, "shift".bytes())) {
+                b.shift = true;
+            } else if (sameText(part, "secondary".bytes())) {
+                b.secondary = true;
+            } else {
+                return null;
+            }
+            start = i + 1;
+        }
+        i += 1;
+    }
+    return if (b.key == 0 && b.character == 0) null else b;
+}
+
+/// The built-in actions, which become the Ui's edit commands.
+fn builtinCommand(action: u32) -> EditCommand? {
+    if (action == hashId("copy")) {
+        return EditCommand.Copy;
+    }
+    if (action == hashId("cut")) {
+        return EditCommand.Cut;
+    }
+    if (action == hashId("paste")) {
+        return EditCommand.Paste;
+    }
+    if (action == hashId("select-all")) {
+        return EditCommand.SelectAll;
+    }
+    return null;
+}
+
+impl<region r> Ui<r> {
+    /// Hosts: whether the platform's "secondary" modifier is Command (macOS) rather than Control.
+    public fn setSecondaryIsCommand(borrow mut this, command: bool) {
+        this.secondaryIsCommand = command;
+    }
+
+    /// Binds `keystroke` ("secondary-shift-p", "ctrl-left", "f5") to action `action` in key context `context` ("" for
+    /// everywhere); a later binding of the same keystroke in the same context replaces it. False when the keystroke
+    /// does not parse or the bindings are full.
+    public fn bind(borrow mut this, keystroke: StringView, action: StringView, context: StringView) -> bool {
+        var b = match (parseKeystroke(keystroke.bytes())) {
+            Some(x) => x,
+            null => { return false; }
+        };
+        b.action = hashId(action);
+        b.context = if (context.length == 0) 0 else hashId(context);
+        for (k in 0..this.bindings.length()) {
+            let o = this.bindings.get(k);
+            if (o.context == b.context && o.key == b.key && o.character == b.character && o.shift == b.shift &&
+                o.control == b.control && o.alt == b.alt && o.command == b.command && o.secondary == b.secondary) {
+                this.bindings.set(k, b);
+                return true;
+            }
+        }
+        return this.bindings.push(b);
+    }
+
+    /// Whether action `name` was triggered this frame (by a keystroke bound to it, in a key context around the
+    /// focused element or everywhere).
+    public fn action(borrow this, name: StringView) -> bool {
+        let h = hashId(name);
+        for (k in 0..this.triggered.length()) {
+            if (this.triggered.get(k) == h) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Names the element just opened a key context: bindings in context `name` apply while the focused element is
+    /// inside it (until the element closes).
+    public fn keyContext(borrow mut this, name: StringView) {
+        if (this.contextCount < 16) {
+            this.contextNames[this.contextCount] = hashId(name);
+            this.contextDepths[this.contextCount] = this.openDepth;
+            this.contextCount += 1;
+        }
+    }
+
+    /// Closing an element leaves the key contexts it named.
+    fn leaveKeyContexts(borrow mut this) {
+        while (this.contextCount > 0 && this.contextDepths[this.contextCount - 1] >= this.openDepth) {
+            this.contextCount -= 1;
+        }
+    }
+
+    /// The focused element is being built: the key contexts around it, for next frame's keystrokes.
+    fn noteFocusContexts(borrow mut this) {
+        for (k in 0..this.contextCount) {
+            this.nextFocusContexts[k] = this.contextNames[k];
+        }
+        this.nextFocusContextCount = this.contextCount;
+    }
+
+    /// Whether binding `b` is keystroke `s`.
+    fn bindingMatches(borrow this, b: Binding, s: Keystroke) -> bool {
+        let command = b.command || (b.secondary && this.secondaryIsCommand);
+        let control = b.control || (b.secondary && !this.secondaryIsCommand);
+        if (command != s.modifiers.command || control != s.modifiers.control || b.alt != s.modifiers.alt ||
+            b.shift != s.modifiers.shift) {
+            return false;
+        }
+        return match (s.key) {
+            Some(k) => b.key == keyIndex(k) + 1,
+            null =>
+                b.key == 0 && b.character != 0 &&
+                    b.character == (if (s.character >= 'A' && s.character <= 'Z') s.character + 32
+                        else s.character),
+        };
+    }
+
+    /// At `begin`: this frame's keystrokes, each resolved to the binding in the innermost key context around last
+    /// frame's focused element, else a global one; built-in actions become edit commands.
+    fn takeKeystrokes(borrow mut this, platform: borrow mut dyn Platform) {
+        this.keystrokes.clear();
+        this.triggered.clear();
+        for (k in 0..this.nextFocusContextCount) {
+            this.focusContexts[k] = this.nextFocusContexts[k];
+        }
+        this.focusContextCount = this.nextFocusContextCount;
+        this.nextFocusContextCount = 0;
+        if (this.focusedId == 0) {
+            this.focusContextCount = 0;
+        }
+        loop {
+            let s = match (platform.nextKeystroke()) {
+                Some(x) => x,
+                null => { break; }
+            };
+            let ignored = this.keystrokes.push(s);
+            this.inputSeen = true;
+            // The innermost context first (later in focusContexts), then everywhere; a later binding wins a tie.
+            var best: Binding? = null;
+            var bestRank: i32 = -1;
+            for (k in 0..this.bindings.length()) {
+                let b = this.bindings.get(k);
+                if (!this.bindingMatches(b, s)) {
+                    continue;
+                }
+                var rank: i32 = -1;
+                if (b.context == 0) {
+                    rank = 0;
+                } else {
+                    for (c in 0..this.focusContextCount) {
+                        if (this.focusContexts[c] == b.context) {
+                            rank = truncate<i32>(c) + 1;
+                        }
+                    }
+                }
+                if (rank >= 0 && rank >= bestRank) {
+                    best = b;
+                    bestRank = rank;
+                }
+            }
+            match (best) {
+                Some(b) => {
+                    let pushed = this.triggered.push(b.action);
+                    match (builtinCommand(b.action)) {
+                        Some(c) => { this.editCommand(c); }
+                        null => {}
+                    }
+                }
+                null => {}
+            }
+        }
+    }
+
+    /// The default bindings: Copy, Cut, Paste and Select All on the platform's shortcut.
+    fn bindDefaults(borrow mut this) {
+        let a = this.bind("secondary-c", "copy", "");
+        let b = this.bind("secondary-x", "cut", "");
+        let c = this.bind("secondary-v", "paste", "");
+        let d = this.bind("secondary-a", "select-all", "");
+    }
+}

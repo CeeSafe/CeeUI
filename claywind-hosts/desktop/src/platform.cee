@@ -10,6 +10,8 @@ import claywind.Vec2;
 import claywind.keyIndex;
 import claywind.Ui;
 import claywind.EditCommand;
+import claywind.Keystroke;
+import claywind.Modifiers;
 
 /// Wheel lines to ClayWind's wheel units: what the browser host's page sends for one notch.
 const WHEEL_UNITS: f32 = 2.5;
@@ -27,9 +29,11 @@ public struct DesktopPlatform {
     dt: f32;
     clock: f64;
     public cursor: Cursor;
-    /// The editing shortcuts given this frame (bits: 1 copy, 2 cut, 4 paste, 8 select all), and whether the
-    /// input method was on after the last frame.
-    commands: u32;
+    /// Keys pressed this frame with their modifiers, for the Ui's key bindings; and whether the input method was
+    /// on after the last frame.
+    strokes: [Keystroke; 16];
+    strokeCount: usize;
+    strokeRead: usize;
     textInput: bool;
 
     public fn create(size: Dims) -> DesktopPlatform => DesktopPlatform {
@@ -44,7 +48,9 @@ public struct DesktopPlatform {
         dt: 0.0,
         clock: 0.0,
         cursor: Cursor.Default,
-        commands: 0,
+        strokes: [Keystroke { key: null, character: 0, modifiers: Modifiers.none() }; 16],
+        strokeCount: 0,
+        strokeRead: 0,
         textInput: false,
     };
 
@@ -64,22 +70,14 @@ public struct DesktopPlatform {
         this.repeated = 0;
         this.typedCount = 0;
         this.typedRead = 0;
-        this.commands = 0;
+        this.strokeCount = 0;
+        this.strokeRead = 0;
     }
 
-    /// After `ui.begin`: the frame's editing shortcuts, the clipboard's text for a Paste, and the input method's
-    /// composition, into the Ui.
+    /// After `ui.begin` (whose key bindings turned this frame's shortcuts into edit commands): the clipboard's text
+    /// for a Paste, and the input method's composition, into the Ui.
     public fn editInto(borrow this, ui: borrow mut Ui, window: borrow mut Window) {
-        if ((this.commands & 1) != 0) {
-            ui.editCommand(EditCommand.Copy);
-        }
-        if ((this.commands & 2) != 0) {
-            ui.editCommand(EditCommand.Cut);
-        }
-        if ((this.commands & 8) != 0) {
-            ui.editCommand(EditCommand.SelectAll);
-        }
-        if ((this.commands & 4) != 0) {
+        if (ui.commanded(EditCommand.Paste)) {
             var text = String.create();
             if (window.clipboardText(mut text)) {
                 ui.paste(text.view().bytes());
@@ -148,22 +146,25 @@ public struct DesktopPlatform {
                 this.hold(Key.LeftShift, modifiers.shift);
                 this.hold(Key.LeftControl, modifiers.control);
                 this.hold(Key.LeftAlt, modifiers.alt);
-                // Copy, Cut, Paste and Select All: Command with C, X, V, A on macOS, Control elsewhere.
-                if (down && (modifiers.command || modifiers.control)) {
-                    match (key) {
-                        WindowKey.Character(c) => {
-                            let lower = if (c >= 'A' && c <= 'Z') c + 32 else c;
-                            if (lower == 'c') {
-                                this.commands |= 1;
-                            } else if (lower == 'x') {
-                                this.commands |= 2;
-                            } else if (lower == 'v') {
-                                this.commands |= 4;
-                            } else if (lower == 'a') {
-                                this.commands |= 8;
-                            }
-                        }
-                        _ => {}
+                // Each key pressed (or repeated), with its modifiers, for the Ui's key bindings.
+                if (down && this.strokeCount < 16) {
+                    let m = Modifiers {
+                        shift: modifiers.shift,
+                        control: modifiers.control,
+                        alt: modifiers.alt,
+                        command: modifiers.command,
+                    };
+                    let character = match (key) {
+                        WindowKey.Character(c) => if (c >= 'A' && c <= 'Z') c + 32 else c,
+                        _ => 0,
+                    };
+                    let named = match (key) {
+                        WindowKey.Character(_) => null,
+                        _ => claywindKey(key),
+                    };
+                    if (character != 0 || named != null) {
+                        this.strokes[this.strokeCount] = Keystroke { key: named, character: character, modifiers: m };
+                        this.strokeCount += 1;
                     }
                 }
                 match (claywindKey(key)) {
@@ -215,6 +216,14 @@ impl Platform for DesktopPlatform {
     fn keyDown(borrow this, key: Key) -> bool => (this.down >> (keyIndex(key) as u64)) & 1 == 1;
     fn keyPressed(borrow this, key: Key) -> bool => (this.pressed >> (keyIndex(key) as u64)) & 1 == 1;
     fn keyRepeated(borrow this, key: Key) -> bool => (this.repeated >> (keyIndex(key) as u64)) & 1 == 1;
+    fn nextKeystroke(borrow mut this) -> Keystroke? {
+        if (this.strokeRead >= this.strokeCount) {
+            return null;
+        }
+        let s = this.strokes[this.strokeRead];
+        this.strokeRead += 1;
+        return s;
+    }
     fn nextChar(borrow mut this) -> u32 {
         if (this.typedRead >= this.typedCount) {
             return 0;

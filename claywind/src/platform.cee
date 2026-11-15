@@ -158,5 +158,8 @@ public interface Platform {
     @effects() fn keyRepeated(borrow this, key: Key) -> bool;
     /// The next typed Unicode code point queued this frame, or 0 when the queue is empty.
     @effects() fn nextChar(borrow mut this) -> u32;
+    /// The next key pressed this frame with its modifiers (letters and Command included), for key bindings
+    /// (ui_actions.cee), or null when none is left. A platform without keystrokes leaves the default.
+    @effects() fn nextKeystroke(borrow mut this) -> Keystroke? => null;
     @effects() fn setCursor(borrow mut this, cursor: Cursor);
 }

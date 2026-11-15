@@ -259,6 +259,11 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
         Console.writeLine(")");
         return 1;
     }
+    // Shortcuts use Command on macOS (an AppKit window), Control elsewhere.
+    ui.setSecondaryIsCommand(match (window.nativeHandle()) {
+        WindowHandle.AppKit(_, _) => true,
+        _ => false,
+    });
     let stats = Environment.variable("CLAYWIND_STATS") != null;
     let size = window.size();
     var platform = DesktopPlatform.create(Dims { w: round<f32>(size.width), h: round<f32>(size.height) });

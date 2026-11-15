@@ -18,6 +18,10 @@ struct FakePlatform {
     typed: [u32; 16];
     typedCount: usize;
     typedRead: usize;
+    /// Keystrokes for this frame, read front to back.
+    strokes: [Keystroke; 4];
+    strokeCount: usize;
+    strokeRead: usize;
 }
 
 impl Platform for FakePlatform {
@@ -39,6 +43,14 @@ impl Platform for FakePlatform {
     fn setCursor(borrow mut this, cursor: Cursor) {
         this.cursor = cursor;
     }
+    fn nextKeystroke(borrow mut this) -> Keystroke? {
+        if (this.strokeRead >= this.strokeCount) {
+            return null;
+        }
+        let s = this.strokes[this.strokeRead];
+        this.strokeRead += 1;
+        return s;
+    }
 }
 
 fn platformAt(w: f32, h: f32, x: f32, y: f32) -> FakePlatform => FakePlatform {
@@ -52,6 +64,9 @@ fn platformAt(w: f32, h: f32, x: f32, y: f32) -> FakePlatform => FakePlatform {
     typed: [0u32; 16],
     typedCount: 0,
     typedRead: 0,
+    strokes: [Keystroke { key: null, character: 0, modifiers: Modifiers.none() }; 4],
+    strokeCount: 0,
+    strokeRead: 0,
 };
 
 fn finish(ui: borrow mut Ui, platform: borrow mut FakePlatform) -> Result<void, TestFailure> {
@@ -705,4 +720,61 @@ fn aFocusedFieldWakesForItsCaret() -> Result<void, TestFailure> {
     let delay = ui.frameDelay()!;
     // The caret next blinks at 3.5 s.
     return Check.isTrue((delay - 0.2).abs() < 0.001, "the next frame is due when the caret blinks");
+}
+
+/// A keystroke of character `c` with Command (when `command`) or Control.
+fn stroke(c: u32, command: bool, control: bool, shift: bool) -> Keystroke =>
+    Keystroke { key: null, character: c, modifiers: Modifiers { shift: shift, control: control, alt: false, command: command } };
+
+/// One frame: an editor area (key context "editor") holding a focusable box; `strokes` pressed.
+fn keymapFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, strokes: Slice<Keystroke>, focus: bool) -> Result<void, TestFailure> {
+    for (k in 0..strokes.length) {
+        platform.strokes[k] = strokes[k];
+    }
+    platform.strokeCount = strokes.length;
+    platform.strokeRead = 0;
+    ui.begin(mut platform);
+    if (focus) {
+        ui.setFocus(hashId("box"));
+    }
+    ui.open(Style.column().id("editor").w(Size.fixed(200.0)).h(Size.fixed(100.0)));
+    ui.keyContext("editor");
+    ui.registerFocusable(hashId("box"));
+    ui.open(Style.box().id("box").w(Size.fixed(50.0)).h(Size.fixed(20.0)));
+    ui.close();
+    ui.close();
+    return finish(mut ui, mut platform);
+}
+
+@test
+fn keystrokesTriggerTheirActionsInContext() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(400.0, 300.0, 10.0, 10.0);
+    ui.setSecondaryIsCommand(true);
+    Check.isTrue(ui.bind("secondary-shift-p", "palette", ""), "a global binding")?;
+    Check.isTrue(ui.bind("secondary-shift-p", "editor-palette", "editor"), "the same keys in the editor")?;
+    Check.isTrue(ui.bind("ctrl-k", "kill", ""), "a Control binding")?;
+    Check.isTrue(!ui.bind("hyper-q", "nothing", ""), "an unknown modifier does not parse")?;
+    let none = [stroke(0, false, false, false); 1];
+    let palette = [stroke('P', true, false, true); 1];
+    // Nothing focused: the global binding.
+    keymapFrame(mut ui, mut platform, palette[..], false)?;
+    keymapFrame(mut ui, mut platform, palette[..], false)?;
+    Check.isTrue(ui.action("palette") && !ui.action("editor-palette"), "unfocused, the global binding acts")?;
+    // Focus inside the editor: next frame its binding wins.
+    keymapFrame(mut ui, mut platform, none[0..0], true)?;
+    keymapFrame(mut ui, mut platform, palette[..], false)?;
+    Check.isTrue(ui.action("editor-palette") && !ui.action("palette"), "in the editor, its binding wins")?;
+    // The defaults: Command-C is Copy (an edit command); Control-K is not Command-K.
+    let copy = [stroke('c', true, false, false); 1];
+    keymapFrame(mut ui, mut platform, copy[..], false)?;
+    Check.isTrue(ui.action("copy") && ui.commanded(EditCommand.Copy), "secondary-c copies")?;
+    let commandK = [stroke('k', true, false, false); 1];
+    keymapFrame(mut ui, mut platform, commandK[..], false)?;
+    Check.isTrue(!ui.action("kill"), "ctrl-k is not cmd-k")?;
+    let controlK = [stroke('k', false, true, false); 1];
+    keymapFrame(mut ui, mut platform, controlK[..], false)?;
+    return Check.isTrue(ui.action("kill"), "ctrl-k");
 }

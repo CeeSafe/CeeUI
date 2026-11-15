@@ -180,6 +180,11 @@ fn main() -> i32 {
     var platform = DesktopPlatform.create(Dims { w: round<f32>(size.width), h: round<f32>(size.height) });
     var app = DemoApp.create();
     ui.setDarkMode(Environment.variable("CLAYWIND_LIGHT") == null);
+    // Shortcuts use Command on macOS (an AppKit window), Control elsewhere.
+    ui.setSecondaryIsCommand(match (window.nativeHandle()) {
+        WindowHandle.AppKit(_, _) => true,
+        _ => false,
+    });
     var last = Timer.now();
     // Fonts from the system for characters the loaded ones lack, found as the frames need them.
     var systemFonts = SystemFonts.create();

@@ -85,7 +85,21 @@ public struct Ui<region r> {
     composingCaret: usize;
     caretArea: Rect;
     wantsText: bool;
-    // Frame pacing (state.cee): another frame asked for, input seen this frame, and the pointer's last place.
+    // Actions (ui_actions.cee): the bindings, this frame's keystrokes and the actions they triggered, the key contexts
+    // open around the element being built, and those around the focused element last frame.
+    bindings: FixedList<r, Binding>;
+    keystrokes: FixedList<r, Keystroke>;
+    triggered: FixedList<r, u32>;
+    openDepth: u32;
+    contextNames: [u32; 16];
+    contextDepths: [u32; 16];
+    contextCount: usize;
+    focusContexts: [u32; 16];
+    focusContextCount: usize;
+    nextFocusContexts: [u32; 16];
+    nextFocusContextCount: usize;
+    secondaryIsCommand: bool;
+    // Frame pacing (ui_state.cee): another frame asked for, input seen this frame, and the pointer's last place.
     requested: bool;
     inputSeen: bool;
     lastPointer: Vec2;
@@ -119,9 +133,12 @@ public struct Ui<region r> {
         let chars = memory.allocArray(64, 0u32)?;
         let focusables = memory.allocArray(64, 0u32)?;
         let pasted = memory.allocArray(capacity.textBytes, 0u8)?;
+        let bindings = memory.allocArray(128, emptyBinding())?;
+        let keystrokes = memory.allocArray(16, Keystroke { key: null, character: 0, modifiers: Modifiers.none() })?;
+        let triggered = memory.allocArray(16, 0u32)?;
         let copied = memory.allocArray(capacity.textBytes, 0u8)?;
         let composing = memory.allocArray(capacity.textBytes, 0u8)?;
-        return Ok(Ui {
+        var ui = Ui {
             tree: tree,
             animations: animations,
             scrolls: FixedList<ScrollState>.over(scrolls),
@@ -152,13 +169,27 @@ public struct Ui<region r> {
             composingCaret: 0,
             caretArea: Rect.zero(),
             wantsText: false,
+            bindings: FixedList<Binding>.over(bindings),
+            keystrokes: FixedList<Keystroke>.over(keystrokes),
+            triggered: FixedList<u32>.over(triggered),
+            openDepth: 0,
+            contextNames: [0u32; 16],
+            contextDepths: [0u32; 16],
+            contextCount: 0,
+            focusContexts: [0u32; 16],
+            focusContextCount: 0,
+            nextFocusContexts: [0u32; 16],
+            nextFocusContextCount: 0,
+            secondaryIsCommand: false,
             requested: false,
             inputSeen: false,
             lastPointer: Vec2 { x: -1.0, y: -1.0 },
             lastPressTime: -1.0,
             lastPressAt: Vec2.zero(),
             presses: 0,
-        });
+        };
+        ui.bindDefaults();
+        return Ok(ui);
     }
 
     // ---- the frame -------------------------------------------------------------------------------------------------
@@ -206,6 +237,8 @@ public struct Ui<region r> {
         this.hasCopied = false;
         this.copiedLength = 0;
         this.wantsText = false;
+        // Keystrokes to actions, through the key contexts around last frame's focused element.
+        this.takeKeystrokes(mut platform);
         this.tree.hitTest(pointer.position);
 
         // Clicks: an element is clicked when the pointer went down and came back up over it.
@@ -257,6 +290,7 @@ public struct Ui<region r> {
 
     /// Opens a container styled by `style`; its children follow until the matching `close`.
     public fn open(borrow mut this, style: Style) {
+        this.openDepth += 1;
         let id = this.tree.idFor(style.elementId);
         var decl = style.base;
         applyProps(mut decl, style.props);
@@ -313,6 +347,8 @@ public struct Ui<region r> {
 
     /// Closes the innermost open container.
     public fn close(borrow mut this) {
+        this.leaveKeyContexts();
+        this.openDepth -= 1;
         this.tree.close();
     }
 
@@ -438,6 +474,9 @@ public struct Ui<region r> {
     /// ClayWind_RegisterFocusable: `id` takes part in Tab cycling this frame.
     public fn registerFocusable(borrow mut this, id: u32) {
         this.focusables.push(id);
+        if (id == this.focusedId && id != 0) {
+            this.noteFocusContexts();
+        }
     }
 
     /// The box element `id` had in the last laid-out frame.
