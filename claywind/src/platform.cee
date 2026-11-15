@@ -161,5 +161,9 @@ public interface Platform {
     /// The next key pressed this frame with its modifiers (letters and Command included), for key bindings
     /// (actions.cee), or null when none is left. A platform without keystrokes leaves the default.
     @effects() fn nextKeystroke(borrow mut this) -> Keystroke? => null;
+    /// The next action chosen outside the frame this frame (a native menu's item, menus.cee), as its name's hash
+    /// (hashId), or 0 when none is left: it is triggered as its key binding would be. A platform without menus leaves
+    /// the default.
+    @effects() fn nextChosenAction(borrow mut this) -> u32 => 0;
     @effects() fn setCursor(borrow mut this, cursor: Cursor);
 }

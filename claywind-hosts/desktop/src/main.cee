@@ -244,6 +244,117 @@ fn drawPane(
     return window.presentChanged(raster.pixels(), width, height, shown[0..boxes]).isOk();
 }
 
+/// A Key as the window's menus name it.
+fn windowKeyOf(k: Key) -> WindowKey? => match (k) {
+    Key.Tab => WindowKey.Tab,
+    Key.Enter => WindowKey.Enter,
+    Key.Escape => WindowKey.Escape,
+    Key.Backspace => WindowKey.Backspace,
+    Key.Delete => WindowKey.Delete,
+    Key.Left => WindowKey.Left,
+    Key.Right => WindowKey.Right,
+    Key.Up => WindowKey.Up,
+    Key.Down => WindowKey.Down,
+    Key.Home => WindowKey.Home,
+    Key.End => WindowKey.End,
+    Key.PageUp => WindowKey.PageUp,
+    Key.PageDown => WindowKey.PageDown,
+    Key.F1 => WindowKey.Function(1),
+    Key.F2 => WindowKey.Function(2),
+    Key.F3 => WindowKey.Function(3),
+    Key.F4 => WindowKey.Function(4),
+    Key.F5 => WindowKey.Function(5),
+    Key.F6 => WindowKey.Function(6),
+    Key.F7 => WindowKey.Function(7),
+    Key.F8 => WindowKey.Function(8),
+    Key.F9 => WindowKey.Function(9),
+    Key.F10 => WindowKey.Function(10),
+    Key.F11 => WindowKey.Function(11),
+    Key.F12 => WindowKey.Function(12),
+    _ => null,
+};
+
+/// A key binding as a menu item's shortcut.
+fn shortcutOf(binding: KeyBinding?) -> MenuShortcut? {
+    let b = match (binding) {
+        Some(x) => x,
+        null => { return null; }
+    };
+    let key = match (b.key) {
+        Some(k) => match (windowKeyOf(k)) {
+            Some(w) => w,
+            null => { return null; }
+        },
+        null => WindowKey.Character(b.character),
+    };
+    let m = b.modifiers;
+    return MenuShortcut {
+        key: key,
+        modifiers: WindowModifiers { shift: m.shift, control: m.control, alt: m.alt, command: m.command },
+    };
+}
+
+/// The app's menus (`model`) as the system's: each item's id is its place in the model, its shortcut its action's
+/// key binding in `ui`.
+fn systemMenu(model: borrow MenuModel, ui: borrow Ui) -> Result<Menu, AllocError> {
+    var menu = Menu.create();
+    for (k in 0..model.partCount()) {
+        let title = match (StringView.fromUtf8(model.partTitle(k))) {
+            Some(t) => t,
+            null => "?",
+        };
+        match (model.partKind(k)) {
+            MenuPartKind.Menu => { menu.addMenu(title)?; }
+            MenuPartKind.Item => {
+                menu.addItem(truncate<u32>(k), title, shortcutOf(ui.bindingForHash(model.partAction(k))))?;
+            }
+            MenuPartKind.Separator => { menu.addSeparator()?; }
+        }
+    }
+    return Ok(menu);
+}
+
+/// Shows the system's file dialog the app asked for, then reads or writes the file and tells the app.
+fn answerFileRequest(request: FileRequest, app: borrow mut DemoApp, window: borrow mut Window) {
+    match (request) {
+        FileRequest.Open => {
+            match (FileDialog.openFile(mut window, "Open", "")) {
+                Ok(Some(path)) => {
+                    match (File.open(path.view())) {
+                        Ok(f) => {
+                            match (f.length()) {
+                                Ok(n) => { app.fileOpened(path.view().bytes(), n); }
+                                Err(_) => { app.fileNotDone("Could not read the file"); }
+                            }
+                        }
+                        Err(_) => { app.fileNotDone("Could not open the file"); }
+                    }
+                }
+                Ok(null) => { app.fileNotDone("Open cancelled"); }
+                Err(_) => { app.fileNotDone("No file dialog on this system"); }
+            }
+        }
+        FileRequest.Save => {
+            match (FileDialog.saveFile(mut window, "Save As", "notes.txt", "txt")) {
+                Ok(Some(path)) => {
+                    let text = app.saveText();
+                    let written = match (File.create(path.view())) {
+                        Ok(f) => f.writeAt(text[0..app.saveTextLength()], 0).isOk(),
+                        Err(_) => false,
+                    };
+                    if (written) {
+                        app.fileSaved(path.view().bytes());
+                    } else {
+                        app.fileNotDone("Could not write the file");
+                    }
+                }
+                Ok(null) => { app.fileNotDone("Save cancelled"); }
+                Err(_) => { app.fileNotDone("No file dialog on this system"); }
+            }
+        }
+    }
+}
+
 /// The message for a window that does not open.
 fn windowError(e: WindowError) -> StringView => match (e) {
     WindowError.Unsupported => "this system has no window support",
@@ -306,6 +417,16 @@ fn main() -> i32 {
     }
     var app = DemoApp.create();
     app.setOpensWindows(true);
+    app.setOpensFiles(true);
+    // The menus: the system's (a macOS menu bar, a Windows window's menu), else drawn by the demo (X11, or
+    // CLAYWIND_DRAWN_MENUS=1). They are set after the first frame, which binds their actions' keys.
+    var menuModel = MenuModel.create();
+    demoMenu(mut menuModel);
+    var menuSet = false;
+    if (Environment.variable("CLAYWIND_DRAWN_MENUS") != null) {
+        app.setDrawsMenuBar(true);
+        menuSet = true;
+    }
     let dark = Environment.variable("CLAYWIND_LIGHT") == null;
     // Shortcuts use Command on macOS (an AppKit window), Control elsewhere.
     let command = match (window.nativeHandle()) {
@@ -323,6 +444,17 @@ fn main() -> i32 {
     loop {
         if (main.takeEvents(mut window)) {
             return 0;
+        }
+        // A menu item chosen: its action, for this frame.
+        loop {
+            match (window.nextMenuChoice()) {
+                Some(id) => {
+                    if ((id as usize) < menuModel.partCount()) {
+                        main.platform.choose(menuModel.partAction(id as usize));
+                    }
+                }
+                null => { break; }
+            }
         }
         var closeSecond = false;
         match (borrow mut second) {
@@ -354,6 +486,25 @@ fn main() -> i32 {
             return 1;
         }
         main.platform.endFrame();
+        if (!menuSet) {
+            menuSet = true;
+            let shown = match (systemMenu(menuModel, main.ui)) {
+                Ok(menu) => window.setMenu(menu).isOk(),
+                Err(_) => false,
+            };
+            if (!shown) {
+                app.setDrawsMenuBar(true); // no menu bar from the system: the demo draws its own
+                main.ui.requestFrame();
+            }
+        }
+        // A file the app asked for (File > Open…, Save As…): the system's dialog, then the file.
+        match (app.takeFileRequest()) {
+            Some(request) => {
+                answerFileRequest(request, mut app, mut window);
+                main.ui.requestFrame(); // the next frame shows how it went
+            }
+            null => {}
+        }
         if (app.wantsInspector() && second == null) {
             match (Window.open("Live state", INSPECTOR_WIDTH, INSPECTOR_HEIGHT)) {
                 Ok(w) => {

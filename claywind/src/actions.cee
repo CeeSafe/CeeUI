@@ -297,6 +297,43 @@ impl<region r> Ui<r> {
                 null => {}
             }
         }
+        // Actions dispatched during the last frame (a drawn menu's items), then those chosen outside the frame (a
+        // native menu's), trigger as their bindings would.
+        for (k in 0..this.queuedCount) {
+            this.dispatchHash(this.queuedActions[k]);
+        }
+        this.queuedCount = 0;
+        loop {
+            let chosen = platform.nextChosenAction();
+            if (chosen == 0) {
+                break;
+            }
+            this.inputSeen = true;
+            this.dispatchHash(chosen);
+        }
+    }
+
+    /// Triggers action `name` on the next frame as its key binding would (a drawn menu's item, a command palette, a
+    /// button that runs an action), and asks for that frame; a built-in action becomes its edit command. Up to 8 a
+    /// frame.
+    public fn dispatch(borrow mut this, name: StringView) {
+        this.dispatchNext(hashId(name));
+    }
+
+    fn dispatchNext(borrow mut this, action: u32) {
+        if (this.queuedCount < 8) {
+            this.queuedActions[this.queuedCount] = action;
+            this.queuedCount += 1;
+        }
+        this.requestFrame();
+    }
+
+    fn dispatchHash(borrow mut this, action: u32) {
+        let pushed = this.triggered.push(action);
+        match (builtinCommand(action)) {
+            Some(c) => { this.editCommand(c); }
+            null => {}
+        }
     }
 
     /// The default bindings: Copy, Cut, Paste and Select All on the platform's shortcut.

@@ -22,9 +22,16 @@ struct FakePlatform {
     strokes: [Keystroke; 4];
     strokeCount: usize;
     strokeRead: usize;
+    /// An action chosen outside the frame (a menu item's), as its hash; 0 for none. Taken once.
+    chosen: u32;
 }
 
 impl Platform for FakePlatform {
+    fn nextChosenAction(borrow mut this) -> u32 {
+        let c = this.chosen;
+        this.chosen = 0;
+        return c;
+    }
     fn screenSize(borrow this) -> Dims => this.size;
     fn frameTime(borrow this) -> f32 => this.dt;
     fn time(borrow this) -> f64 => this.clock;
@@ -67,6 +74,7 @@ fn platformAt(w: f32, h: f32, x: f32, y: f32) -> FakePlatform => FakePlatform {
     strokes: [Keystroke { key: null, character: 0, modifiers: Modifiers.none() }; 4],
     strokeCount: 0,
     strokeRead: 0,
+    chosen: 0,
 };
 
 fn finish(ui: borrow mut Ui, platform: borrow mut FakePlatform) -> Result<void, TestFailure> {

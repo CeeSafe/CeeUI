@@ -255,4 +255,4 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   window's and lets AppKit dispatch the rest: a click in window B, taken from AppKit's queue while window A's
   `nextEvent` or wait pumps, never reaches B's queue. Fixed in the same ADR: each event goes to the window it is
   for. Also met: macOS keeps at most 16 windows open (`CEE_MAC_WINDOWS`; the 17th `open` is `Resources`), which
-  type-system.md §26.13 does not say yet.
+  type-system.md §26.13 did not say; it does since 0.52.0 (ADR 0146).

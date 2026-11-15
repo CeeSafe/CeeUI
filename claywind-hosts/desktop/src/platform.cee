@@ -35,6 +35,10 @@ public struct DesktopPlatform {
     strokeCount: usize;
     strokeRead: usize;
     textInput: bool;
+    /// Actions chosen in the window's menu this frame (their names' hashes), for the Ui (Platform.nextChosenAction).
+    chosen: [u32; 8];
+    chosenCount: usize;
+    chosenRead: usize;
 
     public fn create(size: Dims) -> DesktopPlatform => DesktopPlatform {
         size: size,
@@ -52,7 +56,18 @@ public struct DesktopPlatform {
         strokeCount: 0,
         strokeRead: 0,
         textInput: false,
+        chosen: [0u32; 8],
+        chosenCount: 0,
+        chosenRead: 0,
     };
+
+    /// An action chosen in the window's menu (its name's hash), for the next frame.
+    public fn choose(borrow mut this, action: u32) {
+        if (this.chosenCount < 8) {
+            this.chosen[this.chosenCount] = action;
+            this.chosenCount += 1;
+        }
+    }
 
     /// Seconds since the previous frame (the host measures it).
     public fn setFrameTime(borrow mut this, seconds: f32) {
@@ -72,6 +87,8 @@ public struct DesktopPlatform {
         this.typedRead = 0;
         this.strokeCount = 0;
         this.strokeRead = 0;
+        this.chosenCount = 0;
+        this.chosenRead = 0;
     }
 
     /// After `ui.begin` (whose key bindings turned this frame's shortcuts into edit commands): the clipboard's text
@@ -209,6 +226,14 @@ public struct DesktopPlatform {
 }
 
 impl Platform for DesktopPlatform {
+    fn nextChosenAction(borrow mut this) -> u32 {
+        if (this.chosenRead >= this.chosenCount) {
+            return 0;
+        }
+        let c = this.chosen[this.chosenRead];
+        this.chosenRead += 1;
+        return c;
+    }
     fn screenSize(borrow this) -> Dims => this.size;
     fn frameTime(borrow this) -> f32 => this.dt;
     fn time(borrow this) -> f64 => this.clock;

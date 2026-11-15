@@ -1,0 +1,62 @@
+// SPDX-License-Identifier: MIT
+// Menus made of actions. An app describes its menus once to a MenuBuilder: menus, and in each, items that name an
+// action (actions.cee) and separators. A host builds the system's menus from that (a macOS menu bar, a Windows
+// window's menu) and shows each item's key binding as its shortcut (Ui.bindingFor); a chosen item reaches the frame
+// as its action, through Platform.nextChosenAction, so `ui.action("save")` is true whether a keystroke or the menu
+// asked for it. A host without native menus may draw them with the same description.
+//
+//     fn appMenu<B: MenuBuilder>(m: borrow mut B) {
+//         m.menu("File");
+//         m.item("Open…", "open-file");
+//         m.separator();
+//         m.item("Quit", "quit");
+//     }
+
+/// Where an app describes its menus: each `menu` starts a menu, and the items and separators after it are its.
+public interface MenuBuilder {
+    /// Starts a menu titled `title` (a menu bar's entry).
+    fn menu(borrow mut this, title: StringView);
+    /// An item titled `title` that triggers action `action` when chosen.
+    fn item(borrow mut this, title: StringView, action: StringView);
+    /// A line between groups of items.
+    fn separator(borrow mut this);
+}
+
+/// A key binding as a menu shows it: a named key or a character (lowercase), and the modifiers it needs on this
+/// platform ("secondary" resolved to Command or Control).
+public struct KeyBinding {
+    public key: Key?;
+    public character: u32;
+    public modifiers: Modifiers;
+}
+
+impl<region r> Ui<r> {
+    /// The keystroke bound to action `name` everywhere (a binding in no key context), the latest bound if several, or
+    /// null when none is: what a menu shows as the item's shortcut.
+    public fn bindingFor(borrow this, name: StringView) -> KeyBinding? => this.bindingForHash(hashId(name));
+
+    /// Whether the platform's "secondary" modifier is Command (macOS), as setSecondaryIsCommand set it.
+    public fn usesCommand(borrow this) -> bool => this.secondaryIsCommand;
+
+    /// bindingFor, by the action name's hash.
+    public fn bindingForHash(borrow this, h: u32) -> KeyBinding? {
+        var found: KeyBinding? = null;
+        for (k in 0..this.bindings.length()) {
+            let b = this.bindings.get(k);
+            if (b.action != h || b.context != 0) {
+                continue;
+            }
+            found = KeyBinding {
+                key: if (b.key == 0) null else keyAt(b.key - 1),
+                character: b.character,
+                modifiers: Modifiers {
+                    shift: b.shift,
+                    control: b.control || (b.secondary && !this.secondaryIsCommand),
+                    alt: b.alt,
+                    command: b.command || (b.secondary && this.secondaryIsCommand),
+                },
+            };
+        }
+        return found;
+    }
+}

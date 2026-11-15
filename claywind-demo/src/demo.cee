@@ -122,6 +122,37 @@ impl DemoJobs for NoJobs {
     fn counting(borrow this) -> bool => false;
 }
 
+/// A file the app asks its host to choose (a menu's Open… or Save As…): the host shows the system's dialog, then
+/// reads or writes the file and reports back (DemoApp.fileOpened, fileSaved, fileNotDone).
+public enum FileRequest {
+    /// Open a file: the host reads it and reports its size.
+    Open,
+    /// Save As: the host writes `DemoApp.saveText` to the file chosen.
+    Save,
+}
+
+/// The demo's menus (a host builds the system's menus from them; their shortcuts are the actions' key bindings, which
+/// the demo binds on its first frame).
+public fn demoMenu<B: MenuBuilder>(m: borrow mut B) {
+    m.menu("File");
+    m.item("Open…", "open-file");
+    m.item("Save As…", "save-as");
+    m.menu("Edit");
+    m.item("Cut", "cut");
+    m.item("Copy", "copy");
+    m.item("Paste", "paste");
+    m.separator();
+    m.item("Select All", "select-all");
+    m.menu("View");
+    m.item("Dashboard", "show-dashboard");
+    m.item("Controls", "show-controls");
+    m.item("Effects", "show-effects");
+    m.separator();
+    m.item("Toggle Light Mode", "toggle-theme");
+    m.menu("Window");
+    m.item("Live State", "open-inspector");
+}
+
 /// The app state (main.c's statics), all caller-owned state for the controls.
 public struct DemoApp {
     public clicks: i32;
@@ -162,6 +193,17 @@ public struct DemoApp {
     inspectorWanted: bool;
     /// Whether the host opens windows of its own (setOpensWindows): only then does the panel offer one.
     opensWindows: bool;
+    /// The key bindings of the menus' actions are made on the first frame.
+    bound: bool;
+    /// Whether the host shows file dialogs (setOpensFiles), the file it was asked for, and the last outcome to show.
+    opensFiles: bool;
+    fileWanted: FileRequest?;
+    fileStatus: [u8; 160];
+    fileStatusLen: usize;
+    /// A menu bar the demo draws itself (setDrawsMenuBar: a host whose system has none), and which menu is open.
+    drawsMenuBar: bool;
+    menuModel: MenuModel;
+    menuOpen: usize;
 
     /// main.c's initial state (and `ClayWind_darkMode = true`, which the host sets on the Ui).
     public fn create() -> DemoApp => DemoApp {
@@ -198,7 +240,82 @@ public struct DemoApp {
         primesTook: 0.0,
         inspectorWanted: false,
         opensWindows: false,
+        bound: false,
+        opensFiles: false,
+        fileWanted: null,
+        fileStatus: [0u8; 160],
+        fileStatusLen: 0,
+        drawsMenuBar: false,
+        menuModel: MenuModel.create(),
+        menuOpen: 0,
     };
+
+    /// The host has no native menus to give (X11): the demo draws its menus (demoMenu) in a bar of its own.
+    public fn setDrawsMenuBar(borrow mut this, draws: bool) {
+        this.drawsMenuBar = draws;
+        if (draws && this.menuModel.isEmpty()) {
+            demoMenu(mut this.menuModel);
+        }
+    }
+
+    /// The host shows the system's file dialogs: File's Open… and Save As… ask it for files.
+    public fn setOpensFiles(borrow mut this, opens: bool) {
+        this.opensFiles = opens;
+    }
+
+    /// The file the app asked for since the last call, if any: the host shows the dialog and reports back.
+    public fn takeFileRequest(borrow mut this) -> FileRequest? {
+        let r = this.fileWanted;
+        this.fileWanted = null;
+        return r;
+    }
+
+    /// What Save As writes: the Controls page's name and note, a line each.
+    public fn saveText(this) -> [u8; 130] {
+        var out = [0u8; 130];
+        var n: usize = 0;
+        for (i in 0..this.nameLen) {
+            out[n] = this.nameBuf[i];
+            n += 1;
+        }
+        out[n] = '\n';
+        n += 1;
+        for (i in 0..this.noteLen) {
+            out[n] = this.noteBuf[i];
+            n += 1;
+        }
+        out[n] = '\n';
+        return out;
+    }
+
+    /// How many bytes of saveText are the text.
+    public fn saveTextLength(this) -> usize => this.nameLen + this.noteLen + 2;
+
+    /// The host read the file at `path` (`size` bytes).
+    public fn fileOpened(borrow mut this, path: Slice<u8>, size: u64) {
+        var w = TextWriter.create(mut this.fileStatus[..]);
+        w.text("Opened ");
+        w.bytes(fileName(path));
+        w.text(" (");
+        grouped(mut w, size);
+        w.text(" bytes)");
+        this.fileStatusLen = w.written().length;
+    }
+
+    /// The host wrote saveText to `path`.
+    public fn fileSaved(borrow mut this, path: Slice<u8>) {
+        var w = TextWriter.create(mut this.fileStatus[..]);
+        w.text("Saved ");
+        w.bytes(fileName(path));
+        this.fileStatusLen = w.written().length;
+    }
+
+    /// The dialog was cancelled, or the file could not be read or written (`why`).
+    public fn fileNotDone(borrow mut this, why: StringView) {
+        var w = TextWriter.create(mut this.fileStatus[..]);
+        w.text(why);
+        this.fileStatusLen = w.written().length;
+    }
 
     /// The host can open more windows: the Live state panel offers to open in one.
     public fn setOpensWindows(borrow mut this, opens: bool) {
@@ -280,6 +397,10 @@ public fn demoFrameWith<M: TextMetrics, J: DemoJobs>(
             null => { break; }
         }
     }
+    if (app.drawsMenuBar) {
+        ui.open(Style.column().id("window").w(Size.grow()).h(Size.grow()).bg(pageBg(ui)));
+        Controls.menuBar(mut ui, "menubar", app.menuModel, mut app.menuOpen);
+    }
     ui.open(Style.row().id("root").w(Size.grow()).h(Size.grow()).bg(pageBg(ui)));
     sidebar(mut ui, app);
     if (app.activeNav == NAV_CONTROLS) {
@@ -304,6 +425,9 @@ public fn demoFrameWith<M: TextMetrics, J: DemoJobs>(
         null => {}
     }
     ui.close();
+    if (app.drawsMenuBar) {
+        ui.close();
+    }
 }
 
 fn update(ui: borrow mut Ui, app: borrow mut DemoApp) {
@@ -333,9 +457,41 @@ fn update(ui: borrow mut Ui, app: borrow mut DemoApp) {
         app.ctxY = p.position.y;
     }
     // T toggles the theme (main.c checks the T key; here it is the typed letter, ignored while a field has focus).
-    if (ui.focused() == 0 && (ui.typed('T') || ui.typed('t'))) {
+    if ((ui.focused() == 0 && (ui.typed('T') || ui.typed('t'))) || ui.action("toggle-theme")) {
         let dark = ui.isDarkMode();
         ui.setDarkMode(!dark);
+    }
+    // The menus' actions (demoMenu), from their items or their key bindings.
+    if (!app.bound) {
+        ui.bind("secondary-o", "open-file", "");
+        ui.bind("secondary-shift-s", "save-as", "");
+        ui.bind("secondary-1", "show-dashboard", "");
+        ui.bind("secondary-2", "show-controls", "");
+        ui.bind("secondary-3", "show-effects", "");
+        ui.bind("secondary-shift-l", "toggle-theme", "");
+        ui.bind("secondary-shift-i", "open-inspector", "");
+        app.bound = true;
+    }
+    if (ui.action("show-dashboard")) {
+        app.activeNav = 0;
+        app.focusedNav = 0;
+    }
+    if (ui.action("show-controls")) {
+        app.activeNav = NAV_CONTROLS;
+        app.focusedNav = NAV_CONTROLS;
+    }
+    if (ui.action("show-effects")) {
+        app.activeNav = NAV_EFFECTS;
+        app.focusedNav = NAV_EFFECTS;
+    }
+    if (ui.action("open-inspector") && app.opensWindows) {
+        app.inspectorWanted = true;
+    }
+    if (app.opensFiles && ui.action("open-file")) {
+        app.fileWanted = FileRequest.Open;
+    }
+    if (app.opensFiles && ui.action("save-as")) {
+        app.fileWanted = FileRequest.Save;
     }
     // Keyboard focus: Up/Down move the cursor, Enter selects the focused item.
     if (ui.keyPressed(Key.Down)) {
@@ -389,6 +545,10 @@ fn sidebar(ui: borrow mut Ui, app: borrow DemoApp) {
     // Push the footer to the bottom.
     ui.open(Style.box().h(Size.grow()));
     ui.close();
+    // The last file a menu's Open… or Save As… dealt with.
+    if (app.fileStatusLen > 0) {
+        ui.labelBytes(app.fileStatus[0..app.fileStatusLen], Text.of().color(inkCol(ui)).clamp(3));
+    }
     if (wide) {
         // A long description clamped to two lines with an ellipsis (line-clamp-2).
         ui.label(
@@ -686,6 +846,17 @@ fn quoted(w: borrow mut TextWriter, text: Slice<u8>) {
     w.byte('"');
     w.bytes(text);
     w.byte('"');
+}
+
+/// The last part of a path (after its last '/' or '\\').
+fn fileName(path: Slice<u8>) -> Slice<u8> {
+    var start: usize = 0;
+    for (i in 0..path.length) {
+        if (path[i] == '/' || path[i] == '\\') {
+            start = i + 1;
+        }
+    }
+    return path[start..path.length];
 }
 
 /// `n` in decimal with its thousands separated by commas.

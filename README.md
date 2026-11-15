@@ -97,7 +97,7 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 
 ## Getting started
 
-Install the CeeSafe compiler, **ceesafec 0.51.0 or later** (the hosts use its window text input and clipboard, ADR 0141, and sleep while nothing changes, ADRs 0142 and 0145; ClayWind's array sizes are constant expressions, ADR 0143; 0.50.2 links with MinGW's gcc on Windows):
+Install the CeeSafe compiler, **ceesafec 0.52.0 or later** (the hosts use its window text input and clipboard, ADR 0141, sleep while nothing changes, ADRs 0142 and 0145, and show the system's menus and file dialogs, ADR 0146; ClayWind's array sizes are constant expressions, ADR 0143; 0.50.2 links with MinGW's gcc on Windows):
 
 ```sh
 curl -fsSL https://ceesafe.github.io/CeeSafe/install.sh | sh          # macOS and Linux
@@ -175,6 +175,12 @@ for (`Ui.requestFrameAfter`), or a background job's result (`claywind-tasks`) wa
 Several windows: each has its own `Ui` and `Damage`, and they can share one `Raster`, its fonts and caches, which
 keeps each window's last frame in a `RasterFrame` while it draws another's, so every window is still redrawn only
 where it changed. The host sleeps on `Window.waitAny` until any of them needs a frame.
+
+Menus are made of actions: an app describes them once to a `MenuBuilder` (menus, items that name actions,
+separators), and a host shows them as the system's menus (a macOS menu bar, a Windows window's menu; CeeSafe's
+`Window.setMenu`), each item's shortcut its action's key binding (`Ui.bindingFor`), a chosen item reaching the frame
+as its action. Where the system has no menu bar (X11), `Controls.menuBar` draws the same menus in the window. The
+demo's File menu opens and saves files through the system's dialogs (`FileDialog`).
 
 The demo (`claywind-demo/src/demo.cee`) uses most of the API. `claywind-hosts/desktop/src/main.cee` is a complete
 host loop in about 250 lines: window events, layout, incremental rendering, presenting only the changed boxes, and

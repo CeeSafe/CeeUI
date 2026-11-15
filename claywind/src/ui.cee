@@ -90,6 +90,9 @@ public struct Ui<region r> {
     bindings: FixedList<r, Binding>;
     keystrokes: FixedList<r, Keystroke>;
     triggered: FixedList<r, u32>;
+    /// Actions dispatched this frame, triggered at the next `begin` (actions.cee).
+    queuedActions: [u32; 8];
+    queuedCount: usize;
     openDepth: u32;
     contextNames: [u32; 16];
     contextDepths: [u32; 16];
@@ -174,6 +177,8 @@ public struct Ui<region r> {
             bindings: FixedList<Binding>.over(bindings),
             keystrokes: FixedList<Keystroke>.over(keystrokes),
             triggered: FixedList<u32>.over(triggered),
+            queuedActions: [0u32; 8],
+            queuedCount: 0,
             openDepth: 0,
             contextNames: [0u32; 16],
             contextDepths: [0u32; 16],
