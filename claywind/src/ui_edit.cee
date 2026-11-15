@@ -30,6 +30,7 @@ impl<region r> Ui<r> {
     /// Hosts: the user gave editing command `c` this frame (the focused text field acts on it).
     public fn editCommand(borrow mut this, c: EditCommand) {
         this.commands |= commandBit(c);
+        this.inputSeen = true;
     }
 
     /// Hosts: a Paste of `utf8` (the clipboard's text) this frame; text past the Ui's text capacity is left out.
@@ -40,6 +41,7 @@ impl<region r> Ui<r> {
         }
         this.pastedLength = n;
         this.commands |= commandBit(EditCommand.Paste);
+        this.inputSeen = true;
     }
 
     /// Hosts: the input method's composition (its UTF-8 text, empty when none, and the caret's byte offset in it),

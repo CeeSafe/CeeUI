@@ -85,6 +85,10 @@ public struct Ui<region r> {
     composingCaret: usize;
     caretArea: Rect;
     wantsText: bool;
+    // Frame pacing (state.cee): another frame asked for, input seen this frame, and the pointer's last place.
+    requested: bool;
+    inputSeen: bool;
+    lastPointer: Vec2;
     // Repeated presses: when and where the last went down, and how many came in quick succession.
     lastPressTime: f64;
     lastPressAt: Vec2;
@@ -148,6 +152,9 @@ public struct Ui<region r> {
             composingCaret: 0,
             caretArea: Rect.zero(),
             wantsText: false,
+            requested: false,
+            inputSeen: false,
+            lastPointer: Vec2 { x: -1.0, y: -1.0 },
             lastPressTime: -1.0,
             lastPressAt: Vec2.zero(),
             presses: 0,
@@ -178,6 +185,12 @@ public struct Ui<region r> {
                 this.keysRepeated |= bit;
             }
         }
+        // Input this frame: the frame after it must run too, as hovers and focus settle a frame later.
+        this.inputSeen = pointer.pressed || pointer.released || pointer.secondaryPressed || pointer.wheel.x != 0.0 ||
+            pointer.wheel.y != 0.0 || pointer.position.x != this.lastPointer.x ||
+            pointer.position.y != this.lastPointer.y || this.keysPressed != 0 || this.keysRepeated != 0;
+        this.lastPointer = pointer.position;
+        this.requested = false;
         this.chars.clear();
         this.charRead = 0;
         loop {
@@ -186,6 +199,7 @@ public struct Ui<region r> {
                 break;
             }
         }
+        this.inputSeen = this.inputSeen || this.chars.length() > 0;
         this.focusables.clear();
         this.commands = 0;
         this.pastedLength = 0;

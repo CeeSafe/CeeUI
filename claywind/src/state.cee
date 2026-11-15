@@ -1,0 +1,81 @@
+// SPDX-License-Identifier: MIT
+// App state and frame pacing. An immediate-mode UI builds itself again each frame from the app's state, so the
+// question is only when a frame must run: after input (and the frame after it, as hovers settle), while an
+// animation or a scroll's momentum moves, when a model changed, or when the app asks. Otherwise the window can
+// sleep until the next event (Ui.frameDelay tells the host how long). A Model holds a piece of app state: changing
+// it through `update` or `set` asks for the frame that shows the change.
+//
+//     loop {
+//         ui.begin(platform); app.frame(ui); ui.endFrame(...); render...
+//         match (ui.frameDelay()) {
+//             Some(seconds) => window.waitEvent(milliseconds(seconds)),   // a caret blink, or 0: at once
+//             null => window.waitEvent(FOREVER),                          // idle until an event or a wake
+//         }
+//     }
+
+impl<region r> Ui<r> {
+    /// Asks for another frame after this one (something the frame cannot see changed: a model, a timer).
+    public fn requestFrame(borrow mut this) {
+        this.requested = true;
+    }
+
+    /// After the frame: whether the next frame must run at once: input arrived, a transition or a scroll's
+    /// momentum is moving, a drag scroll is under way, or a frame was asked for.
+    public fn needsFrame(borrow this) -> bool {
+        if (this.requested || this.inputSeen || this.animations.animating()) {
+            return true;
+        }
+        for (k in 0..this.scrolls.length()) {
+            let s = this.scrolls.items[k];
+            if (s.momentum.x != 0.0 || s.momentum.y != 0.0 || s.pointerActive) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// After the frame: how long the host may wait for an event before the next frame: 0 when it must run at once
+    /// (needsFrame), the time to the focused text field's next caret blink, or null when nothing changes until an
+    /// event arrives.
+    public fn frameDelay(borrow this) -> f64? {
+        if (this.needsFrame()) {
+            return 0.0;
+        }
+        if (this.wantsText) {
+            // The caret blinks at 2 Hz: it next changes at the next half second.
+            let half = (this.clock * 2.0).floor() + 1.0;
+            return (half / 2.0 - this.clock).max(0.0);
+        }
+        return null;
+    }
+}
+
+/// A piece of app state the UI shows: its value, and a version that changes whenever the value does. Changing it
+/// through `update` or `set` asks the Ui for the frame that shows the change.
+public struct Model<T> {
+    value: T;
+    changes: u64;
+
+    /// A model holding `value`.
+    public fn of(value: T) -> Model<T> => Model { value: value, changes: 0 };
+
+    /// The value, to read (a frame reads it to draw).
+    public fn get(borrow this) -> borrow(this) T => borrow this.value;
+
+    /// How many times it changed: a view can keep the version it last drew to know whether to redo work.
+    public fn version(borrow this) -> u64 => this.changes;
+
+    /// Replaces the value; `ui` runs another frame to show it.
+    public fn set(borrow mut this, ui: borrow mut Ui, value: T) {
+        this.value = value;
+        this.changes += 1;
+        ui.requestFrame();
+    }
+
+    /// Changes the value in place with `change`; `ui` runs another frame to show it.
+    public fn update(borrow mut this, ui: borrow mut Ui, change: borrow mut fn(borrow mut T)) {
+        change(mut this.value);
+        this.changes += 1;
+        ui.requestFrame();
+    }
+}

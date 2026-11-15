@@ -144,16 +144,22 @@ public fn applyEase(mode: Ease, t: f32) -> f32 {
 public struct Transitions<region r> {
     anims: SliceMut<r, Anim>;
     frame: u32;
+    /// Whether a transition was still on its way this frame (the next frame must run to move it on).
+    moving: bool;
 
     public fn create(memory: borrow(r) FixedBufferAllocator, slots: usize) -> Result<Transitions<r>, AllocError> {
         let anims = memory.allocArray(slots, freeAnim())?;
-        return Ok(Transitions { anims: anims, frame: 0 });
+        return Ok(Transitions { anims: anims, frame: 0, moving: false });
     }
 
     /// Advances the frame counter used for slot reuse (ClayWind_TransitionTick). Once per frame.
     public fn tick(borrow mut this) {
         this.frame = this.frame.wrappingAdd(1);
+        this.moving = false;
     }
+
+    /// Whether a transition was on its way in the last frame.
+    public fn animating(borrow this) -> bool => this.moving;
 
     /// Eases `decl`'s enabled groups toward their current (target) values over `dt` seconds, in place
     /// (ClayWind_TransitionApply). Call after variants are applied.
@@ -205,6 +211,9 @@ public struct Transitions<region r> {
             }
             this.anims[slot].elapsed += dt;
             let a = this.anims[slot];
+            if (a.elapsed < a.duration) {
+                this.moving = true;
+            }
             let e = applyEase(a.ease, if (a.duration > 0.0) a.elapsed / a.duration else 1.0);
             this.anims[slot].shown = Values {
                 bg: lerpColor(a.start.bg, a.target.bg, e),

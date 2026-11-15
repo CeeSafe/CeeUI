@@ -636,3 +636,73 @@ fn doubleClickSelectsAWordAndTripleClickEverything() -> Result<void, TestFailure
     fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 0)?;
     return Check.isTrue(!edit.selects(), "a slow click is a single click");
 }
+
+struct Counter {
+    clicks: u32;
+}
+
+fn counterFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, counter: borrow mut Model<Counter>, bump: bool) -> Result<void, TestFailure> {
+    ui.begin(mut platform);
+    if (bump) {
+        counter.update(mut ui, (c) => { c.clicks += 1; });
+    }
+    var label = [0u8; 16];
+    var w = TextWriter.create(mut label[..]);
+    w.decimal(counter.get().clicks as u64);
+    ui.open(Style.column().w(Size.fixed(200.0)).h(Size.fixed(100.0)));
+    ui.labelBytes(w.written(), Text.of());
+    ui.close();
+    let r = finish(mut ui, mut platform);
+    platform.pointerState.pressed = false;
+    platform.pointerState.released = false;
+    return r;
+}
+
+@test
+fn framesRunOnlyWhenSomethingChanges() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(400.0, 300.0, 10.0, 10.0);
+    var counter = Model<Counter>.of(Counter { clicks: 0 });
+    // The first frame sees the pointer arrive; the next has nothing new and the window can sleep.
+    counterFrame(mut ui, mut platform, mut counter, false)?;
+    counterFrame(mut ui, mut platform, mut counter, false)?;
+    Check.isTrue(!ui.needsFrame() && ui.frameDelay() == null, "nothing changed: no frame is due")?;
+    // The pointer moves: a frame, and the one after it settles.
+    platform.pointerState.position = Vec2 { x: 30.0, y: 20.0 };
+    counterFrame(mut ui, mut platform, mut counter, false)?;
+    Check.isTrue(ui.needsFrame(), "a pointer move runs the next frame")?;
+    counterFrame(mut ui, mut platform, mut counter, false)?;
+    Check.isTrue(!ui.needsFrame(), "then it is idle again")?;
+    // A model changed: the frame that shows it runs.
+    counterFrame(mut ui, mut platform, mut counter, true)?;
+    Check.isTrue(ui.needsFrame() && counter.version() == 1 && counter.get().clicks == 1, "a model change asks for a frame")?;
+    counterFrame(mut ui, mut platform, mut counter, false)?;
+    Check.isTrue(!ui.needsFrame(), "and only one")?;
+    return Ok();
+}
+
+@test
+fn aFocusedFieldWakesForItsCaret() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(400.0, 300.0, 20.0, 15.0);
+    var buf = [0u8; 16];
+    var len: usize = 0;
+    var edit = TextEdit.at(0);
+    fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 0)?;
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 0)?;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 0)?;
+    fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 0)?;
+    platform.clock = 3.3;
+    fieldFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 0)?;
+    let delay = ui.frameDelay()!;
+    // The caret next blinks at 3.5 s.
+    return Check.isTrue((delay - 0.2).abs() < 0.001, "the next frame is due when the caret blinks");
+}
