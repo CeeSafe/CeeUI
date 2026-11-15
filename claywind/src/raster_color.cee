@@ -124,6 +124,50 @@ fn fillColrLayers(
 }
 
 impl<region r> Raster<r> {
+    /// A new colour glyph image `w` × `h` and its handle; when the images are full, the colour glyphs are cleared
+    /// out first (clearColorGlyphs). Null when even then it does not fit.
+    fn colorImage(borrow mut this, w: usize, h: usize) -> u32? {
+        for (attempt in 0..2) {
+            let handle = COLOR_HANDLE_BASE | ((this.colorGeneration & 0x3FFF) << 16) |
+                (truncate<u32>(this.colorBitmaps.length()) & 0xFFFF);
+            if (this.colorBitmaps.length() < this.colorBitmaps.items.length && this.addImage(handle, w, h)) {
+                return handle;
+            }
+            if (attempt == 0) {
+                this.clearColorGlyphs();
+            }
+        }
+        return null;
+    }
+
+    /// Drops every colour glyph (bitmaps supplied and COLR glyphs drawn), giving their image memory back; the
+    /// program's own images stay, moved together. Glyphs a frame still draws are supplied or drawn again. New
+    /// glyphs take handles no earlier glyph had, so a GPU's cache of images never shows an old one.
+    public fn clearColorGlyphs(borrow mut this) {
+        var kept: usize = 0;
+        var top: usize = 0;
+        for (k in 0..this.images.length()) {
+            var rec = this.images.get(k);
+            if (rec.handle >= COLOR_HANDLE_BASE) {
+                continue;
+            }
+            let n = rec.w * rec.h;
+            if (rec.offset != top) {
+                for (p in 0..n) {
+                    this.imagePool[top + p] = this.imagePool[rec.offset + p];
+                }
+                rec.offset = top;
+            }
+            this.images.set(kept, rec);
+            kept += 1;
+            top += n;
+        }
+        this.images.truncate(kept);
+        this.imageTop = top;
+        this.colorBitmaps.clear();
+        this.colorGeneration += 1;
+    }
+
     /// Marks loaded font `id` a colour-bitmap face with strikes `ppems` (pixels per em, up to 16): its glyphs are
     /// drawn from the bitmaps `addColorBitmap` supplies. False when no font `id` is loaded.
     public fn setBitmapStrikes(borrow mut this, id: u32, ppems: Slice<u32>) -> bool {
@@ -220,10 +264,13 @@ impl<region r> Raster<r> {
                 Ok(i) => i,
                 Err(_) => { return false; }
             };
-            let handle = COLOR_HANDLE_BASE + truncate<u32>(this.colorBitmaps.length());
-            if (scratch.length < info.scratchBytes || !this.addImage(handle, info.w, info.h)) {
+            if (scratch.length < info.scratchBytes) {
                 return false;
             }
+            let handle = match (this.colorImage(info.w, info.h)) {
+                Some(x) => x,
+                null => { return false; }
+            };
             let decoded = match (this.imagePixelsMut(handle)) {
                 Some(pixels) => match (decodeImage(png, pixels, scratch)) {
                     Ok(_) => true,
@@ -309,11 +356,10 @@ impl<region r> Raster<r> {
         let w = idx(truncate<i32>((advance + 2.0 * pad).ceil()));
         let ascent = (slot.info.ascent * scale).ceil();
         let h = idx(truncate<i32>((ascent - slot.info.descent * scale + 2.0 * pad).ceil()));
-        let handle = COLOR_HANDLE_BASE + truncate<u32>(this.colorBitmaps.length());
-        if (w == 0 || h == 0 || this.colorBitmaps.length() >= this.colorBitmaps.items.length ||
-            !this.addImage(handle, w, h)) {
+        if (w == 0 || h == 0) {
             return null;
         }
+        let handle = this.colorImage(w, h)?;
         let savedRatio = this.ratio;
         let savedWidth = idx(this.width);
         let savedHeight = idx(this.height);

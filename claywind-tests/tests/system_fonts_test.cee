@@ -127,3 +127,48 @@ fn emojiSequencesBecomeOneGlyph() -> Result<void, TestFailure> {
     }
     return Ok();
 }
+
+@test
+fn colourGlyphsMakeRoomForNewOnes() -> Result<void, TestFailure> {
+    let arial = readFile(arialPath());
+    if (arial.length == 0) {
+        Console.writeLine("  (Arial not found: skipped)");
+        return Ok();
+    }
+    var storage = heap(134217728);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(64, 64);
+    // Room for the program's image and only a few emoji at a time.
+    c.imagePixels = 2048;
+    c.fontBytes = 100663296;
+    var ras = Raster.create(memory, c)!;
+    Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
+    Check.isTrue(ras.addImage(5, 4, 4), "the program's image fits")?;
+    for (y in 0usize..4) {
+        for (x in 0usize..4) {
+            ras.setImagePixel(5, x, y, 0x11223344);
+        }
+    }
+    var fonts = SystemFonts.create();
+    let loaded = fonts.supply(mut ras, "\u{1F600}".bytes(), 0);
+    if (!ras.coversInColor(0, 0x1F600)) {
+        Console.writeLine("  (no colour emoji font on this system: skipped)");
+        return Ok();
+    }
+    // Twelve emoji, one after another: they cannot all be kept, so older ones go.
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 2];
+    for (k in 0u32..12) {
+        var bytes = [0u8; 4];
+        let n = encodeUtf8(0x1F600 + k, mut bytes);
+        let supplied = fonts.supplyBitmaps(mut ras, bytes[0..n], 0, 20.0, 0.0);
+        let run = ras.shapeRun(bytes[0..n], 0, 20.0, 0.0, mut out[..])!;
+        Check.isTrue(ras.colorBitmap(out[0].font, out[0].glyph, 20.0, 1.0) != null, "the newest emoji is there")?;
+    }
+    // The program's image kept its pixels through the clearing.
+    let pixels = ras.imagePixels(5)!;
+    var same = pixels.length == 16;
+    for (p in pixels) {
+        same = same && p == 0x11223344;
+    }
+    return Check.isTrue(same, "the program's image is untouched");
+}

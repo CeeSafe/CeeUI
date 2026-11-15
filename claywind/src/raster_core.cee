@@ -119,6 +119,8 @@ public struct Raster<region r> {
     fonts: FixedList<r, FontSlot>;
     /// Colour glyphs: bitmaps the host supplied, and COLR glyphs drawn for a GPU (raster_color.cee).
     colorBitmaps: FixedList<r, ColorBitmapRecord>;
+    /// Bumped each time the colour glyphs are cleared out, so an old glyph's image handle is never reused.
+    colorGeneration: u32;
     /// The fallback chain (raster_text.cee): font ids tried for a character a run's font lacks.
     fallbacks: [u32; 24];
     fallbackCount: usize;
@@ -208,6 +210,7 @@ public struct Raster<region r> {
             fontTop: 0,
             fonts: FixedList<FontSlot>.over(fonts),
             colorBitmaps: FixedList<ColorBitmapRecord>.over(bitmaps),
+            colorGeneration: 0,
             fallbacks: [0u32; 24],
             fallbackCount: 0,
             layout: RefCell<LayoutBuffer>.create(emptyLayoutBuffer()),

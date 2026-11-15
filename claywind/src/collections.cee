@@ -30,6 +30,11 @@ public struct FixedList<region r, T: Copy> {
         this.count = 0;
     }
 
+    /// Keeps the first `n` elements (all of them when there are fewer).
+    public fn truncate(borrow mut this, n: usize) {
+        this.count = this.count.min(n);
+    }
+
     public fn length(borrow this) -> usize => this.count;
 
     /// Element `i`; an index at or past `length()` stops the program, like any out-of-bounds index.
