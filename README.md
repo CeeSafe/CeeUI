@@ -95,7 +95,7 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 
 ## Getting started
 
-Install the CeeSafe compiler, **ceesafec 0.49.0 or later** (the hosts use its window text input and clipboard, ADR 0141):
+Install the CeeSafe compiler, **ceesafec 0.49.1 or later** (the hosts use its window text input and clipboard, ADR 0141; 0.49.1 fixes a visibility fault ClayWind hit):
 
 ```sh
 curl -fsSL https://ceesafe.github.io/CeeSafe/install.sh | sh          # macOS and Linux
