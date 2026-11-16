@@ -63,10 +63,48 @@ fn answerFileRequest(request: FileRequest, app: borrow mut DemoApp, window: borr
                     }
                 }
                 Ok(null) => { app.fileNotDone("Save cancelled"); }
+                // A phone gives no path to write to: the notes are written to a file of the app's own, which
+                // the system's picker saves where the user chooses (CeeSafe ADR 0158).
+                Err(WindowError.Unsupported) => { exportNotes(mut app, mut window); }
                 Err(_) => { app.fileNotDone("No file dialog on this system"); }
             }
         }
     }
+}
+
+/// Saves the app's notes where the user chooses, on a system whose save dialog gives no path: written to a file in a
+/// temporary folder, exported through the system's picker (FileDialog.exportFile), and the file and folder removed.
+fn exportNotes(app: borrow mut DemoApp, window: borrow mut Window) {
+    let folder = match (Directory.temporary()) {
+        Ok(f) => f,
+        Err(_) => { app.fileNotDone("Could not write the file"); return; }
+    };
+    var draft = String.create();
+    if (draft.append(folder.view()).isErr() || draft.append("/notes.txt").isErr()) {
+        app.fileNotDone("Could not write the file");
+        return;
+    }
+    let text = app.saveText();
+    let written = match (File.create(draft.view())) {
+        Ok(f) => f.writeAt(text[0..app.saveTextLength()], 0).isOk(),
+        Err(_) => false,
+    };
+    if (!written) {
+        app.fileNotDone("Could not write the file");
+    } else {
+        match (FileDialog.exportFile(mut window, "Save As", draft.view(), "notes.txt")) {
+            Ok(saved) => {
+                if (saved) {
+                    app.fileSaved("notes.txt".bytes());
+                } else {
+                    app.fileNotDone("Save cancelled");
+                }
+            }
+            Err(_) => { app.fileNotDone("No file dialog on this system"); }
+        }
+    }
+    let _ = File.remove(draft.view());
+    let _ = Directory.remove(folder.view());
 }
 
 fn main() -> i32 {

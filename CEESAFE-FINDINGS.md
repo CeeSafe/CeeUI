@@ -332,3 +332,25 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   (WSANOTINITIALISED, unmapped). A server, which listens first, never met it. Fixed: the connect starts Winsock first.
   Checked on the laptop: connect-and-write, connect then `Async.blocking`, and connect-write-read on a thread of their
   own, all failing before and passing after; and the chat client live.
+
+## O. Found while taking ClayWind to phones (roadmap P4, 2026-11-16, ceesafec 0.57.0 to 0.59.0)
+
+- **O1 (fixed in ceesafec 0.58.0). `console_input_check.py` failed about one run in four.** The checker opened its
+  FIFO's writing end, without blocking, before the interpreted program had opened the reading end (ENXIO). Met while
+  running the contract suite for ADR 0156. Fixed in the tool: it tries again until the program has opened it.
+- **O2 (fixed in ceesafec 0.60.0). Seven corpus HIR dumps changed whenever lib/std gained a function.** `--dump-hir`
+  printed a closure with its function's id among every function, the libraries' included, so the dumps had to be
+  regenerated for ADRs 0156, 0157 and 0158, for numbers alone. Fixed in the compiler: the number counts the program's
+  own functions.
+- **O3 (fixed in ceesafec 0.59.0 and 0.60.0). Phones had no text input and no file dialogs.** A text
+  field could not be typed into (ADR 0157: the soft keyboard and the input method), and the demo's Open and Save did
+  nothing, which the owner found on his iPhone and Android phone (ADR 0158: open as copies, `FileDialog.exportFile`).
+- **O4 (fixed in ceesafec 0.60.0). `Directory.temporary()` failed on Android.** It looked in `TMPDIR`, which Android
+  does not set for an app, then in `/tmp`, which Android does not have. Met when the demo's Save needed a file of its
+  own to export. Fixed in the runtime: an app's temporary directory there is its cache folder.
+- **O5 (fixed in ceesafec 0.60.0). A temporary directory's name began "ceesa", not "ceesafe-".** The runtime copied
+  five bytes of the eight, from the first commit of the runtime. Seen in a listing of `/tmp`. Fixed.
+- **O6 (open). A release's macOS job sometimes never starts.** For 0.58.0 and 0.59.0 one macOS job each (a seed
+  check, then the x64 build) was cancelled after fifteen minutes with no step run, and the release was not published
+  until the job was run again. Nothing in the tree is at fault as far as the logs show; a rerun of the failed jobs
+  has worked both times; 0.60.0's jobs all started.
