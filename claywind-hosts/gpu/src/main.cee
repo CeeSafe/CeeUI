@@ -63,26 +63,6 @@ fn readFile(path: StringView) -> Vector<u8> {
     return bytes;
 }
 
-fn fontPath(dir: StringView, file: StringView, path: borrow mut [u8; 512]) -> usize {
-    var w = TextWriter.create(mut path[..]);
-    w.text(dir);
-    w.byte('/');
-    w.text(file);
-    return w.written().length;
-}
-
-/// Loads `dir/file` as font `id`; false when it is missing or does not fit.
-fn loadFont(raster: borrow mut Raster, id: u32, dir: StringView, file: StringView) -> bool {
-    var path = [0u8; 512];
-    let n = fontPath(dir, file, mut path);
-    let name = match (StringView.fromUtf8(path[0..n])) {
-        Some(s) => s,
-        null => { return false; }
-    };
-    let bytes = readFile(name);
-    return bytes.length > 0 && raster.loadFont(id, bytes.view());
-}
-
 /// A Backend that keeps each text run's bytes and font: to find the fonts a scene needs before it is drawn.
 struct TextRuns {
     bytes: Vector<u8>;
@@ -141,44 +121,11 @@ fn withFonts(capacity: RasterCapacity) -> RasterCapacity {
     return c;
 }
 
-/// The regular, bold and monospaced faces, from CLAYWIND_FONT_DIR or the system's fonts: Arial and Courier New
-/// under macOS's names, Windows's, or Linux's Microsoft core fonts, or else DejaVu.
+/// The regular, bold and monospaced faces, as the desktop host loads them (claywind-desktop's `loadSystemFonts`:
+/// CLAYWIND_FONT_DIR, or the system's fonts, a phone's included).
 fn loadFonts(raster: borrow mut Raster) -> bool {
-    let places: [StringView; 20] = [
-        "/System/Library/Fonts/Supplemental",
-        "Arial.ttf",
-        "Arial Bold.ttf",
-        "Courier New.ttf",
-        "C:/Windows/Fonts",
-        "arial.ttf",
-        "arialbd.ttf",
-        "cour.ttf",
-        "/usr/share/fonts/truetype/msttcorefonts",
-        "Arial.ttf",
-        "Arial_Bold.ttf",
-        "Courier_New.ttf",
-        "/usr/share/fonts/truetype/dejavu",
-        "DejaVuSans.ttf",
-        "DejaVuSans-Bold.ttf",
-        "DejaVuSansMono.ttf",
-        "",
-        "Arial.ttf",
-        "Arial Bold.ttf",
-        "Courier New.ttf",
-    ];
-    let chosen = Environment.variable("CLAYWIND_FONT_DIR");
-    for (k in 0usize..5) {
-        // CLAYWIND_FONT_DIR is tried with each set of names.
-        let dir = match (chosen) {
-            Some(d) => d,
-            null => places[k * 4],
-        };
-        if (dir.length > 0 && loadFont(mut raster, FONT_18, dir, places[k * 4 + 1])) {
-            if (loadFont(mut raster, FONT_BOLD, dir, places[k * 4 + 2]) &&
-                loadFont(mut raster, FONT_MONO, dir, places[k * 4 + 3])) {
-                return true;
-            }
-        }
+    if (loadSystemFonts(mut raster)) {
+        return true;
     }
     Console.writeErrorLine("gpu: no fonts found; set CLAYWIND_FONT_DIR");
     return false;
@@ -259,14 +206,23 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
             return 1;
         }
     };
+    // Android gives the app another window each time it is back on the screen: the one Vulkan draws into now.
+    var androidWindow: u64 = 0;
     let attached = match (window.nativeHandle()) {
         WindowHandle.AppKit(nswindow, nsview) => unsafe { cw_gpu_attach(1, nswindow, nsview) },
         WindowHandle.Win32(hwnd, hinstance) => unsafe { cw_gpu_attach(2, hwnd, hinstance) },
         WindowHandle.Xlib(display, xwindow) => unsafe { cw_gpu_attach(3, display, xwindow) },
-        // A scripted window, and iOS and Android (ADR 0154), where no GPU backend draws yet.
-        _ => -1,
+        WindowHandle.UIKit(uiwindow, uiview) => unsafe { cw_gpu_attach(4, uiwindow, uiview) },
+        WindowHandle.Android(native, activity) => unsafe { cw_gpu_attach(5, native, activity) },
+        // A scripted window has nothing to draw into.
+        WindowHandle.Scripted => -1,
     };
-    if (attached != 0) {
+    match (window.nativeHandle()) {
+        WindowHandle.Android(native, _) => { androidWindow = native; }
+        _ => {}
+    }
+    // 6: an Android app that starts off the screen has no window yet; it is taken when there is one.
+    if (attached != 0 && attached != 6) {
         Console.write("gpu: cannot draw into the window (");
         Console.write(attached);
         Console.writeLine(")");
@@ -281,6 +237,22 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
     let size = window.size();
     var platform = DesktopPlatform.create(Dims { w: round<f32>(size.width), h: round<f32>(size.height) });
     var app = DemoApp.create();
+    // On a phone the app saves where it is each time it leaves the screen and starts from that, as the desktop host
+    // does (CeeSafe ADR 0159); a desktop gives no such event.
+    var keptIn: String? = null;
+    if (window.setTouches(true)) {
+        match (Directory.appData("claywind-gpu")) {
+            Ok(folder) => {
+                match (hotRestore(folder.view(), mut app)) {
+                    Some(start) => { ui.setDarkMode(start.dark); }
+                    null => {}
+                }
+                keptIn = folder;
+            }
+            Err(_) => {}
+        }
+    }
+    var onScreen = true; // off the screen, a phone's app has no drawable: no frame is presented
     var last = Timer.now();
     var shown: u64 = 0;
     var cpuTotal: f64 = 0.0;
@@ -300,8 +272,6 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
     var redrawn: f64 = 0.0;
     // Fonts from the system for characters the loaded ones lack, found as the frames need them.
     var systemFonts = SystemFonts.create();
-    // On a touch screen, every finger for the Ui's gestures (CeeSafe ADR 0155); desktop windows have none.
-    let _ = window.setTouches(true);
     loop {
         loop {
             match (window.nextTouch()) {
@@ -315,6 +285,41 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
                 Some(e) => { platform.apply(e); }
                 null => { break; }
             }
+        }
+        loop {
+            match (window.nextAppEvent()) {
+                Some(WindowAppEvent.Background) => {
+                    onScreen = false;
+                    match (borrow keptIn) {
+                        Some(folder) => {
+                            if (!hotSave(folder.view(), window.size(), ui.isDarkMode(), app)) {
+                                Console.writeErrorLine("gpu: could not save the app's state");
+                            }
+                        }
+                        null => {}
+                    }
+                }
+                Some(WindowAppEvent.Foreground) => {
+                    onScreen = true;
+                    damage.invalidate(); // the next frame is drawn whole
+                }
+                Some(WindowAppEvent.MemoryWarning) => {}
+                null => { break; }
+            }
+        }
+        match (window.nativeHandle()) {
+            WindowHandle.Android(native, activity) => {
+                if (native != androidWindow) {
+                    androidWindow = native;
+                    let again = unsafe { cw_gpu_attach(5, native, activity) };
+                    if (again != 0 && again != 6) {
+                        Console.writeErrorLine("gpu: cannot draw into the new window");
+                    }
+                    damage.invalidate();
+                }
+                onScreen = native != 0;
+            }
+            _ => {}
         }
         platform.setSafeArea(window.safeArea());           // a phone's bars and cutouts (CeeSafe ADR 0156); none on a desktop
         platform.setKeyboardInset(window.keyboardInset()); // its soft keyboard (ADR 0157)
@@ -343,7 +348,7 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
         }
         let clear = Color.hex(pageBg(ui));
         let boxes = damage.plan(ui, clear, width as usize, height as usize, scale);
-        if (boxes > 0) {
+        if (boxes > 0 && onScreen) {
             gpu.begin(width, height, scale);
             ui.renderInto(mut gpu);
             if (!whole) {
@@ -363,7 +368,9 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
         // While something moves, presenting a frame waits for the display; with nothing to draw, wait for its pace.
         // Otherwise sleep until an event, a wake, or what the frame asked for (a caret blink, a timer), using no CPU
         // while idle.
-        if (!ui.needsFrame()) {
+        if (!onScreen) {
+            window.waitEvent(IDLE_MS); // nothing is shown: sleep until the app is back, or an event
+        } else if (!ui.needsFrame()) {
             window.waitEvent(ui.frameDelayMs(IDLE_MS));
         } else if (boxes == 0) {
             window.waitFrame();

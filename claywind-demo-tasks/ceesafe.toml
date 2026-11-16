@@ -2,9 +2,10 @@
 name = "claywind_demo_tasks"
 version = "0.1.0"
 kind = "library"
-ceesafec = ">=0.50.0"
+ceesafec = ">=0.62.0"
 
 [dependencies]
 claywind = { path = "../claywind" }
 claywind_demo = { path = "../claywind-demo" }
 claywind_tasks = { path = "../claywind-tasks" }
+claywind_desktop = { path = "../claywind-desktop" }

@@ -87,12 +87,12 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 | `claywind-tasks/` | Background work for a UI (hosted): a `Task` runs jobs on threads of their own, whose results wake the window (`Window.waitEvent`) and reach the frame through `poll`; a new job cancels the one before |
 | `claywind-demo/` | The demo app (the C version's `main.c`) and `ScriptPlatform`, a scripted input source for tests |
 | `claywind-dev/` | Hot reload: rebuilds an app when its sources change and restarts it where it was (`--hot`) |
-| `claywind-demo-tasks/` | The demo's background jobs on threads (`claywind-tasks`), for the desktop and GPU hosts: the Controls page's Tasks tab counts primes on one |
+| `claywind-demo-tasks/` | What both hosts share for the demo: its saved state (`hotSave`, `hotRestore`: hot reload's, and a phone's when the app leaves the screen) and its background jobs on threads (`claywind-tasks`): the Controls page's Tasks tab counts primes on one |
 | `claywind-hosts/desktop/` | The demo in a native window: AppKit, Win32 or X11, through CeeSafe's `Window`. The Controls page's Live state panel opens in a second window that shares the app's state and the renderer |
 | `claywind-hosts/headless/` | The demo rendered to files: screenshots, golden tests and benchmarks |
 | `claywind-hosts/browser/` | An HTTP + WebSocket server streaming the demo to a `<canvas>` page |
 | `claywind-hosts/terminal/` | A small dashboard drawn in a terminal, with mouse and keyboard |
-| `claywind-hosts/gpu/` | The demo drawn by the GPU in a window it draws itself: Metal on macOS, Vulkan on Linux, Direct3D 12 on Windows (Vulkan with `CLAYWIND_GPU=vulkan`, or when Direct3D 12 cannot start). A frame redraws only what `Damage` finds changed (`CLAYWIND_WHOLE=1` redraws it whole). Also a side-by-side check against `Raster` on every tab, and a 5K benchmark |
+| `claywind-hosts/gpu/` | The demo drawn by the GPU in a window it draws itself: Metal on macOS and iOS, Vulkan on Linux and Android, Direct3D 12 on Windows (Vulkan with `CLAYWIND_GPU=vulkan`, or when Direct3D 12 cannot start). A frame redraws only what `Damage` finds changed (`CLAYWIND_WHOLE=1` redraws it whole). Also a side-by-side check against `Raster` on every tab, and a 5K benchmark |
 | `claywind-tests/` | The test suite (`ceesafec test`) |
 | `ClayWind-PORT-PLAN.md` | The port's plan and its results, phase by phase |
 | `CEESAFE-FINDINGS.md` | What the port found in CeeSafe itself, and how each finding was resolved |
@@ -224,6 +224,14 @@ A phone's app life: when the demo leaves the screen (`WindowAppEvent.Background`
 the same snapshot hot reload uses into the app's own folder (`Directory.appData`), and it starts from that snapshot,
 so an app the system ended comes back on its page with its text. Back on the screen it lays out and draws again;
 at a memory warning it lets go of the inspector's cached frame.
+
+The GPU on a phone (roadmap P4 step 7): the GPU host draws with Metal on an iPhone (a `CAMetalLayer` over the
+`UIView` that `WindowHandle.UIKit` gives) and with Vulkan on Android (a surface on `WindowHandle.Android`'s
+`ANativeWindow`). Android gives the app another window each time it is back on the screen, so the host attaches
+again when the handle changes, and presents nothing while there is none; the swapchain is the window's own size,
+unrotated, so a phone held sideways is drawn upright. It saves and restores its state as the desktop host does.
+The iOS Simulator's Metal cannot run it (no reading of the render target in a fragment shader); an iPhone can. On an
+iPhone it needs a ceesafec after 0.62.0 (findings O11).
 
 Hot reload: `claywind-dev`, run in an app's package directory, builds the app, runs it with `--hot out/hot`, and
 watches the sources of the package and of every package it depends on by path. When a source changes it builds

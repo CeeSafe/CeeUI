@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-// Hot reload's side in the app (roadmap P3 step 7). Started by claywind-dev with `--hot DIR`, the app reads the
-// state its previous build saved in DIR/state (the window's size, the theme, and DemoApp.save's state), and watches
-// DIR/reload on a thread of its own: when claywind-dev has a new build and touches it, the thread wakes the window,
-// and the app saves its state there and exits, so the new build starts where this one was.
+// The demo's saved state, for both hosts. Hot reload (roadmap P3 step 7): started by claywind-dev with `--hot DIR`,
+// the app reads the state its previous build saved in DIR/state (the window's size, the theme, and DemoApp.save's
+// state) and saves it there again when a new build asks. A phone (P4 step 6): the app saves the same state in its own
+// data folder each time it leaves the screen, and starts from it.
 
 import claywind;
 import claywind_demo;

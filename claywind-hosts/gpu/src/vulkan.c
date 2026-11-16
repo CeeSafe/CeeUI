@@ -176,6 +176,12 @@ typedef struct {
     void *hinstance;
     void *hwnd;
 } cw_win32_surface_info;
+typedef struct {
+    VkStructureType sType;
+    const void *pNext;
+    VkFlags flags;
+    void *window; /* an ANativeWindow */
+} cw_android_surface_info;
 typedef VkResult(VKAPI_PTR *cw_create_surface)(VkInstance, const void *, const VkAllocationCallbacks *,
                                                 VkSurfaceKHR *);
 
@@ -203,7 +209,7 @@ static struct {
     VkQueue queue;
     uint32_t family;
     VkPhysicalDeviceMemoryProperties memory;
-    int has_xlib, has_win32, has_swapchain;
+    int has_xlib, has_win32, has_android, has_swapchain;
     double timestamp_period; /* nanoseconds per tick, 0 without timestamps */
     VkCommandPool commands;
     VkCommandBuffer cmd;
@@ -244,6 +250,7 @@ static struct {
     cw_texture pool[CW_POOL];
     cw_texture offscreen;
     VkSurfaceKHR surface;
+    VkFormat attached_format; /* the present format the window's render passes and pipelines were made for */
     VkFormat present_format;
     VkSwapchainKHR swapchain;
     uint32_t swap_count, swap_width, swap_height;
@@ -564,7 +571,7 @@ static int create_device(void) {
     vkEnumerateInstanceExtensionProperties(NULL, &count, NULL);
     VkExtensionProperties *available = calloc(count ? count : 1, sizeof *available);
     vkEnumerateInstanceExtensionProperties(NULL, &count, available);
-    const char *wanted[3];
+    const char *wanted[4];
     uint32_t n = 0;
     if (has_extension(available, count, VK_KHR_SURFACE_EXTENSION_NAME)) {
         wanted[n++] = VK_KHR_SURFACE_EXTENSION_NAME;
@@ -575,6 +582,10 @@ static int create_device(void) {
         }
         if (g.has_win32) {
             wanted[n++] = "VK_KHR_win32_surface";
+        }
+        g.has_android = has_extension(available, count, "VK_KHR_android_surface");
+        if (g.has_android) {
+            wanted[n++] = "VK_KHR_android_surface";
         }
     }
     free(available);
@@ -803,12 +814,43 @@ int32_t CW_VK(init)(uint32_t atlas_width, uint32_t atlas_height, uint32_t images
     return 0;
 }
 
-/* The window to draw into: WindowHandle's kind and handles; Vulkan takes Win32's (2) and Xlib's (3). */
+/* The window to draw into: WindowHandle's kind and handles; Vulkan takes Win32's (2), Xlib's (3) and Android's (5:
+   the activity's ANativeWindow, which Android replaces each time the app comes back to the screen). A second call
+   lets go of the window before it (its swapchain and surface) and takes the new one; with an Android window of 0,
+   the app is off the screen and there is nothing to draw into until the next call (6). */
 int32_t CW_VK(attach)(int32_t kind, uint64_t first, uint64_t second) {
     if (!g.ready || !g.has_swapchain) {
         return 1;
     }
+    if (g.surface != VK_NULL_HANDLE) {
+        CW_VK(finish)();
+        vkDeviceWaitIdle(g.device);
+        for (uint32_t k = 0; k < g.swap_count; k++) {
+            vkDestroyFramebuffer(g.device, g.swap_framebuffers[k], NULL);
+            vkDestroyImageView(g.device, g.swap_views[k], NULL);
+        }
+        g.swap_count = 0;
+        if (g.swapchain != VK_NULL_HANDLE) {
+            vkDestroySwapchainKHR(g.device, g.swapchain, NULL);
+            g.swapchain = VK_NULL_HANDLE;
+        }
+        vkDestroySurfaceKHR(g.instance, g.surface, NULL);
+        g.surface = VK_NULL_HANDLE;
+        g.swap_width = 0;
+        g.swap_height = 0;
+    }
+    if (kind == 5 && first == 0) {
+        return 6;
+    }
     VkResult made = VK_ERROR_EXTENSION_NOT_PRESENT;
+    if (kind == 5 && g.has_android) {
+        cw_create_surface create;
+        PFN_vkVoidFunction f = vkGetInstanceProcAddr(g.instance, "vkCreateAndroidSurfaceKHR");
+        memcpy(&create, &f, sizeof create);
+        cw_android_surface_info info = {.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR,
+                                        .window = (void *)(uintptr_t)first};
+        made = create(g.instance, &info, NULL, &g.surface);
+    } else
     if (kind == 3 && g.has_xlib) {
         cw_create_surface create;
         PFN_vkVoidFunction f = vkGetInstanceProcAddr(g.instance, "vkCreateXlibSurfaceKHR");
@@ -828,6 +870,7 @@ int32_t CW_VK(attach)(int32_t kind, uint64_t first, uint64_t second) {
     }
     trace("surface created", made);
     if (made != VK_SUCCESS) {
+        g.surface = VK_NULL_HANDLE;
         return 2;
     }
     VkBool32 supported = VK_FALSE;
@@ -855,6 +898,10 @@ int32_t CW_VK(attach)(int32_t kind, uint64_t first, uint64_t second) {
     if (g.present_format == VK_FORMAT_UNDEFINED) {
         return 4;
     }
+    if (g.shapes_present != VK_NULL_HANDLE && g.present_format == g.attached_format) {
+        return 0; /* the same window again (Android's, back on the screen): its render passes and pipelines stand */
+    }
+    g.attached_format = g.present_format;
     g.rp_present = make_render_pass(g.present_format, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
     g.rp_retained_clear = make_render_pass(g.present_format, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_IMAGE_LAYOUT_GENERAL);
     g.rp_retained_keep = make_render_pass_from(g.present_format, VK_ATTACHMENT_LOAD_OP_LOAD, VK_IMAGE_LAYOUT_GENERAL,
@@ -877,6 +924,14 @@ static int ensure_swapchain(uint32_t width, uint32_t height) {
         extent.width = width;
         extent.height = height;
     }
+#if defined(__ANDROID__)
+    /* Android's surface keeps the extent of its first buffers when the phone is turned, and scales any other image
+       to the window: the window's own size, which the host gives, is the one whose pixels are the screen's. */
+    if (width > 0 && height > 0) {
+        extent.width = width;
+        extent.height = height;
+    }
+#endif
     if (g.swapchain != VK_NULL_HANDLE && extent.width == g.swap_width && extent.height == g.swap_height) {
         return 1;
     }
@@ -907,7 +962,11 @@ static int ensure_swapchain(uint32_t width, uint32_t height) {
                                                    VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
                                                    (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT),
                                      .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
-                                     .preTransform = caps.currentTransform,
+                                     /* Unrotated when the surface allows it (a phone held sideways: the system
+                                        turns the image), so a frame is always drawn upright. */
+                                     .preTransform = (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+                                                         ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+                                                         : caps.currentTransform,
                                      .compositeAlpha = alpha,
                                      .presentMode = VK_PRESENT_MODE_FIFO_KHR,
                                      .clipped = VK_TRUE,

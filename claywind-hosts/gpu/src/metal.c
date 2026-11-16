@@ -43,6 +43,9 @@ typedef struct {
 typedef struct {
     double r, g, b, a;
 } cw_clear;
+typedef struct {
+    double x, y, width, height;
+} cw_bounds;
 
 /* The calls gpu.cee makes. */
 int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height, uint32_t images);
@@ -418,6 +421,7 @@ static struct {
     id (*cls)(const char *);
     SEL (*sel)(const char *);
     void *send;
+    void *send_struct; /* objc_msgSend_stret where a CGRect returns in memory (x86_64); objc_msgSend elsewhere */
     void *(*pool_push)(void);
     void (*pool_pop)(void *);
     id (*create_device)(void);
@@ -444,6 +448,7 @@ static struct {
     id atlas;
     id images; /* the image atlas: RGBA8, straight alpha */
     id layer, view, window;
+    int phone; /* a UIKit window: the Metal layer is a sublayer of the view's */
     id offscreen;
     uint32_t offscreen_width, offscreen_height;
     /* The window's frame (BGRA8) for partial frames: one is drawn here in part, then copied to the drawable. A whole
@@ -458,6 +463,7 @@ static struct {
 
 #define SEND0(ret) ((ret(*)(id, SEL))cw.send)
 #define SEND(ret, ...) ((ret(*)(id, SEL, __VA_ARGS__))cw.send)
+#define BOUNDS(o) (((cw_bounds(*)(id, SEL))cw.send_struct)((o), cw.sel("bounds")))
 
 static id call(id o, const char *s) { return SEND0(id)(o, cw.sel(s)); }
 static id nsstring(const char *text) {
@@ -484,6 +490,11 @@ static int load(void) {
     p = symbol(objc, "sel_registerName");
     memcpy(&cw.sel, &p, sizeof p);
     cw.send = symbol(objc, "objc_msgSend");
+#if defined(__x86_64__)
+    cw.send_struct = symbol(objc, "objc_msgSend_stret");
+#else
+    cw.send_struct = cw.send;
+#endif
     p = symbol(objc, "objc_autoreleasePoolPush");
     memcpy(&cw.pool_push, &p, sizeof p);
     p = symbol(objc, "objc_autoreleasePoolPop");
@@ -599,11 +610,13 @@ int32_t cw_gpu_init(uint32_t atlas_width, uint32_t atlas_height, uint32_t images
                : 4;
 }
 
-/* The window to draw into: WindowHandle's kind and handles; Metal takes AppKit's NSWindow and NSView (kind 1). */
+/* The window to draw into: WindowHandle's kind and handles; Metal takes AppKit's NSWindow and NSView (kind 1) and
+ * UIKit's UIWindow and UIView (kind 4). */
 int32_t cw_gpu_attach(int32_t kind, uint64_t nswindow, uint64_t nsview) {
-    if (m.device == NULL || kind != 1) {
+    if (m.device == NULL || (kind != 1 && kind != 4)) {
         return 1;
     }
+    m.phone = kind == 4;
     void *pool = cw.pool_push();
     m.window = (id)(uintptr_t)nswindow;
     m.view = (id)(uintptr_t)nsview;
@@ -616,8 +629,14 @@ int32_t cw_gpu_attach(int32_t kind, uint64_t nswindow, uint64_t nsview) {
     if (cw.color_space_named != NULL && cw.srgb_name != NULL) {
         SEND(void, void *)(m.layer, cw.sel("setColorspace:"), cw.color_space_named(*cw.srgb_name));
     }
-    SEND(void, id)(m.view, cw.sel("setLayer:"), m.layer);
-    SEND(void, signed char)(m.view, cw.sel("setWantsLayer:"), 1);
+    if (m.phone) {
+        /* A UIView's layer is its own: the Metal layer goes over it, and follows its bounds at each frame. */
+        SEND(void, signed char)(m.layer, cw.sel("setOpaque:"), 1);
+        SEND(void, id)(call(m.view, "layer"), cw.sel("addSublayer:"), m.layer);
+    } else {
+        SEND(void, id)(m.view, cw.sel("setLayer:"), m.layer);
+        SEND(void, signed char)(m.view, cw.sel("setWantsLayer:"), 1);
+    }
     cw.pool_pop(pool);
     return 0;
 }
@@ -895,7 +914,14 @@ int32_t cw_gpu_present(const float *frame, uint32_t count, const float *layers, 
     }
     cw_gpu_finish();
     void *pool = cw.pool_push();
-    double scale = SEND0(double)(m.window, cw.sel("backingScaleFactor"));
+    double scale;
+    if (m.phone) {
+        scale = SEND0(double)(call(m.window, "screen"), cw.sel("scale"));
+        cw_bounds bounds = BOUNDS(call(m.view, "layer"));
+        SEND(void, cw_bounds)(m.layer, cw.sel("setFrame:"), bounds);
+    } else {
+        scale = SEND0(double)(m.window, cw.sel("backingScaleFactor"));
+    }
     SEND(void, double)(m.layer, cw.sel("setContentsScale:"), scale);
     cw_size size = {(double)width, (double)height};
     SEND(void, cw_size)(m.layer, cw.sel("setDrawableSize:"), size);
