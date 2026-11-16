@@ -8,6 +8,7 @@ import claywind.Key;
 import claywind.Dims;
 import claywind.Vec2;
 import claywind.Insets;
+import claywind.TextKind;
 import claywind.keyIndex;
 import claywind.Ui;
 import claywind.EditCommand;
@@ -24,6 +25,8 @@ public struct DesktopPlatform {
     size: Dims;
     /// The window's safe area (CeeSafe's Window.safeArea, ADR 0156): none on a desktop.
     safe: Insets;
+    /// The soft keyboard's inset (CeeSafe's Window.keyboardInset, ADR 0157): none on a desktop.
+    keyboard: f32;
     pointerState: Pointer;
     /// Keys held, went down this frame, and OS-repeated this frame, by `keyIndex`.
     down: u64;
@@ -56,6 +59,7 @@ public struct DesktopPlatform {
     public fn create(size: Dims) -> DesktopPlatform => DesktopPlatform {
         size: size,
         safe: Insets.zero(),
+        keyboard: 0.0,
         pointerState: Pointer.at(Vec2 { x: -100.0, y: -100.0 }),
         down: 0,
         pressed: 0,
@@ -82,6 +86,11 @@ public struct DesktopPlatform {
     /// The window's safe area, which the host reads with the window's events (a change comes as a Resized).
     public fn setSafeArea(borrow mut this, safe: WindowInsets) {
         this.safe = Insets { left: safe.left, top: safe.top, right: safe.right, bottom: safe.bottom };
+    }
+
+    /// How much of the window's bottom the soft keyboard covers, read as the safe area is.
+    public fn setKeyboardInset(borrow mut this, inset: f32) {
+        this.keyboard = inset;
     }
 
     /// A touch from the window, for this frame.
@@ -170,6 +179,18 @@ public struct DesktopPlatform {
             null => {}
         }
         let wanted = ui.wantsTextInput();
+        if (wanted) {
+            // The kind of text first, so that a phone's keyboard comes up as the field's (the window ignores a kind
+            // it already has, and a desktop every kind).
+            window.setTextInputKind(match (ui.textInputKind()) {
+                TextKind.Text => WindowTextKind.Text,
+                TextKind.Number => WindowTextKind.Number,
+                TextKind.Decimal => WindowTextKind.Decimal,
+                TextKind.Email => WindowTextKind.Email,
+                TextKind.Url => WindowTextKind.Url,
+                TextKind.Password => WindowTextKind.Password,
+            });
+        }
         if (wanted != this.textInput) {
             window.setTextInput(wanted);
             this.textInput = wanted;
@@ -299,6 +320,7 @@ impl Platform for DesktopPlatform {
     }
     fn screenSize(borrow this) -> Dims => this.size;
     fn safeArea(borrow this) -> Insets => this.safe;
+    fn keyboardInset(borrow this) -> f32 => this.keyboard;
     fn frameTime(borrow this) -> f32 => this.dt;
     fn time(borrow this) -> f64 => this.clock;
     fn pointer(borrow this) -> Pointer => this.pointerState;

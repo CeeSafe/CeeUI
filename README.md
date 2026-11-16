@@ -99,8 +99,8 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 
 ## Getting started
 
-Install the CeeSafe compiler, **ceesafec 0.58.0 or later** (the hosts use its window text input and clipboard, ADR 0141, sleep while nothing changes, ADRs 0142 and 0145, show the system's menus and file dialogs, ADR 0146, take files dropped from the system, ADR 0150, are GUI programs on Windows, ADR 0151, and take a touch screen's
-fingers, ADR 0155, and a phone's safe area, ADR 0156; ClayWind's array sizes are constant expressions, ADR 0143; 0.50.2 links with MinGW's gcc on Windows):
+Install the CeeSafe compiler, **ceesafec 0.59.0 or later** (the hosts use its window text input and clipboard, ADR 0141, sleep while nothing changes, ADRs 0142 and 0145, show the system's menus and file dialogs, ADR 0146, take files dropped from the system, ADR 0150, are GUI programs on Windows, ADR 0151, and take a touch screen's
+fingers, ADR 0155, a phone's safe area, ADR 0156, and its soft keyboard, ADR 0157; ClayWind's array sizes are constant expressions, ADR 0143; 0.50.2 links with MinGW's gcc on Windows):
 
 ```sh
 curl -fsSL https://ceesafe.github.io/CeeSafe/install.sh | sh          # macOS and Linux
@@ -213,7 +213,10 @@ the input method's composition, Backspace and Enter reach the field as on the de
 how much of the screen's bottom the keyboard covers; `ui.safeAreaWithKeyboard()` is the safe area with its bottom
 raised to the keyboard, so a page padded by it (`Style.safe`) ends above the keyboard while one shows. A focused
 field may say what it takes (`ui.reportTextKind(TextKind.Email)`: text, number, decimal, email, URL or password),
-which chooses the keyboard.
+which chooses the keyboard. The desktop and GPU hosts pass the keyboard's inset and a field's kind (`Window.keyboardInset`
+and `setTextInputKind`, CeeSafe ADR 0157: iOS and Android). The desktop host, built for each, runs the demo on an
+Android phone and on an iPhone, where it finds the system's Helvetica Neue and Courier New: a tap on a text field
+shows the keyboard and its keys type into the field. File dialogs do nothing on a phone yet.
 
 Hot reload: `claywind-dev`, run in an app's package directory, builds the app, runs it with `--hot out/hot`, and
 watches the sources of the package and of every package it depends on by path. When a source changes it builds

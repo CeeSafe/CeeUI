@@ -18,9 +18,44 @@ fn loadFontFile(raster: borrow mut Raster, id: u32, dir: StringView, file: Strin
     return bytes.length > 0 && raster.loadFont(id, bytes.view());
 }
 
+/// Loads the upright face of weight `weight` (OS/2's: 400 regular, 700 bold) of the font collection at `path` as font
+/// `id`; false when the file is missing, has no such face, or does not fit. A collection's order is its maker's to
+/// change, so the face is found by what it says of itself.
+fn loadCollectionFace(raster: borrow mut Raster, id: u32, path: StringView, weight: u32) -> bool {
+    let bytes = readFile(path);
+    let d = bytes.view();
+    for (face in 0..fontFaceCount(d)) {
+        let at = match (faceDirectory(d, face)) {
+            Some(a) => a,
+            null => { continue; }
+        };
+        if (at + 12 > d.length) {
+            continue;
+        }
+        let tables = (((d[at + 4] as u32) << 8) | (d[at + 5] as u32)) as usize;
+        if (at + 12 + tables * 16 > d.length) {
+            continue;
+        }
+        let os2 = match (findTable(d[at..at + 12 + tables * 16], ['O', 'S', '/', '2'])) {
+            Some(t) => t,
+            null => { continue; }
+        };
+        if (os2.length < 64 || os2.offset + 64 > d.length) {
+            continue;
+        }
+        let faceWeight = ((d[os2.offset + 4] as u32) << 8) | (d[os2.offset + 5] as u32);
+        let italic = (d[os2.offset + 63] & 1) != 0;
+        if (faceWeight == weight && !italic) {
+            return raster.loadFontFace(id, d, face);
+        }
+    }
+    return false;
+}
+
 /// Loads the regular, bold and monospaced faces into FONT_18, FONT_BOLD and FONT_MONO: from CLAYWIND_FONT_DIR's
 /// Arial.ttf, "Arial Bold.ttf" and "Courier New.ttf" when it is set, else from the first of macOS's, Windows', Linux's
-/// Microsoft core fonts, DejaVu's and Android's that has them. False when none has.
+/// Microsoft core fonts, DejaVu's and Android's that has them, else iOS's Helvetica Neue and Courier New. False when
+/// none has.
 public fn loadSystemFonts(raster: borrow mut Raster) -> bool {
     match (Environment.variable("CLAYWIND_FONT_DIR")) {
         Some(dir) => {
@@ -59,5 +94,8 @@ public fn loadSystemFonts(raster: borrow mut Raster) -> bool {
                 loadFontFile(mut raster, FONT_MONO, dir, places[k * 4 + 3]);
         }
     }
-    return false;
+    // iOS keeps its faces in collections: Helvetica Neue's regular and bold, and Courier New.
+    let neue = "/System/Library/Fonts/Core/HelveticaNeue.ttc";
+    return loadCollectionFace(mut raster, FONT_18, neue, 400) && loadCollectionFace(mut raster, FONT_BOLD, neue, 700) &&
+        loadFontFile(mut raster, FONT_MONO, "/System/Library/Fonts/Core", "CourierNew.ttf");
 }

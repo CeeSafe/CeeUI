@@ -316,7 +316,8 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
                 null => { break; }
             }
         }
-        platform.setSafeArea(window.safeArea()); // a phone's bars and cutouts (CeeSafe ADR 0156); none on a desktop
+        platform.setSafeArea(window.safeArea());           // a phone's bars and cutouts (CeeSafe ADR 0156); none on a desktop
+        platform.setKeyboardInset(window.keyboardInset()); // its soft keyboard (ADR 0157)
         let t0 = nanos();
         let points = window.size();
         let scale = window.scale().max(1.0);
