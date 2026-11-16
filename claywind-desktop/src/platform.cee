@@ -7,6 +7,7 @@ import claywind.Cursor;
 import claywind.Key;
 import claywind.Dims;
 import claywind.Vec2;
+import claywind.Insets;
 import claywind.keyIndex;
 import claywind.Ui;
 import claywind.EditCommand;
@@ -21,6 +22,8 @@ const WHEEL_UNITS: f32 = 2.5;
 
 public struct DesktopPlatform {
     size: Dims;
+    /// The window's safe area (CeeSafe's Window.safeArea, ADR 0156): none on a desktop.
+    safe: Insets;
     pointerState: Pointer;
     /// Keys held, went down this frame, and OS-repeated this frame, by `keyIndex`.
     down: u64;
@@ -52,6 +55,7 @@ public struct DesktopPlatform {
 
     public fn create(size: Dims) -> DesktopPlatform => DesktopPlatform {
         size: size,
+        safe: Insets.zero(),
         pointerState: Pointer.at(Vec2 { x: -100.0, y: -100.0 }),
         down: 0,
         pressed: 0,
@@ -74,6 +78,11 @@ public struct DesktopPlatform {
         touchCount: 0,
         touchRead: 0,
     };
+
+    /// The window's safe area, which the host reads with the window's events (a change comes as a Resized).
+    public fn setSafeArea(borrow mut this, safe: WindowInsets) {
+        this.safe = Insets { left: safe.left, top: safe.top, right: safe.right, bottom: safe.bottom };
+    }
 
     /// A touch from the window, for this frame.
     public fn touch(borrow mut this, t: WindowTouch) {
@@ -289,6 +298,7 @@ impl Platform for DesktopPlatform {
         return c;
     }
     fn screenSize(borrow this) -> Dims => this.size;
+    fn safeArea(borrow this) -> Insets => this.safe;
     fn frameTime(borrow this) -> f32 => this.dt;
     fn time(borrow this) -> f64 => this.clock;
     fn pointer(borrow this) -> Pointer => this.pointerState;

@@ -104,9 +104,15 @@ public struct Pane<region r> {
         });
     }
 
-    /// Takes the window's events and touches into the platform; true when the window asks to close. On a touch
-    /// screen (iOS, Android) the window gives every finger, for the Ui's gestures, instead of a pointer.
+    /// Takes the window's events, touches and safe area into the platform; true when the window asks to close. On a
+    /// touch screen (iOS, Android) the window gives every finger, for the Ui's gestures, instead of a pointer.
     public fn takeEvents(borrow mut this, window: borrow mut Window) -> bool {
+        let closed = this.takeQueued(mut window);
+        this.platform.setSafeArea(window.safeArea()); // after the events: a change came as one of them
+        return closed;
+    }
+
+    fn takeQueued(borrow mut this, window: borrow mut Window) -> bool {
         if (!this.touchesAsked) {
             this.touchesAsked = true;
             let _ = window.setTouches(true);

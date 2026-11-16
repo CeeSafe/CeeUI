@@ -316,6 +316,7 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
                 null => { break; }
             }
         }
+        platform.setSafeArea(window.safeArea()); // a phone's bars and cutouts (CeeSafe ADR 0156); none on a desktop
         let t0 = nanos();
         let points = window.size();
         let scale = window.scale().max(1.0);

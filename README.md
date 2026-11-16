@@ -99,8 +99,8 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 
 ## Getting started
 
-Install the CeeSafe compiler, **ceesafec 0.57.0 or later** (the hosts use its window text input and clipboard, ADR 0141, sleep while nothing changes, ADRs 0142 and 0145, show the system's menus and file dialogs, ADR 0146, take files dropped from the system, ADR 0150, are GUI programs on Windows, ADR 0151, and take a touch screen's
-fingers, ADR 0155; ClayWind's array sizes are constant expressions, ADR 0143; 0.50.2 links with MinGW's gcc on Windows):
+Install the CeeSafe compiler, **ceesafec 0.58.0 or later** (the hosts use its window text input and clipboard, ADR 0141, sleep while nothing changes, ADRs 0142 and 0145, show the system's menus and file dialogs, ADR 0146, take files dropped from the system, ADR 0150, are GUI programs on Windows, ADR 0151, and take a touch screen's
+fingers, ADR 0155, and a phone's safe area, ADR 0156; ClayWind's array sizes are constant expressions, ADR 0143; 0.50.2 links with MinGW's gcc on Windows):
 
 ```sh
 curl -fsSL https://ceesafe.github.io/CeeSafe/install.sh | sh          # macOS and Linux
@@ -205,6 +205,8 @@ screen: `Style.safe(ui.safeArea())` adds the insets to an element's padding, so 
 its content stays clear (`Insets.sides()` and `ends()` for a bar that reaches an edge itself). `Ui.widthClass` and
 `heightClass` are `Compact` or `Regular` (a phone held upright is compact in width, on its side in height), beside
 the Tailwind breakpoints; a rotation is a new screen size. The pixel ratio is the window's scale, as on the desktop.
+The desktop and GPU hosts pass the window's safe area (`Window.safeArea`, CeeSafe ADR 0156: iOS and Android); the
+desktop host built for Android draws the demo below the status bar and above the gesture bar, upright and turned.
 
 Hot reload: `claywind-dev`, run in an app's package directory, builds the app, runs it with `--hot out/hot`, and
 watches the sources of the package and of every package it depends on by path. When a source changes it builds
