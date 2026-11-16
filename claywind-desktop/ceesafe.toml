@@ -2,7 +2,7 @@
 name = "claywind_desktop"
 version = "0.1.0"
 kind = "library"
-ceesafec = ">=0.60.0"
+ceesafec = ">=0.62.0"
 
 [dependencies]
 claywind = { path = "../claywind" }

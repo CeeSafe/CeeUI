@@ -111,7 +111,7 @@ fn main() -> i32 {
     // Hot reload (claywind-dev, `--hot DIR`): the state the previous build saved, its window's size included.
     let hotDir = hotDirectory();
     var app = DemoApp.create();
-    let resumed: HotStart? = match (hotDir) {
+    var resumed: HotStart? = match (hotDir) {
         Some(d) => hotRestore(d, mut app),
         null => null,
     };
@@ -131,6 +131,20 @@ fn main() -> i32 {
             return 1;
         }
     };
+    // On a phone the system may end the app while it is off the screen, without a word: the app saves where it is
+    // each time it leaves the screen (CeeSafe ADR 0159: Window.nextAppEvent's Background), in its own data folder,
+    // and starts from that. A desktop gives no such event, so nothing is saved or read there.
+    let phone = window.setTouches(true);
+    var keptIn: String? = null;
+    if (phone && hotDir == null) {
+        match (Directory.appData("claywind-demo")) {
+            Ok(folder) => {
+                resumed = hotRestore(folder.view(), mut app);
+                keptIn = folder;
+            }
+            Err(_) => {}
+        }
+    }
     // The demo's background jobs (the Controls page's Tasks tab): their reports wake the window.
     var jobs = match (ThreadJobs.create(window.waker())) {
         Ok(j) => j,
@@ -227,6 +241,25 @@ fn main() -> i32 {
                 null => {}
             }
             return 0;
+        }
+        // The app's life on a phone: off the screen, it saves where it is; back on it, its next frame is drawn
+        // whole; when memory is short, the frames kept for other windows go.
+        loop {
+            match (window.nextAppEvent()) {
+                Some(WindowAppEvent.Background) => {
+                    match (borrow keptIn) {
+                        Some(folder) => {
+                            if (!hotSave(folder.view(), window.size(), main.ui.isDarkMode(), app)) {
+                                Console.writeErrorLine("desktop: could not save the app's state");
+                            }
+                        }
+                        null => {}
+                    }
+                }
+                Some(WindowAppEvent.Foreground) => { main.forget(mut share); }
+                Some(WindowAppEvent.MemoryWarning) => { inspector.forget(mut share); }
+                null => { break; }
+            }
         }
         // Files from the system (a drag over the window, or a drop), and the items chosen in the menu.
         drops.poll(mut window, mut main.platform);

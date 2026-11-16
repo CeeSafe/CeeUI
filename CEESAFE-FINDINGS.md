@@ -333,7 +333,7 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   Checked on the laptop: connect-and-write, connect then `Async.blocking`, and connect-write-read on a thread of their
   own, all failing before and passing after; and the chat client live.
 
-## O. Found while taking ClayWind to phones (roadmap P4, 2026-11-16, ceesafec 0.57.0 to 0.59.0)
+## O. Found while taking ClayWind to phones (roadmap P4, 2026-11-16, ceesafec 0.57.0 to 0.61.0)
 
 - **O1 (fixed in ceesafec 0.58.0). `console_input_check.py` failed about one run in four.** The checker opened its
   FIFO's writing end, without blocking, before the interpreted program had opened the reading end (ENXIO). Met while
@@ -354,3 +354,15 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   check, then the x64 build) was cancelled after fifteen minutes with no step run, and the release was not published
   until the job was run again. Nothing in the tree is at fault as far as the logs show; a rerun of the failed jobs
   has worked both times; 0.60.0's jobs all started.
+- **O7 (fixed in ceesafec 0.62.0). A phone app could not tell that it left the screen.** The system may end an app
+  in the background without a word, so the demo lost its page and its text. ADR 0159: `Window.nextAppEvent()`
+  (`Background`, `Foreground`, `MemoryWarning`) and `Directory.appData`. Tried by the owner on both phones.
+- **O8 (fixed in ceesafec 0.62.0). `sendFile`'s copy pushed a byte at a time.** Where there is no sendfile (the
+  interpreter always), lib/std filled each 64 KiB piece with 65,536 calls of `push`, so one corpus program took 24 s
+  interpreted and timed out on a loaded machine. Met in the contract suite for ADR 0159. One `resize` now: 0.5 s.
+- **O9 (open). The interpreter is slow at plain work.** `run-pass/ordered-map.cee` takes 31 s interpreted (44 s with
+  0.33.0, so no regression) and can pass the corpus's 60 s on a loaded machine. About a third of a profile is
+  allocation: a value is a vector of its own.
+- **O10 (open). The compiler's own sources must keep to what ceesafec 0.8.0 accepts**, and only the release
+  bootstrap says so: `??`, a `var` of a view and a slice of a call's result in `src/interpreter/io.cee` built with
+  the current compiler and failed the bootstrap for 0.62.0, twice. A check in the contract suite would say it sooner.

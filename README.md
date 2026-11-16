@@ -99,8 +99,8 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 
 ## Getting started
 
-Install the CeeSafe compiler, **ceesafec 0.60.0 or later** (the hosts use its window text input and clipboard, ADR 0141, sleep while nothing changes, ADRs 0142 and 0145, show the system's menus and file dialogs, ADR 0146, take files dropped from the system, ADR 0150, are GUI programs on Windows, ADR 0151, and take a touch screen's
-fingers, ADR 0155, a phone's safe area, ADR 0156, its soft keyboard, ADR 0157, and its file dialogs, ADR 0158; ClayWind's array sizes are constant expressions, ADR 0143; 0.50.2 links with MinGW's gcc on Windows):
+Install the CeeSafe compiler, **ceesafec 0.62.0 or later** (the hosts use its window text input and clipboard, ADR 0141, sleep while nothing changes, ADRs 0142 and 0145, show the system's menus and file dialogs, ADR 0146, take files dropped from the system, ADR 0150, are GUI programs on Windows, ADR 0151, and take a touch screen's
+fingers, ADR 0155, a phone's safe area, ADR 0156, its soft keyboard, ADR 0157, its file dialogs, ADR 0158, and an app's life, ADR 0159; ClayWind's array sizes are constant expressions, ADR 0143; 0.50.2 links with MinGW's gcc on Windows):
 
 ```sh
 curl -fsSL https://ceesafe.github.io/CeeSafe/install.sh | sh          # macOS and Linux
@@ -219,6 +219,11 @@ Android phone and on an iPhone, where it finds the system's Helvetica Neue and C
 shows the keyboard and its keys type into the field. Open shows the system's document picker and gives a copy of
 the picked file; Save writes the notes to a file of the app's own and exports it through the picker
 (`FileDialog.exportFile`, CeeSafe ADR 0158), since a phone gives no path to write to.
+
+A phone's app life: when the demo leaves the screen (`WindowAppEvent.Background`, CeeSafe ADR 0159) the host saves
+the same snapshot hot reload uses into the app's own folder (`Directory.appData`), and it starts from that snapshot,
+so an app the system ended comes back on its page with its text. Back on the screen it lays out and draws again;
+at a memory warning it lets go of the inspector's cached frame.
 
 Hot reload: `claywind-dev`, run in an app's package directory, builds the app, runs it with `--hot out/hot`, and
 watches the sources of the package and of every package it depends on by path. When a source changes it builds
