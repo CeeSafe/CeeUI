@@ -527,11 +527,14 @@ public fn demoFrameWith<M: TextMetrics, J: DemoJobs>(
             null => { break; }
         }
     }
+    let safe = ui.safeArea();
     if (app.drawsMenuBar) {
-        ui.open(Style.column().id("window").w(Size.grow()).h(Size.grow()).bg(pageBg(ui)));
+        ui.open(Style.column().id("window").w(Size.grow()).h(Size.grow()).bg(pageBg(ui)).safe(safe));
         Controls.menuBar(mut ui, "menubar", app.menuModel, mut app.menuOpen);
     }
-    ui.open(Style.row().id("root").w(Size.grow()).h(Size.grow()).bg(pageBg(ui)));
+    // The page's background fills the screen; its content keeps clear of a phone's bars and cutouts.
+    let rootSafe = if (app.drawsMenuBar) Insets.zero() else safe;
+    ui.open(Style.row().id("root").w(Size.grow()).h(Size.grow()).bg(pageBg(ui)).safe(rootSafe));
     sidebar(mut ui, app);
     if (app.activeNav == NAV_CONTROLS) {
         controlsPage(mut ui, mut app, metrics, mut jobs);
@@ -542,7 +545,9 @@ public fn demoFrameWith<M: TextMetrics, J: DemoJobs>(
     }
     // Fixed, floating badge pinned to the top-right of the window (position + z-index), translucent, rocking.
     ui.open(
-        Style.box().id("proBadge").fixed().top(12.0).left(ui.screenSize().w - 78.0).z(10).px(space(3.0)).py(space(1.0))
+        Style.box().id("proBadge").fixed().top(12.0 + safe.top).left(
+            ui.screenSize().w - 78.0 - safe.right,
+        ).z(10).px(space(3.0)).py(space(1.0))
             .bg(withAlpha(AMBER_500, 235)).rounded(Radius.Md).rotate(Math.sin(app.rock * 2.0) * 6.0),
     );
     ui.label("PRO", Text.of().font(FONT_18).color(SLATE_950).tracking(2.0).align(TextAlign.Center));

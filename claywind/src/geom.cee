@@ -15,6 +15,22 @@ public struct Dims {
     public h: f32;
 }
 
+/// Distances in from the four edges of a box, in layout units: a screen's safe area (Platform.safeArea).
+public struct Insets {
+    public left: f32;
+    public top: f32;
+    public right: f32;
+    public bottom: f32;
+
+    public fn zero() -> Insets => Insets { left: 0.0, top: 0.0, right: 0.0, bottom: 0.0 };
+
+    /// The left and right insets alone: for a bar that reaches the screen's top or bottom edge itself.
+    public fn sides(this) -> Insets => Insets { left: this.left, top: 0.0, right: this.right, bottom: 0.0 };
+
+    /// The top and bottom insets alone.
+    public fn ends(this) -> Insets => Insets { left: 0.0, top: this.top, right: 0.0, bottom: this.bottom };
+}
+
 /// An axis-aligned box in layout units.
 public struct Rect {
     public x: f32;

@@ -941,6 +941,16 @@ public struct Style {
         s.props.padRight = v;
         return s;
     }
+    /// Adds `insets` to the padding, each edge its own: with `ui.safeArea()`, the element's background reaches the
+    /// screen's edges and its content stays clear of what the system draws there. After the padding it adds to.
+    public fn safe(this, insets: Insets) -> Style {
+        var s = this;
+        s.props.padLeft = (s.props.padLeft ?? 0.0) + insets.left;
+        s.props.padTop = (s.props.padTop ?? 0.0) + insets.top;
+        s.props.padRight = (s.props.padRight ?? 0.0) + insets.right;
+        s.props.padBottom = (s.props.padBottom ?? 0.0) + insets.bottom;
+        return s;
+    }
     public fn px(this, v: f32) -> Style {
         var s = this;
         s.props.padLeft = v;

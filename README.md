@@ -153,7 +153,7 @@ The headless host also takes these, among others (see the top of its `src/main.c
 
 ```sh
 cd claywind-tests
-ceesafec test            # 72 tests; add --interp to run them in CeeSafe's interpreter
+ceesafec test            # 130 tests; add --interp to run them in CeeSafe's interpreter
 ```
 
 - **In this repository:** the test suite.
@@ -198,6 +198,13 @@ for a pointer keep working: the first finger presses, its lift clicks, a pan or 
 press is a secondary press. A pan scrolls the scroll container under it along its axis, and its release flings it,
 slowing as UIKit's scroll views do. The desktop and GPU hosts turn on CeeSafe's touches (`Window.setTouches`,
 ADR 0155: iOS and Android) and pass them on; the desktop host built for Android runs the demo by touch.
+
+A phone's screen: a platform says how far the system covers the screen from each edge (`Platform.safeArea`: the
+status bar, a sensor housing, the home indicator, rounded corners; none on a desktop). The frame is still the whole
+screen: `Style.safe(ui.safeArea())` adds the insets to an element's padding, so its background reaches the edges and
+its content stays clear (`Insets.sides()` and `ends()` for a bar that reaches an edge itself). `Ui.widthClass` and
+`heightClass` are `Compact` or `Regular` (a phone held upright is compact in width, on its side in height), beside
+the Tailwind breakpoints; a rotation is a new screen size. The pixel ratio is the window's scale, as on the desktop.
 
 Hot reload: `claywind-dev`, run in an app's package directory, builds the app, runs it with `--hot out/hot`, and
 watches the sources of the package and of every package it depends on by path. When a source changes it builds

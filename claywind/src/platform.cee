@@ -165,6 +165,10 @@ public enum Cursor {
 public interface Platform {
     /// Layout units (logical pixels).
     @effects() fn screenSize(borrow this) -> Dims;
+    /// How far the system covers the screen from each edge (a phone's status bar, sensor housing, home indicator and
+    /// rounded corners), in layout units: the frame is still the whole screen, and what must be seen or touched stays
+    /// inside (Ui.safeArea, Style.safe). A platform whose screen is all the app's leaves the default, none.
+    @effects() fn safeArea(borrow this) -> Insets => Insets.zero();
     /// Seconds since the previous frame.
     @effects() fn frameTime(borrow this) -> f32;
     /// Seconds since start (caret blink and the like).

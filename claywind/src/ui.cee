@@ -17,6 +17,17 @@ public enum Breakpoint {
     Xl,
 }
 
+/// A screen's size along one axis, as a layout chooses by it (Ui.widthClass, Ui.heightClass): `Compact` is a phone
+/// held upright (its width) or on its side (its height), `Regular` a tablet or a desktop window.
+public enum SizeClass {
+    Compact,
+    Regular,
+}
+
+/// Below these, in layout units, a screen's width and height are compact.
+public const COMPACT_WIDTH: f32 = 600.0;
+public const COMPACT_HEIGHT: f32 = 480.0;
+
 /// One scroll container's state across frames (Clay__ScrollContainerDataInternal).
 struct ScrollState {
     id: u32;
@@ -63,6 +74,7 @@ public struct Ui<region r> {
     cursorWanted: Cursor;
     darkMode: bool;
     screen: Dims;
+    safe: Insets;
     // Keys and text for this frame (copied from the platform at `begin`).
     keysDown: u64;
     keysPressed: u64;
@@ -168,6 +180,7 @@ public struct Ui<region r> {
             cursorWanted: Cursor.Default,
             darkMode: false,
             screen: Dims { w: 0.0, h: 0.0 },
+            safe: Insets.zero(),
             keysDown: 0,
             keysPressed: 0,
             keysRepeated: 0,
@@ -312,6 +325,7 @@ public struct Ui<region r> {
         this.animations.tick();
         this.cursorWanted = Cursor.Default;
         this.screen = platform.screenSize();
+        this.safe = platform.safeArea();
         this.tree.begin(this.screen.w, this.screen.h);
     }
 
@@ -528,6 +542,18 @@ public struct Ui<region r> {
     public fn frameTime(borrow this) -> f32 => this.frameDt;
 
     public fn screenSize(borrow this) -> Dims => this.screen;
+
+    /// How far the system covers the screen from each edge this frame (Platform.safeArea): none on a desktop. The
+    /// root still fills the screen; `Style.safe(ui.safeArea())` keeps an element's content inside.
+    public fn safeArea(borrow this) -> Insets => this.safe;
+
+    /// The screen's width as a size class: compact below COMPACT_WIDTH (a phone held upright).
+    public fn widthClass(borrow this) -> SizeClass =>
+        if (this.screen.w < COMPACT_WIDTH) SizeClass.Compact else SizeClass.Regular;
+
+    /// The screen's height as a size class: compact below COMPACT_HEIGHT (a phone on its side).
+    public fn heightClass(borrow this) -> SizeClass =>
+        if (this.screen.h < COMPACT_HEIGHT) SizeClass.Compact else SizeClass.Regular;
 
     /// GetBreakpoint.
     public fn breakpoint(borrow this) -> Breakpoint {
