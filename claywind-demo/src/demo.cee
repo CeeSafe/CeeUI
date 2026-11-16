@@ -527,7 +527,8 @@ public fn demoFrameWith<M: TextMetrics, J: DemoJobs>(
             null => { break; }
         }
     }
-    let safe = ui.safeArea();
+    // With a soft keyboard up, the page ends above it.
+    let safe = ui.safeAreaWithKeyboard();
     if (app.drawsMenuBar) {
         ui.open(Style.column().id("window").w(Size.grow()).h(Size.grow()).bg(pageBg(ui)).safe(safe));
         Controls.menuBar(mut ui, "menubar", app.menuModel, mut app.menuOpen);

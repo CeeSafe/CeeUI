@@ -169,6 +169,9 @@ public interface Platform {
     /// rounded corners), in layout units: the frame is still the whole screen, and what must be seen or touched stays
     /// inside (Ui.safeArea, Style.safe). A platform whose screen is all the app's leaves the default, none.
     @effects() fn safeArea(borrow this) -> Insets => Insets.zero();
+    /// How much of the screen's bottom a soft keyboard covers, in layout units (Ui.keyboardInset): it shows while a
+    /// text field has focus on a phone. A platform without one leaves the default, none.
+    @effects() fn keyboardInset(borrow this) -> f32 => 0.0;
     /// Seconds since the previous frame.
     @effects() fn frameTime(borrow this) -> f32;
     /// Seconds since start (caret blink and the like).

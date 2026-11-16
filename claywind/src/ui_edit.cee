@@ -9,7 +9,21 @@
 //     app.frame(ui);
 //     ui.endFrame(...);
 //     match (ui.copiedText()) { Some(t) => window.setClipboardText(t), null => {} }
+//     window.setTextInputKind(ui.textInputKind());
 //     window.setTextInput(ui.wantsTextInput()); window.setTextInputArea(ui.textInputArea());
+
+/// The kind of text a field takes: on a phone it chooses the soft keyboard (Ui.reportTextKind).
+public enum TextKind {
+    Text,
+    /// Whole numbers.
+    Number,
+    /// Numbers with a decimal separator.
+    Decimal,
+    Email,
+    Url,
+    /// The keyboard neither learns nor suggests what is typed.
+    Password,
+}
 
 /// An editing command from the platform's shortcut (Cmd on macOS, Ctrl elsewhere).
 public enum EditCommand {
@@ -66,6 +80,10 @@ impl<region r> Ui<r> {
     /// Hosts, after the frame: whether a text field has focus (the input method should be on).
     public fn wantsTextInput(borrow this) -> bool => this.wantsText;
 
+    /// Hosts, after the frame: the kind of text the focused field takes (`Text` unless it said otherwise), for a
+    /// phone's soft keyboard.
+    public fn textInputKind(borrow this) -> TextKind => this.textKind;
+
     /// Hosts, after the frame: the focused text field's caret, in layout units (the input method's candidate window
     /// goes by it).
     public fn textInputArea(borrow this) -> Rect => this.caretArea;
@@ -91,6 +109,12 @@ impl<region r> Ui<r> {
     /// The input method's composition, and its caret.
     public fn composition(borrow this) -> Slice<u8> => this.composing[0..this.composingLength];
     public fn compositionCaret(borrow this) -> usize => this.composingCaret;
+
+    /// The focused text field takes this kind of text: after a field, `if (ui.hasFocusNamed("age")) {
+    /// ui.reportTextKind(TextKind.Number); }`. It lasts the frame.
+    public fn reportTextKind(borrow mut this, kind: TextKind) {
+        this.textKind = kind;
+    }
 
     /// A focused text field reports its caret: the input method is wanted, and its candidate window goes there.
     public fn reportCaret(borrow mut this, area: Rect) {

@@ -75,6 +75,7 @@ public struct Ui<region r> {
     darkMode: bool;
     screen: Dims;
     safe: Insets;
+    keyboard: f32;
     // Keys and text for this frame (copied from the platform at `begin`).
     keysDown: u64;
     keysPressed: u64;
@@ -99,6 +100,7 @@ public struct Ui<region r> {
     composingCaret: usize;
     caretArea: Rect;
     wantsText: bool;
+    textKind: TextKind;
     // Actions (actions.cee): the bindings, this frame's keystrokes and the actions they triggered, the key contexts
     // open around the element being built, and those around the focused element last frame.
     bindings: FixedList<r, Binding>;
@@ -181,6 +183,7 @@ public struct Ui<region r> {
             darkMode: false,
             screen: Dims { w: 0.0, h: 0.0 },
             safe: Insets.zero(),
+            keyboard: 0.0,
             keysDown: 0,
             keysPressed: 0,
             keysRepeated: 0,
@@ -201,6 +204,7 @@ public struct Ui<region r> {
             composingCaret: 0,
             caretArea: Rect.zero(),
             wantsText: false,
+            textKind: TextKind.Text,
             bindings: FixedList<Binding>.over(bindings),
             keystrokes: FixedList<Keystroke>.over(keystrokes),
             triggered: FixedList<u32>.over(triggered),
@@ -285,6 +289,7 @@ public struct Ui<region r> {
         this.hasCopied = false;
         this.copiedLength = 0;
         this.wantsText = false;
+        this.textKind = TextKind.Text;
         // Keystrokes to actions, through the key contexts around last frame's focused element.
         this.takeKeystrokes(mut platform);
         this.tree.hitTest(pointer.position);
@@ -326,6 +331,7 @@ public struct Ui<region r> {
         this.cursorWanted = Cursor.Default;
         this.screen = platform.screenSize();
         this.safe = platform.safeArea();
+        this.keyboard = platform.keyboardInset();
         this.tree.begin(this.screen.w, this.screen.h);
     }
 
@@ -546,6 +552,18 @@ public struct Ui<region r> {
     /// How far the system covers the screen from each edge this frame (Platform.safeArea): none on a desktop. The
     /// root still fills the screen; `Style.safe(ui.safeArea())` keeps an element's content inside.
     public fn safeArea(borrow this) -> Insets => this.safe;
+
+    /// How much of the screen's bottom the soft keyboard covers this frame (Platform.keyboardInset): none without one.
+    public fn keyboardInset(borrow this) -> f32 => this.keyboard;
+
+    /// The safe area with the soft keyboard: its bottom is the larger of the safe area's and the keyboard's, so a
+    /// page laid out by it keeps its content, and a field at its foot, above the keyboard while one shows.
+    public fn safeAreaWithKeyboard(borrow this) -> Insets => Insets {
+        left: this.safe.left,
+        top: this.safe.top,
+        right: this.safe.right,
+        bottom: this.safe.bottom.max(this.keyboard),
+    };
 
     /// The screen's width as a size class: compact below COMPACT_WIDTH (a phone held upright).
     public fn widthClass(borrow this) -> SizeClass =>

@@ -153,7 +153,7 @@ The headless host also takes these, among others (see the top of its `src/main.c
 
 ```sh
 cd claywind-tests
-ceesafec test            # 130 tests; add --interp to run them in CeeSafe's interpreter
+ceesafec test            # 131 tests; add --interp to run them in CeeSafe's interpreter
 ```
 
 - **In this repository:** the test suite.
@@ -207,6 +207,13 @@ its content stays clear (`Insets.sides()` and `ends()` for a bar that reaches an
 the Tailwind breakpoints; a rotation is a new screen size. The pixel ratio is the window's scale, as on the desktop.
 The desktop and GPU hosts pass the window's safe area (`Window.safeArea`, CeeSafe ADR 0156: iOS and Android); the
 desktop host built for Android draws the demo below the status bar and above the gesture bar, upright and turned.
+
+A phone's keyboard: a text field's focus is what shows the soft keyboard (the hosts' `setTextInput`), and typed text,
+the input method's composition, Backspace and Enter reach the field as on the desktop. `Platform.keyboardInset` says
+how much of the screen's bottom the keyboard covers; `ui.safeAreaWithKeyboard()` is the safe area with its bottom
+raised to the keyboard, so a page padded by it (`Style.safe`) ends above the keyboard while one shows. A focused
+field may say what it takes (`ui.reportTextKind(TextKind.Email)`: text, number, decimal, email, URL or password),
+which chooses the keyboard.
 
 Hot reload: `claywind-dev`, run in an app's package directory, builds the app, runs it with `--hot out/hot`, and
 watches the sources of the package and of every package it depends on by path. When a source changes it builds

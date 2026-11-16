@@ -8,6 +8,8 @@ import claywind;
 struct FakePlatform {
     /// The screen's safe area, as the platform reports it (none unless a test sets it).
     safe: Insets;
+    /// The soft keyboard's inset (none unless a test sets it).
+    keyboard: f32;
     size: Dims;
     pointerState: Pointer;
     dt: f32;
@@ -51,6 +53,7 @@ impl Platform for FakePlatform {
     }
     fn screenSize(borrow this) -> Dims => this.size;
     fn safeArea(borrow this) -> Insets => this.safe;
+    fn keyboardInset(borrow this) -> f32 => this.keyboard;
     fn frameTime(borrow this) -> f32 => this.dt;
     fn time(borrow this) -> f64 => this.clock;
     fn pointer(borrow this) -> Pointer => this.pointerState;
@@ -81,6 +84,7 @@ impl Platform for FakePlatform {
 fn platformAt(w: f32, h: f32, x: f32, y: f32) -> FakePlatform => FakePlatform {
     size: Dims { w: w, h: h },
     safe: Insets.zero(),
+    keyboard: 0.0,
     pointerState: Pointer.at(Vec2 { x: x, y: y }),
     dt: 0.016,
     clock: 0.0,
@@ -411,6 +415,46 @@ fn safeAreaAndSizeClasses() -> Result<void, TestFailure> {
     expect("the sides alone are kept clear", turned.x, 62.0)?;
     expect("the content is between the sides", turned.w, 750.0)?;
     expect("a bar may reach the bottom edge itself", turned.h, 402.0)?;
+    return Ok();
+}
+
+/// A phone's soft keyboard (roadmap P4 step 5): the page ends above it, and a focused field's kind of text reaches
+/// the host for the frame it is reported in.
+@test
+fn softKeyboardAndTextKind() -> Result<void, TestFailure> {
+    var storage = [0u8; 524288];
+    let memory = FixedBufferAllocator.over(mut storage);
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(402.0, 874.0, -1.0, -1.0);
+    platform.safe = Insets { left: 0.0, top: 62.0, right: 0.0, bottom: 34.0 };
+    ui.begin(mut platform);
+    expect("no keyboard: the safe area's bottom", ui.safeAreaWithKeyboard().bottom, 34.0)?;
+    finish(mut ui, mut platform)?;
+    platform.keyboard = 301.0;
+    for (frame in 0..2) {
+        ui.begin(mut platform);
+        ui.open(Style.column().id("page").w(Size.grow()).h(Size.grow()).safe(ui.safeAreaWithKeyboard()));
+        ui.open(Style.box().id("content").w(Size.grow()).h(Size.grow()));
+        ui.close();
+        ui.close();
+        ui.reportTextKind(TextKind.Email);
+        finish(mut ui, mut platform)?;
+    }
+    expect("the keyboard's inset", ui.keyboardInset(), 301.0)?;
+    let content = ui.boxOfHash(hashId("content")) ?? Rect.zero();
+    expect("the content ends above the keyboard", content.y + content.h, 573.0)?;
+    let email = match (ui.textInputKind()) {
+        TextKind.Email => true,
+        _ => false,
+    };
+    Check.isTrue(email, "the field's kind lasts its frame")?;
+    ui.begin(mut platform);
+    let text = match (ui.textInputKind()) {
+        TextKind.Text => true,
+        _ => false,
+    };
+    Check.isTrue(text, "a frame without a report is plain text")?;
+    finish(mut ui, mut platform)?;
     return Ok();
 }
 
