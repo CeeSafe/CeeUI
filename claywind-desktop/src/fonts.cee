@@ -20,7 +20,7 @@ fn loadFontFile(raster: borrow mut Raster, id: u32, dir: StringView, file: Strin
 
 /// Loads the regular, bold and monospaced faces into FONT_18, FONT_BOLD and FONT_MONO: from CLAYWIND_FONT_DIR's
 /// Arial.ttf, "Arial Bold.ttf" and "Courier New.ttf" when it is set, else from the first of macOS's, Windows', Linux's
-/// Microsoft core fonts and DejaVu's that has them. False when none has.
+/// Microsoft core fonts, DejaVu's and Android's that has them. False when none has.
 public fn loadSystemFonts(raster: borrow mut Raster) -> bool {
     match (Environment.variable("CLAYWIND_FONT_DIR")) {
         Some(dir) => {
@@ -30,7 +30,7 @@ public fn loadSystemFonts(raster: borrow mut Raster) -> bool {
         }
         null => {}
     }
-    let places: [StringView; 16] = [
+    let places: [StringView; 20] = [
         "/System/Library/Fonts/Supplemental",
         "Arial.ttf",
         "Arial Bold.ttf",
@@ -47,8 +47,12 @@ public fn loadSystemFonts(raster: borrow mut Raster) -> bool {
         "DejaVuSans.ttf",
         "DejaVuSans-Bold.ttf",
         "DejaVuSansMono.ttf",
+        "/system/fonts",
+        "DroidSans.ttf",
+        "DroidSans-Bold.ttf",
+        "DroidSansMono.ttf",
     ];
-    for (k in 0usize..4) {
+    for (k in 0usize..5) {
         let dir = places[k * 4];
         if (loadFontFile(mut raster, FONT_18, dir, places[k * 4 + 1])) {
             return loadFontFile(mut raster, FONT_BOLD, dir, places[k * 4 + 2]) &&

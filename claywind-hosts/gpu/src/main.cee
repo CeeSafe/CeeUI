@@ -300,7 +300,15 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
     var redrawn: f64 = 0.0;
     // Fonts from the system for characters the loaded ones lack, found as the frames need them.
     var systemFonts = SystemFonts.create();
+    // On a touch screen, every finger for the Ui's gestures (CeeSafe ADR 0155); desktop windows have none.
+    let _ = window.setTouches(true);
     loop {
+        loop {
+            match (window.nextTouch()) {
+                Some(t) => { platform.touch(t); }
+                null => { break; }
+            }
+        }
         loop {
             match (window.nextEvent()) {
                 Some(WindowEvent.Closed) => { return 0; }

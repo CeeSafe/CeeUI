@@ -80,6 +80,8 @@ public struct Pane<region r> {
     public platform: DesktopPlatform;
     last: u64;
     id: u32;
+    /// Whether the window was asked for its touches (they are turned on at the first events taken).
+    touchesAsked: bool;
 
     /// A pane numbered `id` (each window's its own, from 1), with room for `elements` elements and `commands` render
     /// commands a frame, frames of up to `pixels` pixels kept, for a window of `size` points.
@@ -98,11 +100,23 @@ public struct Pane<region r> {
             platform: DesktopPlatform.create(Dims { w: round<f32>(size.width), h: round<f32>(size.height) }),
             last: Timer.now(),
             id: id,
+            touchesAsked: false,
         });
     }
 
-    /// Takes the window's events into the platform; true when the window asks to close.
+    /// Takes the window's events and touches into the platform; true when the window asks to close. On a touch
+    /// screen (iOS, Android) the window gives every finger, for the Ui's gestures, instead of a pointer.
     public fn takeEvents(borrow mut this, window: borrow mut Window) -> bool {
+        if (!this.touchesAsked) {
+            this.touchesAsked = true;
+            let _ = window.setTouches(true);
+        }
+        loop {
+            match (window.nextTouch()) {
+                Some(t) => { this.platform.touch(t); }
+                null => { break; }
+            }
+        }
         loop {
             match (window.nextEvent()) {
                 Some(WindowEvent.Closed) => { return true; }

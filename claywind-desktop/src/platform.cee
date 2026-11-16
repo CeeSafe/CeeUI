@@ -13,6 +13,8 @@ import claywind.EditCommand;
 import claywind.Keystroke;
 import claywind.Modifiers;
 import claywind.FileDrag;
+import claywind.Touch;
+import claywind.TouchPhase;
 
 /// Wheel lines to ClayWind's wheel units: what the browser host's page sends for one notch.
 const WHEEL_UNITS: f32 = 2.5;
@@ -42,6 +44,11 @@ public struct DesktopPlatform {
     chosenRead: usize;
     /// Files dragged from the system over the window this frame (the host sets it from Window.dragOver and nextDrop).
     files: FileDrag?;
+    /// The window's touches this frame (CeeSafe's Window.nextTouch, ADR 0155), for the Ui's gestures; past 64 a frame,
+    /// later moves are left out, never a finger's start or end.
+    touches: [Touch; 64];
+    touchCount: usize;
+    touchRead: usize;
 
     public fn create(size: Dims) -> DesktopPlatform => DesktopPlatform {
         size: size,
@@ -63,7 +70,34 @@ public struct DesktopPlatform {
         chosenCount: 0,
         chosenRead: 0,
         files: null,
+        touches: [Touch { id: 0, phase: TouchPhase.Began, position: Vec2.zero(), time: 0.0 }; 64],
+        touchCount: 0,
+        touchRead: 0,
     };
+
+    /// A touch from the window, for this frame.
+    public fn touch(borrow mut this, t: WindowTouch) {
+        let phase = match (t.phase) {
+            WindowTouchPhase.Began => TouchPhase.Began,
+            WindowTouchPhase.Moved => TouchPhase.Moved,
+            WindowTouchPhase.Ended => TouchPhase.Ended,
+            WindowTouchPhase.Cancelled => TouchPhase.Cancelled,
+        };
+        let moved = match (phase) {
+            TouchPhase.Moved => true,
+            _ => false,
+        };
+        if (this.touchCount == 64 || (moved && this.touchCount >= 56)) {
+            return; // the last eight places are kept for starts and ends
+        }
+        this.touches[this.touchCount] = Touch {
+            id: t.id,
+            phase: phase,
+            position: Vec2 { x: t.x, y: t.y },
+            time: round<f64>(t.time) / 1000000000.0,
+        };
+        this.touchCount += 1;
+    }
 
     /// Files the system drags over the window this frame, or dropped (`dropped`), or none (null).
     public fn setFileDrag(borrow mut this, files: FileDrag?) {
@@ -98,6 +132,8 @@ public struct DesktopPlatform {
         this.strokeRead = 0;
         this.chosenCount = 0;
         this.chosenRead = 0;
+        this.touchCount = 0;
+        this.touchRead = 0;
     }
 
     /// After `ui.begin` (whose key bindings turned this frame's shortcuts into edit commands): the clipboard's text
@@ -236,6 +272,14 @@ public struct DesktopPlatform {
 
 impl Platform for DesktopPlatform {
     fn fileDrag(borrow this) -> FileDrag? => this.files;
+    fn nextTouch(borrow mut this) -> Touch? {
+        if (this.touchRead >= this.touchCount) {
+            return null;
+        }
+        let t = this.touches[this.touchRead];
+        this.touchRead += 1;
+        return t;
+    }
     fn nextChosenAction(borrow mut this) -> u32 {
         if (this.chosenRead >= this.chosenCount) {
             return 0;

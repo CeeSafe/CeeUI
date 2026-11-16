@@ -99,7 +99,8 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 
 ## Getting started
 
-Install the CeeSafe compiler, **ceesafec 0.54.0 or later** (the hosts use its window text input and clipboard, ADR 0141, sleep while nothing changes, ADRs 0142 and 0145, show the system's menus and file dialogs, ADR 0146, take files dropped from the system, ADR 0150, and are GUI programs on Windows, ADR 0151; ClayWind's array sizes are constant expressions, ADR 0143; 0.50.2 links with MinGW's gcc on Windows):
+Install the CeeSafe compiler, **ceesafec 0.57.0 or later** (the hosts use its window text input and clipboard, ADR 0141, sleep while nothing changes, ADRs 0142 and 0145, show the system's menus and file dialogs, ADR 0146, take files dropped from the system, ADR 0150, are GUI programs on Windows, ADR 0151, and take a touch screen's
+fingers, ADR 0155; ClayWind's array sizes are constant expressions, ADR 0143; 0.50.2 links with MinGW's gcc on Windows):
 
 ```sh
 curl -fsSL https://ceesafe.github.io/CeeSafe/install.sh | sh          # macOS and Linux
@@ -195,8 +196,8 @@ taps (and double taps), long presses, pans and pinches, each aimed at the elemen
 (`Ui.tapOn`, `longPressOn`, `panOn`, `pinchOn`; `tap`, `longPress`, `pan`, `pinch` wherever it began). Controls made
 for a pointer keep working: the first finger presses, its lift clicks, a pan or pinch cancels the press, and a long
 press is a secondary press. A pan scrolls the scroll container under it along its axis, and its release flings it,
-slowing as UIKit's scroll views do. CeeSafe's `Window` gives touches from its ADR 0155 (iOS and Android), not yet
-released; until then no host passes them on.
+slowing as UIKit's scroll views do. The desktop and GPU hosts turn on CeeSafe's touches (`Window.setTouches`,
+ADR 0155: iOS and Android) and pass them on; the desktop host built for Android runs the demo by touch.
 
 Hot reload: `claywind-dev`, run in an app's package directory, builds the app, runs it with `--hot out/hot`, and
 watches the sources of the package and of every package it depends on by path. When a source changes it builds

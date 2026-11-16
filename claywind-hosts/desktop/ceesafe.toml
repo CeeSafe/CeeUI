@@ -3,7 +3,7 @@ name = "desktop"
 version = "0.1.0"
 kind = "executable"
 windowed = true # a GUI program: no console window on Windows (CeeSafe ADR 0151)
-ceesafec = ">=0.54.0"
+ceesafec = ">=0.57.0"
 
 [dependencies]
 claywind = { path = "../../claywind" }
