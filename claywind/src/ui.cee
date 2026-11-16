@@ -26,6 +26,8 @@ struct ScrollState {
     pointerOrigin: Vec2;
     pointerActive: bool;
     momentumTime: f32;
+    /// A touch pan's fling, in points a second (gestures.cee).
+    fling: Vec2;
     content: Dims;
     size: Dims;
     area: Rect;
@@ -114,6 +116,14 @@ public struct Ui<region r> {
     lastPressTime: f64;
     lastPressAt: Vec2;
     presses: u32;
+    // Touches (gestures.cee): the recognizer, the elements under the gesture's start, the scroll container a pan
+    // moves (0 for none), whether the fingers make the pointer, and whether they cancelled its press this frame.
+    gestures: GestureState;
+    gestureTargets: FixedList<r, u32>;
+    touchScroll: u32;
+    touchDriven: bool;
+    touchGiven: Vec2;
+    pressCancelled: bool;
 
     /// A context whose memory comes from `memory`, which it borrows for its whole life.
     public fn create(memory: borrow(r) FixedBufferAllocator, capacity: UiCapacity) -> Result<Ui<r>, AllocError> {
@@ -127,6 +137,7 @@ public struct Ui<region r> {
             pointerOrigin: Vec2.zero(),
             pointerActive: false,
             momentumTime: 0.0,
+            fling: Vec2.zero(),
             content: Dims { w: 0.0, h: 0.0 },
             size: Dims { w: 0.0, h: 0.0 },
             area: Rect.zero(),
@@ -136,6 +147,7 @@ public struct Ui<region r> {
         };
         let scrolls = memory.allocArray(capacity.scrollContainers, empty)?;
         let pressed = memory.allocArray(capacity.layout.elements, 0u32)?;
+        let targets = memory.allocArray(capacity.layout.elements, 0u32)?;
         let clicked = memory.allocArray(capacity.layout.elements, 0u32)?;
         let chars = memory.allocArray(64, 0u32)?;
         let focusables = memory.allocArray(64, 0u32)?;
@@ -198,6 +210,12 @@ public struct Ui<region r> {
             lastPressTime: -1.0,
             lastPressAt: Vec2.zero(),
             presses: 0,
+            gestures: GestureState.create(),
+            gestureTargets: FixedList<u32>.over(targets),
+            touchScroll: 0,
+            touchDriven: false,
+            touchGiven: Vec2.zero(),
+            pressCancelled: false,
         };
         ui.bindDefaults();
         return Ok(ui);
@@ -207,8 +225,7 @@ public struct Ui<region r> {
 
     /// Starts a frame (ClayWind_BeginFrame): input, hit-testing against the last frame, scrolling, the root.
     public fn begin(borrow mut this, platform: borrow mut dyn Platform) {
-        let pointer = platform.pointer();
-        this.pointerState = pointer;
+        let given = platform.pointer();
         this.frameDt = platform.frameTime();
         this.clock = platform.time();
         this.keysDown = 0;
@@ -227,13 +244,19 @@ public struct Ui<region r> {
                 this.keysRepeated |= bit;
             }
         }
-        // Input this frame: the frame after it must run too, as hovers and focus settle a frame later.
-        this.inputSeen = pointer.pressed || pointer.released || pointer.secondaryPressed || pointer.wheel.x != 0.0 ||
-            pointer.wheel.y != 0.0 || pointer.position.x != this.lastPointer.x ||
-            pointer.position.y != this.lastPointer.y || this.keysPressed != 0 || this.keysRepeated != 0;
-        this.lastPointer = pointer.position;
         this.requested = false;
         this.requestedAfter = -1.0;
+        // Touches (gestures.cee): while fingers make gestures, they make the pointer too.
+        this.pressCancelled = false;
+        let touched = this.takeTouches(mut platform);
+        let pointer = this.touchPointer(given, touched);
+        this.pointerState = pointer;
+        // Input this frame: the frame after it must run too, as hovers and focus settle a frame later.
+        this.inputSeen =
+            touched || pointer.pressed || pointer.released || pointer.secondaryPressed || pointer.wheel.x != 0.0 ||
+                pointer.wheel.y != 0.0 || pointer.position.x != this.lastPointer.x ||
+                pointer.position.y != this.lastPointer.y || this.keysPressed != 0 || this.keysRepeated != 0;
+        this.lastPointer = pointer.position;
         this.chars.clear();
         this.charRead = 0;
         loop {
@@ -257,6 +280,9 @@ public struct Ui<region r> {
 
         // Clicks: an element is clicked when the pointer went down and came back up over it.
         this.clickedIds.clear();
+        if (this.pressCancelled) {
+            this.pressedIds.clear(); // a pan, pinch or long press took the finger: its lift is no click
+        }
         if (pointer.pressed) {
             // A press soon after the last, near it, counts on (a double or triple click).
             let near = (pointer.position.x - this.lastPressAt.x).abs() <= 4.0 &&
@@ -281,6 +307,8 @@ public struct Ui<region r> {
 
         let dt = this.frameDt;
         this.updateScrollContainers(pointer.wheel, dt);
+        this.advanceFlings(dt);
+        this.touchScrolling();
         this.animations.tick();
         this.cursorWanted = Cursor.Default;
         this.screen = platform.screenSize();
@@ -611,6 +639,7 @@ public struct Ui<region r> {
                     pointerOrigin: Vec2.zero(),
                     pointerActive: false,
                     momentumTime: 0.0,
+                    fling: Vec2.zero(),
                     content: Dims { w: 0.0, h: 0.0 },
                     size: Dims { w: 0.0, h: 0.0 },
                     area: Rect.zero(),
@@ -627,7 +656,8 @@ public struct Ui<region r> {
     /// Clay_UpdateScrollContainers with drag scrolling enabled: momentum, then wheel and drag on the deepest
     /// hovered scroll container.
     fn updateScrollContainers(borrow mut this, wheel: Vec2, dt: f32) {
-        let pointerActive = this.pointerState.down;
+        // Fingers scroll by their pan (gestures.cee), not by Clay's drag of a pressed pointer.
+        let pointerActive = this.pointerState.down && !this.touchDriven;
         var best: usize? = null;
         var bestDepth: usize = 0;
         for (k in 0..this.scrolls.length()) {

@@ -26,10 +26,22 @@ struct FakePlatform {
     chosen: u32;
     /// Files dragged from the system over the window, as the platform reports them.
     files: FileDrag?;
+    /// Touches for this frame, read front to back (gestures_test.cee).
+    touches: [Touch; 16];
+    touchCount: usize;
+    touchRead: usize;
 }
 
 impl Platform for FakePlatform {
     fn fileDrag(borrow this) -> FileDrag? => this.files;
+    fn nextTouch(borrow mut this) -> Touch? {
+        if (this.touchRead >= this.touchCount) {
+            return null;
+        }
+        let t = this.touches[this.touchRead];
+        this.touchRead += 1;
+        return t;
+    }
     fn nextChosenAction(borrow mut this) -> u32 {
         let c = this.chosen;
         this.chosen = 0;
@@ -79,6 +91,9 @@ fn platformAt(w: f32, h: f32, x: f32, y: f32) -> FakePlatform => FakePlatform {
     strokeRead: 0,
     chosen: 0,
     files: null,
+    touches: [Touch { id: 0, phase: TouchPhase.Began, position: Vec2.zero(), time: 0.0 }; 16],
+    touchCount: 0,
+    touchRead: 0,
 };
 
 fn finish(ui: borrow mut Ui, platform: borrow mut FakePlatform) -> Result<void, TestFailure> {
@@ -240,7 +255,9 @@ fn disabledAndGroupVariants() -> Result<void, TestFailure> {
             .isDisabled(true).disabled(Style.of().bg(SLATE_700)));
         ui.close();
         // group-hover: changes while "card" (the parent) is hovered, though the pointer is not over it.
-        ui.open(Style.row().id("badge").size(Size.fixed(20.0)).bg(SLATE_400).groupHover("card", Style.of().bg(PINK_500)));
+        ui.open(
+            Style.row().id("badge").size(Size.fixed(20.0)).bg(SLATE_400).groupHover("card", Style.of().bg(PINK_500)),
+        );
         ui.close();
         ui.close();
         finish(mut ui, mut platform)?;
@@ -668,7 +685,12 @@ struct Counter {
     clicks: u32;
 }
 
-fn counterFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, counter: borrow mut Model<Counter>, bump: bool) -> Result<void, TestFailure> {
+fn counterFrame(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    counter: borrow mut Model<Counter>,
+    bump: bool,
+) -> Result<void, TestFailure> {
     ui.begin(mut platform);
     if (bump) {
         counter.update(mut ui, (c) => { c.clicks += 1; });
@@ -704,7 +726,10 @@ fn framesRunOnlyWhenSomethingChanges() -> Result<void, TestFailure> {
     Check.isTrue(!ui.needsFrame(), "then it is idle again")?;
     // A model changed: the frame that shows it runs.
     counterFrame(mut ui, mut platform, mut counter, true)?;
-    Check.isTrue(ui.needsFrame() && counter.version() == 1 && counter.get().clicks == 1, "a model change asks for a frame")?;
+    Check.isTrue(
+        ui.needsFrame() && counter.version() == 1 && counter.get().clicks == 1,
+        "a model change asks for a frame",
+    )?;
     counterFrame(mut ui, mut platform, mut counter, false)?;
     Check.isTrue(!ui.needsFrame(), "and only one")?;
     return Ok();
@@ -769,10 +794,19 @@ fn aFrameAskedForLaterSetsTheDelay() -> Result<void, TestFailure> {
 
 /// A keystroke of character `c` with Command (when `command`) or Control.
 fn stroke(c: u32, command: bool, control: bool, shift: bool) -> Keystroke =>
-    Keystroke { key: null, character: c, modifiers: Modifiers { shift: shift, control: control, alt: false, command: command } };
+    Keystroke {
+        key: null,
+        character: c,
+        modifiers: Modifiers { shift: shift, control: control, alt: false, command: command },
+    };
 
 /// One frame: an editor area (key context "editor") holding a focusable box; `strokes` pressed.
-fn keymapFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, strokes: Slice<Keystroke>, focus: bool) -> Result<void, TestFailure> {
+fn keymapFrame(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    strokes: Slice<Keystroke>,
+    focus: bool,
+) -> Result<void, TestFailure> {
     for (k in 0..strokes.length) {
         platform.strokes[k] = strokes[k];
     }

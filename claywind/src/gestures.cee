@@ -1,0 +1,691 @@
+// SPDX-License-Identifier: MIT
+// Gestures (roadmap P4 step 3): a touch screen's fingers (Platform.nextTouch) recognized as taps, long presses, pans
+// and pinches, as UIKit's and Android's recognizers do, and aimed at the elements under the point where each began,
+// as a click is aimed at those under its press. One gesture at a time:
+//
+//   - a finger down is a possible tap; lifted within TAP_SLOP points it is a tap (two in quick succession, a double
+//     tap); held LONG_PRESS_SECONDS within the slop, a long press; moved past the slop, a pan, whose release carries
+//     the finger's velocity;
+//   - a second finger makes it a pinch, the two fingers' distance against their first; more fingers are ignored;
+//   - once a gesture ends, none starts until every finger is up.
+//
+//     match (ui.tapOn("photo")) { Some(t) => if (t.count == 2) zoom() else open(), null => {} }
+//     match (ui.pinchOn("photo")) { Some(p) => scale *= p.scaleDelta, null => {} }
+//
+// The controls built for a pointer keep working: the first finger is the pointer while it may still be a tap (a
+// button shows pressed), its lift is the release that clicks, a pan or pinch cancels the press (no click), and a long
+// press is a secondary press (a context menu). A pan scrolls the deepest scroll container under its start that can
+// move its way, and its release flings it, slowing as UIKit's scroll views do; a finger down stops a fling. A press
+// that starts a drag (drag.cee) keeps the finger as the pointer instead, so cards drag by touch too.
+
+/// How far, in points, a finger may move and still be a tap or a long press.
+const TAP_SLOP: f32 = 10.0;
+/// How long a finger is held still before it is a long press.
+const LONG_PRESS_SECONDS: f64 = 0.5;
+/// A second tap counts on when it starts this soon after the first ended, this near it.
+const DOUBLE_TAP_SECONDS: f64 = 0.3;
+const DOUBLE_TAP_SLOP: f32 = 24.0;
+/// A pan's velocity is the finger's motion over its last tenth of a second.
+const VELOCITY_WINDOW: f64 = 0.1;
+/// A release slower than this (points a second) does not fling; a fling stops below FLING_STOP.
+const FLING_MIN: f32 = 50.0;
+const FLING_STOP: f32 = 5.0;
+/// UIKit's normal deceleration: a fling's velocity is multiplied by this each millisecond.
+const FLING_DECAY_PER_MS: f64 = 0.998;
+/// Fingers followed at once; more are ignored.
+const MAX_FINGERS: usize = 10;
+const SAMPLES: usize = 16;
+
+/// Where a continuous gesture is: it began, changed, or ended this frame. A pan or pinch that begins and ends within
+/// one frame gives only its end.
+public enum GesturePhase {
+    Began,
+    Changed,
+    Ended,
+    /// The system took the fingers away, or another gesture took over: undo what it began.
+    Cancelled,
+}
+
+/// A tap: where the finger lifted, and how many taps in quick succession (2 for a double tap).
+public struct Tap {
+    public position: Vec2;
+    public count: u32;
+}
+
+/// A one-finger pan this frame.
+public struct Pan {
+    public phase: GesturePhase;
+    /// Where the finger came down.
+    public start: Vec2;
+    public position: Vec2;
+    /// How far it moved since the pan's last report: this frame's move, or at `Began` all of it since the finger came
+    /// down, so that what it drags follows the finger from where it touched.
+    public delta: Vec2;
+    /// Points a second over the finger's last tenth of a second; at `Ended`, its speed at the lift (0 if it rested).
+    public velocity: Vec2;
+
+    /// How far the finger is from where it came down.
+    public fn translation(this) -> Vec2 =>
+        Vec2 { x: this.position.x - this.start.x, y: this.position.y - this.start.y };
+}
+
+/// A two-finger pinch this frame.
+public struct Pinch {
+    public phase: GesturePhase;
+    /// The point midway between the fingers, now and when the second came down.
+    public center: Vec2;
+    public startCenter: Vec2;
+    /// The fingers' distance against their first: above 1 spread apart, below 1 pinched together.
+    public scale: f32;
+    /// This frame's change of scale, as a factor.
+    public scaleDelta: f32;
+}
+
+enum Recognizing {
+    Idle,
+    Possible,
+    LongPressed,
+    Panning,
+    Pinching,
+    /// A gesture ended or was cancelled: none starts until every finger is up.
+    Done,
+}
+
+struct Finger {
+    id: u32;
+    position: Vec2;
+}
+
+struct Sample {
+    time: f64;
+    position: Vec2;
+}
+
+/// The recognizer: the fingers down, the gesture under way, and this frame's results.
+struct GestureState {
+    state: Recognizing;
+    down: [Finger; 10];
+    downCount: usize;
+    /// The gesture's first finger, and a pinch's second.
+    primary: u32;
+    second: u32;
+    start: Vec2;
+    /// The Ui clock when the first finger came down (for the long press).
+    startClock: f64;
+    /// The primary finger's last reported place, and its recent samples (a ring), for velocity.
+    last: Vec2;
+    samples: [Sample; 16];
+    sampleHead: usize;
+    sampleCount: usize;
+    pinchDistance: f32;
+    pinchCenter: Vec2;
+    pinchScale: f32;
+    /// The last tap, for counting a double tap.
+    lastTapTime: f64;
+    lastTapAt: Vec2;
+    lastTapCount: u32;
+    // This frame.
+    began: bool;
+    released: bool;
+    cancelled: bool;
+    tap: Tap?;
+    longPress: Vec2?;
+    pan: Pan?;
+    pinch: Pinch?;
+}
+
+fn distance(a: Vec2, b: Vec2) -> f32 => ((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y)).sqrt();
+
+fn midpoint(a: Vec2, b: Vec2) -> Vec2 => Vec2 { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 };
+
+impl GestureState {
+    fn create() -> GestureState => GestureState {
+        state: Recognizing.Idle,
+        down: [Finger { id: 0, position: Vec2.zero() }; 10],
+        downCount: 0,
+        primary: 0,
+        second: 0,
+        start: Vec2.zero(),
+        startClock: 0.0,
+        last: Vec2.zero(),
+        samples: [Sample { time: 0.0, position: Vec2.zero() }; 16],
+        sampleHead: 0,
+        sampleCount: 0,
+        pinchDistance: 1.0,
+        pinchCenter: Vec2.zero(),
+        pinchScale: 1.0,
+        lastTapTime: -1.0,
+        lastTapAt: Vec2.zero(),
+        lastTapCount: 0,
+        began: false,
+        released: false,
+        cancelled: false,
+        tap: null,
+        longPress: null,
+        pan: null,
+        pinch: null,
+    };
+
+    fn beginFrame(borrow mut this) {
+        this.began = false;
+        this.released = false;
+        this.cancelled = false;
+        this.tap = null;
+        this.longPress = null;
+        this.pan = null;
+        this.pinch = null;
+    }
+
+    fn idle(borrow this) -> bool => match (this.state) {
+        Recognizing.Idle => true,
+        _ => false,
+    };
+
+    /// Whether the primary finger is down and may still be a tap (it is the pointer, pressed).
+    fn pressing(borrow this) -> bool => match (this.state) {
+        Recognizing.Possible => true,
+        _ => false,
+    };
+
+    fn longPressing(borrow this) -> bool => match (this.state) {
+        Recognizing.LongPressed => true,
+        _ => false,
+    };
+
+    fn primaryDown(borrow this) -> bool => match (this.state) {
+        Recognizing.Possible => true,
+        Recognizing.LongPressed => true,
+        Recognizing.Panning => true,
+        _ => false,
+    };
+
+    fn slot(borrow this, id: u32) -> usize? {
+        for (k in 0..this.downCount) {
+            if (this.down[k].id == id) {
+                return k;
+            }
+        }
+        return null;
+    }
+
+    fn sample(borrow mut this, time: f64, position: Vec2) {
+        this.samples[(this.sampleHead + this.sampleCount) % SAMPLES] = Sample { time: time, position: position };
+        if (this.sampleCount < SAMPLES) {
+            this.sampleCount += 1;
+        } else {
+            this.sampleHead = (this.sampleHead + 1) % SAMPLES;
+        }
+    }
+
+    /// The primary finger's velocity over its last VELOCITY_WINDOW seconds of samples.
+    fn velocity(borrow this) -> Vec2 {
+        if (this.sampleCount < 2) {
+            return Vec2.zero();
+        }
+        let latest = this.samples[(this.sampleHead + this.sampleCount - 1) % SAMPLES];
+        var oldest = latest;
+        for (k in 0..this.sampleCount - 1) {
+            let s = this.samples[(this.sampleHead + k) % SAMPLES];
+            if (latest.time - s.time <= VELOCITY_WINDOW) {
+                oldest = s;
+                break;
+            }
+        }
+        let dt = latest.time - oldest.time;
+        if (dt < 0.001) {
+            return Vec2.zero();
+        }
+        return Vec2 {
+            x: round<f32>((latest.position.x - oldest.position.x) as f64 / dt),
+            y: round<f32>((latest.position.y - oldest.position.y) as f64 / dt),
+        };
+    }
+
+    /// Reports the pan this frame: a later phase replaces an earlier one (a Began stays Began while it only changes),
+    /// and the deltas add up.
+    fn reportPan(borrow mut this, phase: GesturePhase, position: Vec2, velocity: Vec2) {
+        let delta = Vec2 { x: position.x - this.last.x, y: position.y - this.last.y };
+        this.last = position;
+        match (this.pan) {
+            Some(p) => {
+                let keep = match (p.phase) {
+                    GesturePhase.Began => match (phase) {
+                        GesturePhase.Changed => true,
+                        _ => false,
+                    },
+                    _ => false,
+                };
+                this.pan = Pan {
+                    phase: if (keep) p.phase else phase,
+                    start: this.start,
+                    position: position,
+                    delta: Vec2 { x: p.delta.x + delta.x, y: p.delta.y + delta.y },
+                    velocity: velocity,
+                };
+            }
+            null => {
+                this.pan = Pan {
+                    phase: phase,
+                    start: this.start,
+                    position: position,
+                    delta: delta,
+                    velocity: velocity,
+                };
+            }
+        }
+    }
+
+    fn reportPinch(borrow mut this, phase: GesturePhase) {
+        let a = match (this.slot(this.primary)) {
+            Some(k) => this.down[k].position,
+            null => this.pinchCenter,
+        };
+        let b = match (this.slot(this.second)) {
+            Some(k) => this.down[k].position,
+            null => this.pinchCenter,
+        };
+        let scale = distance(a, b) / this.pinchDistance;
+        let factor = if (this.pinchScale > 0.0) scale / this.pinchScale else 1.0;
+        this.pinchScale = scale;
+        match (this.pinch) {
+            Some(p) => {
+                let keep = match (p.phase) {
+                    GesturePhase.Began => match (phase) {
+                        GesturePhase.Changed => true,
+                        _ => false,
+                    },
+                    _ => false,
+                };
+                this.pinch = Pinch {
+                    phase: if (keep) p.phase else phase,
+                    center: midpoint(a, b),
+                    startCenter: this.pinchCenter,
+                    scale: scale,
+                    scaleDelta: p.scaleDelta * factor,
+                };
+            }
+            null => {
+                this.pinch = Pinch {
+                    phase: phase,
+                    center: midpoint(a, b),
+                    startCenter: this.pinchCenter,
+                    scale: scale,
+                    scaleDelta: factor,
+                };
+            }
+        }
+    }
+
+    /// After the primary finger's gesture ends: Idle when no finger is down, else Done until they are.
+    fn settle(borrow mut this) {
+        this.state = if (this.downCount == 0) Recognizing.Idle else Recognizing.Done;
+    }
+
+    /// Takes one touch, at the Ui clock `clock`; whether it began a gesture (whose targets the Ui then finds).
+    fn feed(borrow mut this, t: Touch, clock: f64) -> bool {
+        match (t.phase) {
+            TouchPhase.Began => {
+                if (this.slot(t.id) != null || this.downCount == MAX_FINGERS) {
+                    return false;
+                }
+                this.down[this.downCount] = Finger { id: t.id, position: t.position };
+                this.downCount += 1;
+                match (this.state) {
+                    Recognizing.Idle => {
+                        this.state = Recognizing.Possible;
+                        this.primary = t.id;
+                        this.second = 0;
+                        this.start = t.position;
+                        this.last = t.position;
+                        this.startClock = clock;
+                        this.sampleHead = 0;
+                        this.sampleCount = 0;
+                        this.sample(t.time, t.position);
+                        this.began = true;
+                        return true;
+                    }
+                    Recognizing.Possible => {
+                        this.cancelled = true; // a second finger: no tap
+                        this.startPinch(t);
+                    }
+                    Recognizing.LongPressed => { this.startPinch(t); }
+                    Recognizing.Panning => {
+                        this.reportPan(GesturePhase.Cancelled, this.last, Vec2.zero());
+                        this.startPinch(t);
+                    }
+                    _ => {}
+                }
+                return false;
+            }
+            TouchPhase.Moved => {
+                match (this.slot(t.id)) {
+                    Some(k) => { this.down[k].position = t.position; }
+                    null => { return false; }
+                }
+                if (t.id == this.primary) {
+                    this.sample(t.time, t.position);
+                }
+                match (this.state) {
+                    Recognizing.Possible => {
+                        if (t.id == this.primary && distance(t.position, this.start) > TAP_SLOP) {
+                            this.state = Recognizing.Panning;
+                            this.cancelled = true; // a pan: no tap
+                            this.reportPan(GesturePhase.Began, t.position, this.velocity());
+                        }
+                    }
+                    Recognizing.Panning => {
+                        if (t.id == this.primary) {
+                            this.reportPan(GesturePhase.Changed, t.position, this.velocity());
+                        }
+                    }
+                    Recognizing.Pinching => {
+                        if (t.id == this.primary || t.id == this.second) {
+                            this.reportPinch(GesturePhase.Changed);
+                        }
+                    }
+                    _ => {}
+                }
+                return false;
+            }
+            _ => {
+                let lifted = match (t.phase) {
+                    TouchPhase.Ended => true,
+                    _ => false,
+                };
+                let k = match (this.slot(t.id)) {
+                    Some(k) => k,
+                    null => { return false; }
+                };
+                this.down[k].position = t.position;
+                let mine = t.id == this.primary || t.id == this.second;
+                match (this.state) {
+                    Recognizing.Pinching => {
+                        if (mine) {
+                            this.reportPinch(if (lifted) GesturePhase.Ended else GesturePhase.Cancelled);
+                        }
+                    }
+                    _ => {}
+                }
+                this.down[k] = this.down[this.downCount - 1];
+                this.downCount -= 1;
+                if (t.id != this.primary && !mine) {
+                    if (this.downCount == 0) {
+                        this.state = Recognizing.Idle;
+                    }
+                    return false;
+                }
+                match (this.state) {
+                    Recognizing.Possible => {
+                        this.last = t.position;
+                        if (lifted) {
+                            this.released = true;
+                            let near = distance(t.position, this.lastTapAt) <= DOUBLE_TAP_SLOP;
+                            let count =
+                                if (near && clock - this.lastTapTime <= DOUBLE_TAP_SECONDS + LONG_PRESS_SECONDS &&
+                                    this.startClock - this.lastTapTime <= DOUBLE_TAP_SECONDS) this.lastTapCount + 1
+                                    else 1;
+                            this.tap = Tap { position: t.position, count: count };
+                            this.lastTapTime = clock;
+                            this.lastTapAt = t.position;
+                            this.lastTapCount = count;
+                        } else {
+                            this.cancelled = true;
+                        }
+                    }
+                    Recognizing.Panning => {
+                        if (lifted) {
+                            this.sample(t.time, t.position);
+                            this.reportPan(GesturePhase.Ended, t.position, this.velocity());
+                        } else {
+                            this.reportPan(GesturePhase.Cancelled, t.position, Vec2.zero());
+                        }
+                    }
+                    _ => {}
+                }
+                if (mine || t.id == this.primary) {
+                    this.settle();
+                }
+                return false;
+            }
+        }
+    }
+
+    fn startPinch(borrow mut this, t: Touch) {
+        let first = match (this.slot(this.primary)) {
+            Some(k) => this.down[k].position,
+            null => this.start,
+        };
+        this.second = t.id;
+        this.state = Recognizing.Pinching;
+        this.pinchDistance = distance(first, t.position).max(1.0);
+        this.pinchCenter = midpoint(first, t.position);
+        this.pinchScale = 1.0;
+        this.reportPinch(GesturePhase.Began);
+    }
+
+    /// The long press, once the clock passes its time with the finger still within the slop.
+    fn tick(borrow mut this, clock: f64) {
+        if (this.pressing() && clock - this.startClock >= LONG_PRESS_SECONDS) {
+            this.state = Recognizing.LongPressed;
+            this.cancelled = true; // the press is now the long press: no tap
+            this.longPress = match (this.slot(this.primary)) {
+                Some(k) => this.down[k].position,
+                null => this.start,
+            };
+        }
+    }
+
+    /// Where the pointer made from the fingers is: the primary finger while down, else where it lifted.
+    fn pointerPosition(borrow this) -> Vec2 => match (this.slot(this.primary)) {
+        Some(k) => this.down[k].position,
+        null => this.last,
+    };
+}
+
+/// A fling's velocity after `dt` seconds of UIKit's deceleration.
+fn decelerate(v: f32, dt: f32) -> f32 => round<f32>(v as f64 * Math64.pow(FLING_DECAY_PER_MS, dt as f64 * 1000.0));
+
+/// Touches into gestures, the pointer and scrolling.
+impl<region r> Ui<r> {
+    /// Takes this frame's touches; whether there were any. A gesture that begins records the elements under its start,
+    /// stops every fling, and, for a pan, picks the scroll container it moves.
+    fn takeTouches(borrow mut this, platform: borrow mut dyn Platform) -> bool {
+        this.gestures.beginFrame();
+        var any = false;
+        loop {
+            match (platform.nextTouch()) {
+                Some(t) => {
+                    any = true;
+                    if (this.gestures.feed(t, this.clock)) {
+                        this.gestureTargets.clear();
+                        this.tree.hitTest(t.position);
+                        for (i in 0..this.tree.pointerOverCount()) {
+                            this.gestureTargets.push(this.tree.pointerOverAt(i));
+                        }
+                        this.touchScroll = 0;
+                        for (k in 0..this.scrolls.length()) {
+                            this.scrolls.items[k].fling = Vec2.zero();
+                        }
+                    }
+                }
+                null => { break; }
+            }
+        }
+        this.gestures.tick(this.clock);
+        if (this.gestures.pressing()) {
+            this.requestFrameAfter(LONG_PRESS_SECONDS - (this.clock - this.gestures.startClock));
+        }
+        return any;
+    }
+
+    /// The pointer for this frame: the platform's, or the one the fingers make, from a finger's first touch until the
+    /// platform's own pointer does something (a mouse on a tablet).
+    fn touchPointer(borrow mut this, given: Pointer, touched: bool) -> Pointer {
+        let platformMoved = given.position.x != this.touchGiven.x || given.position.y != this.touchGiven.y ||
+            given.down || given.pressed || given.secondaryPressed || given.wheel.x != 0.0 || given.wheel.y != 0.0;
+        if (!touched && this.gestures.idle() && (!this.touchDriven || platformMoved)) {
+            this.touchDriven = false;
+            return given;
+        }
+        this.touchGiven = given.position;
+        // A drag claims the finger: it stays the pointer, pressed, until it lifts.
+        let dragging = this.drag.active || this.drag.candidate != 0;
+        var p = Pointer.at(this.gestures.pointerPosition());
+        if (this.gestures.began) {
+            p.pressed = true;
+            p.down = true;
+        }
+        if (this.gestures.pressing() || (dragging && this.gestures.primaryDown())) {
+            p.down = true;
+        } else if (this.gestures.released || this.gestures.cancelled) {
+            p.released = !this.gestures.began || this.gestures.released;
+            p.down = false;
+            if (this.gestures.cancelled && !dragging) {
+                this.pressCancelled = true;
+            }
+        }
+        if (this.gestures.longPress != null) {
+            p.secondaryPressed = true;
+        }
+        if (this.gestures.longPressing()) {
+            p.secondaryDown = true;
+        }
+        if (this.gestures.idle() && !this.gestures.released) {
+            // No finger, and no tap to click: nothing is under the pointer (no hover sticks after a touch).
+            p.position = Vec2 { x: -1000000.0, y: -1000000.0 };
+        }
+        this.touchDriven = true;
+        return p;
+    }
+
+    /// Scrolling by touch: the pan moves the scroll container it picked, and its release flings it.
+    fn touchScrolling(borrow mut this) {
+        let dragging = this.drag.active || this.drag.candidate != 0;
+        match (this.gestures.pan) {
+            Some(p) => {
+                let began = match (p.phase) {
+                    GesturePhase.Began => true,
+                    _ => false,
+                };
+                let ended = match (p.phase) {
+                    GesturePhase.Ended => true,
+                    _ => false,
+                };
+                let cancelled = match (p.phase) {
+                    GesturePhase.Cancelled => true,
+                    _ => false,
+                };
+                if ((began || (ended && this.touchScroll == 0 && p.delta.x == p.position.x - p.start.x &&
+                    p.delta.y == p.position.y - p.start.y)) && !dragging) {
+                    this.touchScroll = this.scrollContainerFor(p.translation());
+                }
+                if (this.touchScroll != 0) {
+                    match (this.scrollSlot(this.touchScroll)) {
+                        Some(k) => {
+                            var s = this.scrolls.items[k];
+                            let canH = s.horizontal && s.content.w > s.size.w;
+                            let canV = s.vertical && s.content.h > s.size.h;
+                            if (canH) {
+                                s.position.x = (s.position.x + p.delta.x).min(0.0).max(-(s.content.w - s.size.w));
+                            }
+                            if (canV) {
+                                s.position.y = (s.position.y + p.delta.y).min(0.0).max(-(s.content.h - s.size.h));
+                            }
+                            if (ended) {
+                                let speed = (p.velocity.x * p.velocity.x + p.velocity.y * p.velocity.y).sqrt();
+                                if (speed >= FLING_MIN) {
+                                    s.fling = Vec2 {
+                                        x: if (canH) p.velocity.x else 0.0,
+                                        y: if (canV) p.velocity.y else 0.0,
+                                    };
+                                }
+                            }
+                            this.scrolls.items[k] = s;
+                        }
+                        null => {}
+                    }
+                    if (ended || cancelled) {
+                        this.touchScroll = 0;
+                    }
+                }
+            }
+            null => {}
+        }
+    }
+
+    /// The deepest scroll container under the gesture's start that can move along the pan's main axis, or 0.
+    fn scrollContainerFor(borrow this, translation: Vec2) -> u32 {
+        let across = translation.x.abs() > translation.y.abs();
+        var j = this.gestureTargets.length();
+        while (j > 0) {
+            j -= 1;
+            let id = this.gestureTargets.get(j);
+            match (this.scrollSlot(id)) {
+                Some(k) => {
+                    let s = this.scrolls.items[k];
+                    let fits = if (across) s.horizontal && s.content.w > s.size.w
+                        else s.vertical && s.content.h > s.size.h;
+                    if (fits) {
+                        return id;
+                    }
+                }
+                null => {}
+            }
+        }
+        return 0;
+    }
+
+    /// Moves every flinging scroll container by `dt` seconds of its fling, slowing it; an edge stops it.
+    fn advanceFlings(borrow mut this, dt: f32) {
+        for (k in 0..this.scrolls.length()) {
+            var s = this.scrolls.items[k];
+            if (s.fling.x == 0.0 && s.fling.y == 0.0) {
+                continue;
+            }
+            let minX = -(s.content.w - s.size.w).max(0.0);
+            let minY = -(s.content.h - s.size.h).max(0.0);
+            let x = s.position.x + s.fling.x * dt;
+            let y = s.position.y + s.fling.y * dt;
+            s.position = Vec2 { x: x.max(minX).min(0.0), y: y.max(minY).min(0.0) };
+            s.fling = Vec2 { x: decelerate(s.fling.x, dt), y: decelerate(s.fling.y, dt) };
+            if (s.position.x != x || s.fling.x.abs() < FLING_STOP) {
+                s.fling.x = 0.0;
+            }
+            if (s.position.y != y || s.fling.y.abs() < FLING_STOP) {
+                s.fling.y = 0.0;
+            }
+            this.scrolls.items[k] = s;
+        }
+    }
+
+    fn gestureOn(borrow this, id: u32) -> bool {
+        for (i in 0..this.gestureTargets.length()) {
+            if (this.gestureTargets.get(i) == id) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// This frame's tap, wherever it began.
+    public fn tap(borrow this) -> Tap? => this.gestures.tap;
+    /// This frame's long press, where the finger is, wherever it began. It fires once, while the finger is held.
+    public fn longPress(borrow this) -> Vec2? => this.gestures.longPress;
+    /// This frame's pan, wherever it began.
+    public fn pan(borrow this) -> Pan? => this.gestures.pan;
+    /// This frame's pinch, wherever it began.
+    public fn pinch(borrow this) -> Pinch? => this.gestures.pinch;
+
+    /// A tap this frame that began on the element named `name` (or inside it).
+    public fn tapOn(borrow this, name: StringView) -> Tap? =>
+        if (this.gestureOn(hashId(name))) this.gestures.tap else null;
+    /// A long press this frame that began on the element named `name`.
+    public fn longPressOn(borrow this, name: StringView) -> Vec2? =>
+        if (this.gestureOn(hashId(name))) this.gestures.longPress else null;
+    /// A pan this frame that began on the element named `name`.
+    public fn panOn(borrow this, name: StringView) -> Pan? =>
+        if (this.gestureOn(hashId(name))) this.gestures.pan else null;
+    /// A pinch this frame that began on the element named `name` (its first finger did).
+    public fn pinchOn(borrow this, name: StringView) -> Pinch? =>
+        if (this.gestureOn(hashId(name))) this.gestures.pinch else null;
+}

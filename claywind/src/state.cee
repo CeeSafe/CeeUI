@@ -37,7 +37,7 @@ impl<region r> Ui<r> {
         }
         for (k in 0..this.scrolls.length()) {
             let s = this.scrolls.items[k];
-            if (s.momentum.x != 0.0 || s.momentum.y != 0.0 || s.pointerActive) {
+            if (s.momentum.x != 0.0 || s.momentum.y != 0.0 || s.pointerActive || s.fling.x != 0.0 || s.fling.y != 0.0) {
                 return true;
             }
         }

@@ -134,6 +134,25 @@ public struct Pointer {
     };
 }
 
+/// Where a touch is in its finger's life (gestures.cee).
+public enum TouchPhase {
+    Began,
+    Moved,
+    Ended,
+    /// The system took the finger away: what it began is undone.
+    Cancelled,
+}
+
+/// A finger on a touch screen, as a platform reports it (gestures.cee): the platform's number for the finger, unique
+/// while it is down; its place in layout units; and when, in seconds on the platform's clock of input events (only
+/// differences between touches mean anything).
+public struct Touch {
+    public id: u32;
+    public phase: TouchPhase;
+    public position: Vec2;
+    public time: f64;
+}
+
 /// Cursor shapes a host may show (CW_CURSOR_*).
 public enum Cursor {
     Default,
@@ -168,5 +187,8 @@ public interface Platform {
     /// Files dragged from the system over the window this frame (drag.cee), or null when there is no such drag. A
     /// platform without file drops leaves the default.
     @effects() fn fileDrag(borrow this) -> FileDrag? => null;
+    /// The next touch this frame, in order, or null when none is left (gestures.cee). A platform without a touch screen
+    /// leaves the default; one with it gives every finger, and no pointer for them.
+    @effects() fn nextTouch(borrow mut this) -> Touch? => null;
     @effects() fn setCursor(borrow mut this, cursor: Cursor);
 }

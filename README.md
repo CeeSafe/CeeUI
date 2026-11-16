@@ -190,6 +190,14 @@ release is no click. The demo's Controls page has a board whose cards are dragge
 from the system come the same way, as a drag of kind `DRAG_FILES` (the host passes CeeSafe's `Window.dragOver` and
 `nextDrop` on through `Platform.fileDrag`), and the board's place for them lists what was dropped.
 
+Touch and gestures: a platform with a touch screen gives every finger (`Platform.nextTouch`), and the `Ui` recognizes
+taps (and double taps), long presses, pans and pinches, each aimed at the elements under where it began
+(`Ui.tapOn`, `longPressOn`, `panOn`, `pinchOn`; `tap`, `longPress`, `pan`, `pinch` wherever it began). Controls made
+for a pointer keep working: the first finger presses, its lift clicks, a pan or pinch cancels the press, and a long
+press is a secondary press. A pan scrolls the scroll container under it along its axis, and its release flings it,
+slowing as UIKit's scroll views do. CeeSafe's `Window` gives touches from its ADR 0155 (iOS and Android), not yet
+released; until then no host passes them on.
+
 Hot reload: `claywind-dev`, run in an app's package directory, builds the app, runs it with `--hot out/hot`, and
 watches the sources of the package and of every package it depends on by path. When a source changes it builds
 again; a build that fails prints its errors and leaves the app running, and one that succeeds asks the app to save
