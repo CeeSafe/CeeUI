@@ -263,7 +263,8 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
         WindowHandle.AppKit(nswindow, nsview) => unsafe { cw_gpu_attach(1, nswindow, nsview) },
         WindowHandle.Win32(hwnd, hinstance) => unsafe { cw_gpu_attach(2, hwnd, hinstance) },
         WindowHandle.Xlib(display, xwindow) => unsafe { cw_gpu_attach(3, display, xwindow) },
-        WindowHandle.Scripted => -1,
+        // A scripted window, and iOS and Android (ADR 0154), where no GPU backend draws yet.
+        _ => -1,
     };
     if (attached != 0) {
         Console.write("gpu: cannot draw into the window (");
