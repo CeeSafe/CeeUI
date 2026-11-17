@@ -257,6 +257,8 @@ runs the system's tools. The name, identifier and version default to the package
   `--abi arm64-v8a,x86_64` builds a library for each; signed with `~/.android/debug.keystore` (`--keystore`,
   `--keystore-pass`), so it installs but is not a store build.
 - **macOS**: signed ad hoc, for this Mac; no Developer ID, notarization or icon yet.
+- **`--network WHY`**, for an app that uses the network: Android's `INTERNET` permission, and on iOS the
+  sentence shown when the app first reaches a device on the local network (`NSLocalNetworkUsageDescription`).
 It needs a Mac for the Apple targets and a Unix for all (it runs `mkdir`, `cp`, `rm`, `zip`): Windows is not a host
 for it yet.
 

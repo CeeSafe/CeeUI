@@ -9,6 +9,9 @@
 //                    profile already on this Mac (Xcode makes them), for `xcrun devicectl device install app`
 //   android          out/pack/NAME.apk: a NativeActivity app, signed with the debug key, for `adb install`
 //
+// `--network WHY` is for an app that uses the network: Android's INTERNET permission, and on iOS the sentence shown
+// when the app first reaches a device on the local network.
+//
 // It runs ceesafec for the target, writes the Info.plist or AndroidManifest.xml, and runs the system's own tools
 // (xcrun, codesign, security; the NDK's clang, aapt2, zipalign, apksigner). It needs a Mac for the Apple targets, and
 // a Unix (`mkdir`, `cp`, `rm`, `zip`, `sh`) for all of them: Windows is not a host for it yet.
@@ -25,6 +28,8 @@ struct Options {
     identity: String; // --identity, a signing identity; else the first "Apple Development" one
     keystore: String; // --keystore, else ~/.android/debug.keystore (password "android")
     storePass: String;
+    network: String; // --network, why the app uses the network: Android's INTERNET permission and iOS's local
+    // network description; empty for an app that uses none
 }
 
 fn fail(what: StringView) -> i32 {
@@ -264,6 +269,12 @@ fn infoPlist(o: borrow Options, phone: bool) -> String {
         p.append("\t<key>MinimumOSVersion</key><string>17.0</string>\n")!;
         p.append("\t<key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>\n")!;
         p.append("\t<key>UILaunchScreen</key><dict/>\n")!;
+        if (o.network.view().length > 0) {
+            // What iOS shows when the app first reaches a device on the local network.
+            p.append("\t<key>NSLocalNetworkUsageDescription</key><string>")!;
+            p.append(xml(o.network.view()).view())!;
+            p.append("</string>\n")!;
+        }
         p.append("\t<key>CFBundleSupportedPlatforms</key><array><string>iPhoneOS</string></array>\n")!;
         // Every orientation: a ClayWind app lays out again at each size (its size classes).
         p.append("\t<key>UISupportedInterfaceOrientations</key><array>")!;
@@ -553,6 +564,9 @@ fn androidManifest(o: borrow Options) -> String {
     m.append("\"\n          android:versionCode=\"1\" android:versionName=\"")!;
     m.append(xml(o.version.view()).view())!;
     m.append("\">\n  <uses-sdk android:minSdkVersion=\"28\" android:targetSdkVersion=\"36\"/>\n")!;
+    if (o.network.view().length > 0) {
+        m.append("  <uses-permission android:name=\"android.permission.INTERNET\"/>\n")!;
+    }
     m.append("  <application android:label=\"")!;
     m.append(xml(o.name.view()).view())!;
     m.append("\" android:hasCode=\"false\" android:extractNativeLibs=\"true\">\n")!;
@@ -676,7 +690,7 @@ fn packAndroid(o: borrow Options) -> i32 {
 fn usage() -> i32 {
     Console.writeErrorLine("usage: claywind_pack <macos|ios|ios-simulator|android> [--name NAME] [--id ID]");
     Console.writeErrorLine("           [--version V] [--abi arm64-v8a,x86_64] [--profile FILE] [--identity NAME]");
-    Console.writeErrorLine("           [--keystore FILE] [--keystore-pass PASSWORD]");
+    Console.writeErrorLine("           [--keystore FILE] [--keystore-pass PASSWORD] [--network WHY]");
     Console.writeErrorLine("run in the app's package directory; the result is under out/pack");
     return 2;
 }
@@ -702,6 +716,7 @@ fn main() -> i32 {
         identity: String.create(),
         keystore: String.create(),
         storePass: text("android"),
+        network: String.create(),
     };
     var i: usize = 2;
     while (i < Process.argumentCount()) {
@@ -726,6 +741,8 @@ fn main() -> i32 {
             o.keystore = text(value);
         } else if (flag == "--keystore-pass") {
             o.storePass = text(value);
+        } else if (flag == "--network") {
+            o.network = text(value);
         } else {
             return usage();
         }
