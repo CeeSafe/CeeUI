@@ -35,6 +35,7 @@ public struct Controls {
         // A click: the pointer went down and came back up over the button, as a native button acts (a press dragged
         // off it does nothing, and a window the button opens is not sent behind by the release).
         let hit = ui.clickedHash(h);
+        ui.access(h, AccessRole.Button, label.bytes());
         ui.label(label, Text.of().color(SLATE_100));
         ui.close();
         return hit;
@@ -51,6 +52,8 @@ public struct Controls {
             value = !value;
             changed = true;
         }
+        let node = ui.access(h, AccessRole.Checkbox, label.bytes());
+        ui.accessFlag(node, ACCESS_CHECKED, value);
         ui.open(Style.box().size(Size.fixed(18.0)).bg(if (value) BLUE_500 else SLATE_700).rounded(Radius.Sm).center()
             .border(1.0, SLATE_500));
         if (value) {
@@ -101,6 +104,8 @@ public struct Controls {
                 ui.clearFocus();
             }
         }
+        let node = ui.access(h, AccessRole.TextField, id.bytes());
+        ui.accessValue(node, buf[0..len]);
         ui.open(Style.row().alignXY(AxisAlign.Start, AxisAlign.Center));
         if (len > 0) {
             ui.labelBytes(buf[0..len], Text.of().color(SLATE_100));
@@ -131,6 +136,11 @@ public struct Controls {
         if (ui.pressedOn(h)) {
             open = !open;
         }
+        let node = ui.access(h, AccessRole.Dropdown, id.bytes());
+        if (selected < items.length) {
+            ui.accessValue(node, items[selected].bytes());
+        }
+        ui.accessFlag(node, ACCESS_EXPANDED, open);
         ui.open(Style.row().w(Size.grow()).alignXY(AxisAlign.Start, AxisAlign.Center));
         if (selected < items.length) {
             ui.label(items[selected], Text.of().color(SLATE_100));
@@ -159,6 +169,8 @@ public struct Controls {
                     open = false;
                     changed = true;
                 }
+                let choice = ui.access(row, AccessRole.MenuItem, items[i].bytes());
+                ui.accessFlag(choice, ACCESS_SELECTED, isSelected);
                 ui.label(items[i], Text.of().color(SLATE_100));
                 ui.close();
             }
@@ -201,6 +213,8 @@ public struct Controls {
                 selected = i;
                 changed = true;
             }
+            let node = ui.access(row, AccessRole.ListItem, items[i].bytes());
+            ui.accessFlag(node, ACCESS_SELECTED, i == selected);
             ui.label(items[i], Text.of().color(if (isSelected) WHITE else SLATE_200));
             ui.close();
         }
@@ -238,6 +252,8 @@ public struct Controls {
                 changed = true;
             }
             let nowOn = i < selected.length && selected[i];
+            let node = ui.access(row, AccessRole.ListItem, items[i].bytes());
+            ui.accessFlag(node, ACCESS_SELECTED, nowOn);
             ui.label(items[i], Text.of().color(if (nowOn) WHITE else SLATE_200));
             ui.close();
         }
@@ -271,12 +287,23 @@ public struct Controls {
             }
             null => {}
         }
+        // A screen reader moves it a tenth of its range at a step.
+        let steps = ui.accessStep(h);
+        if (steps != 0 && max > min) {
+            let next = Math.clamp(value + round<f32>(steps as f64) * (max - min) / 10.0, min, max);
+            if (next != value) {
+                value = next;
+                changed = true;
+            }
+        }
         let frac = if (max > min) Math.clamp((value - min) / (max - min), 0.0, 1.0) else 0.0;
         ui.open(
             Style.box().idHash(h).w(
                 Size.fixed(width),
             ).h(Size.fixed(16.0)).bg(SLATE_700).rounded(Radius.Xl).cursor(Cursor.Pointer),
         );
+        let node = ui.access(h, AccessRole.Slider, id.bytes());
+        ui.accessRange(node, min, max, value);
         ui.open(Style.box().w(Size.fixed(frac * width)).h(Size.grow()).bg(BLUE_500).rounded(Radius.Xl));
         ui.close();
         ui.close();
@@ -300,6 +327,8 @@ public struct Controls {
                 selected = i;
                 changed = true;
             }
+            let node = ui.access(row, AccessRole.Radio, items[i].bytes());
+            ui.accessFlag(node, ACCESS_CHECKED, i == selected);
             ui.open(Style.box().size(Size.fixed(18.0)).rounded(Radius.Xl).center().border(2.0, SLATE_500));
             if (i == selected) {
                 ui.open(Style.box().size(Size.fixed(8.0)).bg(BLUE_500).rounded(Radius.Xl));
@@ -331,6 +360,8 @@ public struct Controls {
                 active = i;
                 changed = true;
             }
+            let node = ui.access(tab, AccessRole.Tab, items[i].bytes());
+            ui.accessFlag(node, ACCESS_SELECTED, i == active);
             ui.label(items[i], Text.of().color(if (on) SLATE_100 else SLATE_400));
             ui.close();
         }
@@ -368,6 +399,7 @@ public struct Controls {
                 chosen = i;
                 open = false;
             }
+            ui.access(row, AccessRole.MenuItem, items[i].bytes());
             ui.label(items[i], Text.of().color(SLATE_100));
             ui.close();
         }
@@ -411,6 +443,14 @@ public struct Controls {
         if (ui.pressedOn(h)) {
             ui.setFocus(h);
         }
+        // A screen reader's step is the field's own.
+        let asked = value + ui.accessStep(h) * step;
+        if (asked != value && asked >= min && asked <= max) {
+            value = asked;
+            changed = true;
+        }
+        let node = ui.access(h, AccessRole.Slider, id.bytes());
+        ui.accessRange(node, round<f32>(min as f64), round<f32>(max as f64), round<f32>(value as f64));
         ui.open(
             Style.box().idHash(dec).size(
                 Size.fixed(22.0),
@@ -471,6 +511,8 @@ public struct Controls {
             caret = len;
         }
         ui.open(Controls.fieldStyle(h, focused));
+        let node = ui.access(h, AccessRole.TextField, id.bytes());
+        ui.accessValue(node, buf[0..len]);
         if (ui.pressedOn(h)) {
             ui.setFocus(h);
         } else if (ui.hasFocus(h) && ui.releasedOutside(h)) {

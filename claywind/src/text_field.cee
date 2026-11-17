@@ -235,6 +235,8 @@ impl Controls {
             }
         }
         ui.open(Controls.fieldStyle(h, focused));
+        let node = ui.access(h, AccessRole.TextField, id.bytes());
+        ui.accessValue(node, buf[0..len]);
         let config = TextConfig.of(FIELD_TEXT);
         // The selection, behind the text.
         if (focused && edit.selects()) {

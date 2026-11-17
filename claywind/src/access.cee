@@ -1,0 +1,267 @@
+// SPDX-License-Identifier: MIT
+// Accessibility (roadmap P5): what a frame's elements are, for a screen reader. A control reports itself while it
+// is built (`Ui.access`), a text leaf outside a control reports itself, and after the frame is laid out the list is
+// read in document order (`accessCount`, `accessAt`, `accessBox`). What the reader asks for comes back as an action
+// (`accessAct`), which the next frame's controls see as a click, a focus or a step.
+//
+// The list is flat and in reading order: VoiceOver, TalkBack and NVDA move through leaves, and a container adds
+// nothing they announce. A platform layer turns it into NSAccessibility, UI Automation, AT-SPI, UIAccessibility or
+// Android's nodes; nothing here names a system.
+
+/// What an element is.
+public enum AccessRole {
+    /// Text that is read and nothing else.
+    Text,
+    Button,
+    Checkbox,
+    /// One of a set of which one is chosen.
+    Radio,
+    TextField,
+    Slider,
+    Tab,
+    /// A row of a list.
+    ListItem,
+    MenuItem,
+    /// A button that opens a list of choices and shows the chosen one.
+    Dropdown,
+    Image,
+}
+
+/// What a screen reader may ask of an element.
+public enum AccessAction {
+    /// Activate it: a button's click, a checkbox's toggle, a row's selection.
+    Press,
+    /// Give it the keyboard focus.
+    Focus,
+    /// One step up (a slider, a spin field).
+    Increment,
+    /// One step down.
+    Decrement,
+}
+
+/// An element's state, as flags of `AccessNode.flags`.
+public const ACCESS_CHECKED: u32 = 1;
+public const ACCESS_SELECTED: u32 = 2;
+public const ACCESS_FOCUSED: u32 = 4;
+public const ACCESS_DISABLED: u32 = 8;
+public const ACCESS_EXPANDED: u32 = 16;
+/// The text is hidden as it is typed.
+public const ACCESS_SECURE: u32 = 32;
+
+/// One accessible element of the frame.
+public struct AccessNode {
+    /// The layout element's id, which names it from frame to frame: an action is asked of it by this.
+    public id: u32;
+    public role: AccessRole;
+    public flags: u32;
+    /// A slider's range and value; all zero otherwise.
+    public min: f32;
+    public max: f32;
+    public now: f32;
+    element: usize; // its index in the frame's layout tree
+    labelStart: usize;
+    labelLength: usize;
+    valueStart: usize;
+    valueLength: usize;
+
+    public fn has(borrow this, flag: u32) -> bool => (this.flags & flag) != 0;
+}
+
+/// An action waiting for the next frame.
+struct PendingAccess {
+    id: u32;
+    action: AccessAction;
+}
+
+fn emptyAccessNode() -> AccessNode => AccessNode {
+    id: 0,
+    role: AccessRole.Text,
+    flags: 0,
+    min: 0.0,
+    max: 0.0,
+    now: 0.0,
+    element: 0,
+    labelStart: 0,
+    labelLength: 0,
+    valueStart: 0,
+    valueLength: 0,
+};
+
+fn emptyPendingAccess() -> PendingAccess => PendingAccess { id: 0, action: AccessAction.Press };
+
+impl<region r> Ui<r> {
+    // ---- reporting, while the frame is built ------------------------------------------------------------------------
+    /// The element being built is a `role` named `label`: call it after the `open` that has `id`. Text leaves inside
+    /// it are its own, and are not reported apart. Returns the node's index, for `accessValue` and the setters.
+    public fn access(borrow mut this, id: u32, role: AccessRole, label: Slice<u8>) -> usize {
+        let index = this.accessNodes.length();
+        var node = emptyAccessNode();
+        node.id = id;
+        node.role = role;
+        node.element = this.tree.openIndex();
+        node.labelStart = this.accessBytes.length();
+        node.labelLength = this.pushAccessBytes(label);
+        if (this.hasFocus(id)) {
+            node.flags = node.flags | ACCESS_FOCUSED;
+        }
+        if (!this.accessNodes.push(node)) {
+            return index; // full: the element is not announced, and the setters below find no node
+        }
+        if (this.accessInside == 0) {
+            this.accessInside = this.openDepth;
+        }
+        return index;
+    }
+
+    /// Node `index`'s value as text: a field's text, a dropdown's choice.
+    public fn accessValue(borrow mut this, index: usize, value: Slice<u8>) {
+        if (index >= this.accessNodes.length()) {
+            return;
+        }
+        var node = this.accessNodes.get(index);
+        node.valueStart = this.accessBytes.length();
+        node.valueLength = this.pushAccessBytes(value);
+        this.accessNodes.set(index, node);
+    }
+
+    /// The element `name` is called `label`: after a control that has no label of its own (a text field, a slider,
+    /// a dropdown), which is otherwise called by its id. `Controls.textInput(ui, "server", ...);
+    /// ui.accessName("server", "Server address");`
+    public fn accessName(borrow mut this, name: StringView, label: StringView) {
+        let id = hashId(name);
+        var i = this.accessNodes.length();
+        while (i > 0) {
+            i -= 1;
+            var node = this.accessNodes.get(i);
+            if (node.id == id) {
+                node.labelStart = this.accessBytes.length();
+                node.labelLength = this.pushAccessBytes(label.bytes());
+                this.accessNodes.set(i, node);
+                return;
+            }
+        }
+    }
+
+    /// Node `index` has `flag` (ACCESS_CHECKED and the others), or has it not.
+    public fn accessFlag(borrow mut this, index: usize, flag: u32, on: bool) {
+        if (index >= this.accessNodes.length()) {
+            return;
+        }
+        var node = this.accessNodes.get(index);
+        node.flags = if (on) node.flags | flag else node.flags & (flag ^ 0xFFFFFFFF);
+        this.accessNodes.set(index, node);
+    }
+
+    /// Node `index` is at `now` between `min` and `max`.
+    public fn accessRange(borrow mut this, index: usize, min: f32, max: f32, now: f32) {
+        if (index >= this.accessNodes.length()) {
+            return;
+        }
+        var node = this.accessNodes.get(index);
+        node.min = min;
+        node.max = max;
+        node.now = now;
+        this.accessNodes.set(index, node);
+    }
+
+    // ---- reading, after the frame is laid out -----------------------------------------------------------------------
+
+    /// The frame's accessible elements, in reading order.
+    public fn accessCount(borrow this) -> usize => this.accessNodes.length();
+
+    public fn accessAt(borrow this, index: usize) -> AccessNode => this.accessNodes.get(index);
+
+    public fn accessLabel(borrow this, node: AccessNode) -> Slice<u8> =>
+        this.accessBytes.items[node.labelStart..node.labelStart + node.labelLength];
+
+    public fn accessValueOf(borrow this, node: AccessNode) -> Slice<u8> =>
+        this.accessBytes.items[node.valueStart..node.valueStart + node.valueLength];
+
+    /// Where the node is, in the window's points; null while it has not been laid out or is not in the frame.
+    public fn accessBox(borrow this, node: AccessNode) -> Rect? => this.tree.areaAt(node.element);
+
+    // ---- actions, from the screen reader ----------------------------------------------------------------------------
+
+    /// The screen reader asks `action` of element `id`. The next frame's controls see it: `Press` as a click of the
+    /// element, `Focus` as the keyboard focus, a step through `accessStep`. False when too many are waiting.
+    public fn accessAct(borrow mut this, id: u32, action: AccessAction) -> bool =>
+        this.accessWaiting.push(PendingAccess { id: id, action: action });
+
+    /// Whether the screen reader activated element `id` this frame.
+    public fn accessPressed(borrow this, id: u32) -> bool {
+        for (i in 0..this.accessNow.length()) {
+            let p = this.accessNow.get(i);
+            if (p.id == id && p.action == AccessAction.Press) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// The steps the screen reader asked of element `id` this frame: +1 for each Increment, -1 for each Decrement.
+    public fn accessStep(borrow this, id: u32) -> i32 {
+        var steps: i32 = 0;
+        for (i in 0..this.accessNow.length()) {
+            let p = this.accessNow.get(i);
+            if (p.id != id) {
+                continue;
+            }
+            if (p.action == AccessAction.Increment) {
+                steps += 1;
+            }
+            if (p.action == AccessAction.Decrement) {
+                steps -= 1;
+            }
+        }
+        return steps;
+    }
+
+    // ---- the frame ----------------------------------------------------------------------------------------------------
+
+    /// `begin`'s part: last frame's list goes, and the actions that waited are this frame's.
+    fn beginAccess(borrow mut this) {
+        this.accessNodes.clear();
+        this.accessBytes.clear();
+        this.accessInside = 0;
+        this.accessNow.clear();
+        for (i in 0..this.accessWaiting.length()) {
+            let p = this.accessWaiting.get(i);
+            this.accessNow.push(p);
+            if (p.action == AccessAction.Focus) {
+                this.setFocus(p.id);
+            }
+        }
+        this.accessWaiting.clear();
+    }
+
+    /// A text leaf about to be added with layout id `id`: a node of its own unless a reported control holds it.
+    fn accessText(borrow mut this, id: u32, utf8: Slice<u8>) {
+        if (this.accessInside != 0 || utf8.length == 0) {
+            return;
+        }
+        var node = emptyAccessNode();
+        node.id = id;
+        node.element = this.tree.nextIndex();
+        node.labelStart = this.accessBytes.length();
+        node.labelLength = this.pushAccessBytes(utf8);
+        this.accessNodes.push(node);
+    }
+
+    /// `close`'s part, before the depth goes down: the reported control ends with its element.
+    fn closeAccess(borrow mut this) {
+        if (this.accessInside != 0 && this.openDepth <= this.accessInside) {
+            this.accessInside = 0;
+        }
+    }
+
+    /// Copies `utf8` into the frame's label bytes; the number kept (all of it, or none when it does not fit).
+    fn pushAccessBytes(borrow mut this, utf8: Slice<u8>) -> usize {
+        if (this.accessBytes.length() + utf8.length > this.accessBytes.items.length) {
+            return 0;
+        }
+        for (b in utf8) {
+            this.accessBytes.push(b);
+        }
+        return utf8.length;
+    }
+}

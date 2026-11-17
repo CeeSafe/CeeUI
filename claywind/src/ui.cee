@@ -104,6 +104,13 @@ public struct Ui<region r> {
     leavingId: u32;
     textKind: TextKind;
     returnKeyFace: ReturnKey;
+    // Accessibility (access.cee): this frame's elements for a screen reader and their labels' bytes, the depth of
+    // the reported control being built (0: none), and the reader's actions: this frame's, and those waiting.
+    accessNodes: FixedList<r, AccessNode>;
+    accessBytes: FixedList<r, u8>;
+    accessInside: u32;
+    accessNow: FixedList<r, PendingAccess>;
+    accessWaiting: FixedList<r, PendingAccess>;
     // Actions (actions.cee): the bindings, this frame's keystrokes and the actions they triggered, the key contexts
     // open around the element being built, and those around the focused element last frame.
     bindings: FixedList<r, Binding>;
@@ -168,6 +175,10 @@ public struct Ui<region r> {
         let clicked = memory.allocArray(capacity.layout.elements, 0u32)?;
         let chars = memory.allocArray(64, 0u32)?;
         let focusables = memory.allocArray(64, 0u32)?;
+        let accessNodes = memory.allocArray(capacity.layout.elements, emptyAccessNode())?;
+        let accessBytes = memory.allocArray(capacity.textBytes, 0u8)?;
+        let accessNow = memory.allocArray(16, emptyPendingAccess())?;
+        let accessWaiting = memory.allocArray(16, emptyPendingAccess())?;
         let pasted = memory.allocArray(capacity.textBytes, 0u8)?;
         let bindings = memory.allocArray(128, emptyBinding())?;
         let keystrokes = memory.allocArray(16, Keystroke { key: null, character: 0, modifiers: Modifiers.none() })?;
@@ -210,6 +221,11 @@ public struct Ui<region r> {
             leavingId: 0,
             textKind: TextKind.Text,
             returnKeyFace: ReturnKey.Done,
+            accessNodes: FixedList<AccessNode>.over(accessNodes),
+            accessBytes: FixedList<u8>.over(accessBytes),
+            accessInside: 0,
+            accessNow: FixedList<PendingAccess>.over(accessNow),
+            accessWaiting: FixedList<PendingAccess>.over(accessWaiting),
             bindings: FixedList<Binding>.over(bindings),
             keystrokes: FixedList<Keystroke>.over(keystrokes),
             triggered: FixedList<u32>.over(triggered),
@@ -296,6 +312,7 @@ public struct Ui<region r> {
         this.wantsText = false;
         this.textKind = TextKind.Text;
         this.returnKeyFace = ReturnKey.Done;
+        this.beginAccess();
         // Keystrokes to actions, through the key contexts around last frame's focused element.
         this.takeKeystrokes(mut platform);
         this.tree.hitTest(pointer.position);
@@ -416,6 +433,7 @@ public struct Ui<region r> {
     /// Closes the innermost open container.
     public fn close(borrow mut this) {
         this.leaveKeyContexts();
+        this.closeAccess();
         this.openDepth -= 1;
         this.tree.close();
     }
@@ -429,6 +447,7 @@ public struct Ui<region r> {
 
     /// A text leaf (Label).
     public fn label(borrow mut this, text: StringView, look: Text) {
+        this.accessText(this.tree.idFor(0), text.bytes());
         this.tree.text(text.bytes(), look.config());
     }
 
@@ -442,6 +461,7 @@ public struct Ui<region r> {
 
     /// A text leaf from UTF-8 bytes, such as a `TextWriter`'s output (LabelF with F()).
     public fn labelBytes(borrow mut this, utf8: Slice<u8>, look: Text) {
+        this.accessText(this.tree.idFor(0), utf8);
         this.tree.text(utf8, look.config());
     }
 
@@ -457,6 +477,9 @@ public struct Ui<region r> {
     public fn clicked(borrow this, name: StringView) -> bool => this.clickedHash(hashId(name));
 
     public fn clickedHash(borrow this, id: u32) -> bool {
+        if (this.accessPressed(id)) { // a screen reader's activation is a click
+            return true;
+        }
         for (i in 0..this.clickedIds.length()) {
             if (this.clickedIds.get(i) == id) {
                 return true;
@@ -505,7 +528,9 @@ public struct Ui<region r> {
     // ---- clicks, focus and capture (controls.h's helpers) ----------------------------------------------------------
 
     /// ClayWind_Clicked: the pointer is over element `id` and the primary button went down this frame.
-    public fn pressedOn(borrow this, id: u32) -> bool => this.pointerState.pressed && this.tree.isPointerOver(id);
+    /// A screen reader's activation of it counts (access.cee).
+    public fn pressedOn(borrow this, id: u32) -> bool =>
+        (this.pointerState.pressed && this.tree.isPointerOver(id)) || this.accessPressed(id);
 
     /// The secondary (right) button went down over element `id` this frame.
     public fn secondaryPressedOn(borrow this, id: u32) -> bool =>

@@ -180,6 +180,8 @@ impl Controls {
             } else if (open != 0 && !isOpen && ui.overHash(h)) {
                 open = menuIndex | MENU_HOVERED;
             }
+            let title = ui.access(h, AccessRole.MenuItem, model.title(k));
+            ui.accessFlag(title, ACCESS_EXPANDED, (open & MENU_INDEX) == menuIndex);
             ui.labelBytes(model.title(k), Text.of().color(SLATE_100));
             k += 1;
             if ((open & MENU_INDEX) == menuIndex) {
@@ -204,6 +206,7 @@ impl Controls {
                             ui.dispatchNext(part.action);
                             open = 0;
                         }
+                        ui.access(row, AccessRole.MenuItem, model.title(k));
                         ui.labelBytes(model.title(k), Text.of().color(SLATE_100));
                         ui.open(Style.box().w(Size.grow()));
                         ui.close();

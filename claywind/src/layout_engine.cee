@@ -506,6 +506,20 @@ public struct LayoutTree<region r> {
     /// The screen size the frame was laid out for.
     public fn screenSize(borrow this) -> Dims => this.screen;
 
+    /// The index the next element opened or text leaf added gets, and the open element's: for `areaAt` once the
+    /// frame is laid out.
+    public fn nextIndex(borrow this) -> usize => this.nodes.length();
+    public fn openIndex(borrow this) -> usize => if (this.openStack.length() == 0) 0 else this.openStack.last();
+
+    /// Where element `index` of this frame was placed (a text leaf too, which `boxOf` does not know), or null if
+    /// the frame is not laid out yet or the element is not in it.
+    public fn areaAt(borrow this, index: usize) -> Rect? {
+        if (index >= this.nodes.length() || !this.nodes.items[index].placed) {
+            return null;
+        }
+        return this.nodes.items[index].area;
+    }
+
     /// The element count of the frame (including the root and text elements).
     public fn elementCount(borrow this) -> usize => this.nodes.length();
 
