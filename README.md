@@ -100,8 +100,8 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 
 ## Getting started
 
-Install the CeeSafe compiler, **ceesafec 0.63.0 or later** (the hosts use its window text input and clipboard, ADR 0141, sleep while nothing changes, ADRs 0142 and 0145, show the system's menus and file dialogs, ADR 0146, take files dropped from the system, ADR 0150, are GUI programs on Windows, ADR 0151, and take a touch screen's
-fingers, ADR 0155, a phone's safe area, ADR 0156, its soft keyboard, ADR 0157, its file dialogs, ADR 0158, and an app's life, ADR 0159; ClayWind's array sizes are constant expressions, ADR 0143; 0.50.2 links with MinGW's gcc on Windows):
+Install the CeeSafe compiler, **ceesafec 0.65.0 or later** (the hosts use its window text input and clipboard, ADR 0141, sleep while nothing changes, ADRs 0142 and 0145, show the system's menus and file dialogs, ADR 0146, take files dropped from the system, ADR 0150, are GUI programs on Windows, ADR 0151, and take a touch screen's
+fingers, ADR 0155, a phone's safe area, ADR 0156, its soft keyboard, ADR 0157, its file dialogs, ADR 0158, an app's life, ADR 0159, and tell a screen reader what a window holds, ADR 0164; ClayWind's array sizes are constant expressions, ADR 0143; 0.50.2 links with MinGW's gcc on Windows):
 
 ```sh
 curl -fsSL https://ceesafe.github.io/CeeSafe/install.sh | sh          # macOS and Linux
@@ -287,6 +287,12 @@ sleeping while nothing changes.
 - **Every host** builds and runs on macOS. The desktop host has also run on Windows 11 and on Ubuntu under X11.
 - **The browser host** streams a fixed 1024 × 640 frame.
 - **The terminal host** runs its own small dashboard. The full demo is laid out for pixels, not character cells.
+- **Accessibility:** the controls tell a screen reader what they are (`Ui.access` and `claywind/src/access.cee`:
+  role, name, value, state, a text field's caret), and take its presses, focus and steps. On macOS VoiceOver reads
+  and works the demo (CeeSafe 0.65.0, ADR 0164). Windows, Linux, iOS and Android give a reader nothing yet. Not
+  there: containers and tables (a list's rows are buttons), dragging, a reader setting a field's text itself. A
+  control of your own is one line after its `open`: `ui.access(id, AccessRole.Button, label)`; a field with no
+  label of its own is named after it: `ui.accessName("server", "Server address")`.
 - **Linux:** the desktop host needs X11; Wayland is not supported yet.
 - **Not ported from the C version:** the debug view and Clay's built-in transitions. ClayWind has its own transition
   engine.
