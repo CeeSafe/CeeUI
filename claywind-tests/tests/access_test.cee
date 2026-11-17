@@ -147,6 +147,7 @@ fn aScreenReadersActionsReachTheControls() -> Result<void, TestFailure> {
     ui.accessAct(nodeNamed(ui, "I agree")?.id, AccessAction.Press);
     accessStep(mut ui, mut platform, mut app)?;
     Check.isTrue(app.saved == 1, "the button is clicked")?;
+    Check.isTrue(ui.needsFrame(), "an action is input: the next frame runs at once, and says what it did")?;
     Check.isTrue(app.agree, "the checkbox is checked")?;
     Check.isTrue(nodeNamed(ui, "I agree")?.has(ACCESS_CHECKED), "and says so in the same frame")?;
     accessStep(mut ui, mut platform, mut app)?;

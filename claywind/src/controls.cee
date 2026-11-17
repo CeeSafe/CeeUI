@@ -451,6 +451,10 @@ public struct Controls {
         }
         let node = ui.access(h, AccessRole.Slider, id.bytes());
         ui.accessRange(node, round<f32>(min as f64), round<f32>(max as f64), round<f32>(value as f64));
+        var spoken = [0u8; 24]; // a count is said as it is written, not as a share of its range
+        var said = TextWriter.create(mut spoken[..]);
+        said.signed(value as i64);
+        ui.accessValue(node, said.written());
         ui.open(
             Style.box().idHash(dec).size(
                 Size.fixed(22.0),

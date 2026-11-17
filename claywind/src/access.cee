@@ -232,6 +232,11 @@ impl<region r> Ui<r> {
             }
         }
         this.accessWaiting.clear();
+        // A reader's action is input: the frame after this one runs at once, so the list the window is given says
+        // what the action did (a control built before the one that was pressed says its old state in this frame).
+        if (this.accessNow.length() > 0) {
+            this.inputSeen = true;
+        }
     }
 
     /// A text leaf about to be added with layout id `id`: a node of its own unless a reported control holds it.
