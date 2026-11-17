@@ -82,6 +82,8 @@ public struct Pane<region r> {
     id: u32;
     /// Whether the window was asked for its touches (they are turned on at the first events taken).
     touchesAsked: bool;
+    /// What the window was last told the frame holds, for a screen reader (access.cee).
+    accessGiven: u64;
 
     /// A pane numbered `id` (each window's its own, from 1), with room for `elements` elements and `commands` render
     /// commands a frame, frames of up to `pixels` pixels kept, for a window of `size` points.
@@ -101,6 +103,7 @@ public struct Pane<region r> {
             last: Timer.now(),
             id: id,
             touchesAsked: false,
+            accessGiven: 0,
         });
     }
 
@@ -124,6 +127,7 @@ public struct Pane<region r> {
                 null => { break; }
             }
         }
+        takeAccessActions(mut this.ui, mut window); // what a screen reader asked, for the next frame's controls
         loop {
             match (window.nextEvent()) {
                 Some(WindowEvent.Closed) => { return true; }
@@ -151,6 +155,7 @@ public struct Pane<region r> {
         }
         this.platform.editFrom(this.ui, mut window);
         window.setCursor(windowCursor(this.platform.cursor));
+        giveAccessNodes(this.ui, mut window, mut this.accessGiven);
         return true;
     }
 
