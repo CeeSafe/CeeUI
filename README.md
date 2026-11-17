@@ -99,7 +99,7 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 
 ## Getting started
 
-Install the CeeSafe compiler, **ceesafec 0.62.0 or later** (the hosts use its window text input and clipboard, ADR 0141, sleep while nothing changes, ADRs 0142 and 0145, show the system's menus and file dialogs, ADR 0146, take files dropped from the system, ADR 0150, are GUI programs on Windows, ADR 0151, and take a touch screen's
+Install the CeeSafe compiler, **ceesafec 0.62.1 or later** (the hosts use its window text input and clipboard, ADR 0141, sleep while nothing changes, ADRs 0142 and 0145, show the system's menus and file dialogs, ADR 0146, take files dropped from the system, ADR 0150, are GUI programs on Windows, ADR 0151, and take a touch screen's
 fingers, ADR 0155, a phone's safe area, ADR 0156, its soft keyboard, ADR 0157, its file dialogs, ADR 0158, and an app's life, ADR 0159; ClayWind's array sizes are constant expressions, ADR 0143; 0.50.2 links with MinGW's gcc on Windows):
 
 ```sh
@@ -231,7 +231,7 @@ The GPU on a phone (roadmap P4 step 7): the GPU host draws with Metal on an iPho
 again when the handle changes, and presents nothing while there is none; the swapchain is the window's own size,
 unrotated, so a phone held sideways is drawn upright. It saves and restores its state as the desktop host does.
 The iOS Simulator's Metal cannot run it (no reading of the render target in a fragment shader); an iPhone can. On an
-iPhone it needs a ceesafec after 0.62.0 (findings O11).
+iPhone it needs ceesafec 0.62.1 (findings O11).
 
 Hot reload: `claywind-dev`, run in an app's package directory, builds the app, runs it with `--hot out/hot`, and
 watches the sources of the package and of every package it depends on by path. When a source changes it builds

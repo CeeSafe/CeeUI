@@ -366,7 +366,7 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
 - **O10 (open). The compiler's own sources must keep to what ceesafec 0.8.0 accepts**, and only the release
   bootstrap says so: `??`, a `var` of a view and a slice of a call's result in `src/interpreter/io.cee` built with
   the current compiler and failed the bootstrap for 0.62.0, twice. A check in the contract suite would say it sooner.
-- **O11 (fixed on CeeSafe's branch `fix/ios-main-frame`, not released). A windowed program's `main` was on the stack
+- **O11 (fixed in ceesafec 0.62.1). A windowed program's `main` was on the stack
   twice on iOS.** UIKit never returns from the first call, and the launched application calls `main` again inside it
   (ADR 0154). With the entry inlined (`-Os`), `main`'s frame was 621 KiB in the GPU host: twice on the main thread's
   1 MiB, so the app ended at once on an iPhone (the desktop host's frame is smaller, so it ran). Fixed in the
