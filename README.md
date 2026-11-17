@@ -248,6 +248,8 @@ cd claywind-hosts/gpu
 It runs `ceesafec build --windowed` for the target, writes the `Info.plist` or the `AndroidManifest.xml` (a
 `NativeActivity` kept through a rotation and the keyboard, `android:configChanges`; every orientation on iOS) and
 runs the system's tools. The name, identifier and version default to the package's (`com.example.<name>`).
+- **iOS**: linked with a 16 MiB main thread stack (`-Wl,-stack_size`), where iOS gives 1 MiB, an eighth of a
+  Mac's, with UIKit on it under the program.
 - **iOS device**: signed with the first "Apple Development" identity in the keychain (`--identity`) and the newest
   provisioning profile on the Mac that fits the identifier and has not expired, an exact one before a wildcard
   (`--profile`); Xcode makes both the first time it builds an app for the device. It does not make a profile.

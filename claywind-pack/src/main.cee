@@ -335,7 +335,9 @@ fn packIos(o: borrow Options, simulator: bool) -> i32 {
     }
     let triple = if (simulator) "arm64-apple-ios17.0-simulator" else "arm64-apple-ios17.0";
     let app = cat(["out/pack/", if (simulator) "ios-simulator/" else "ios/", o.name.view(), ".app"]);
-    let flags: [StringView; 10] = [
+    // The main thread's stack is 1 MiB on iOS, an eighth of a Mac's, and UIKit is on it under the program (CeeSafe
+    // ADR 0154): 16 MiB, so an app whose `main` holds large values (a Raster is 123 KiB) runs as it does on a desktop.
+    let flags: [StringView; 12] = [
         "--cc",
         clang.view(),
         "--cflag",
@@ -346,6 +348,8 @@ fn packIos(o: borrow Options, simulator: bool) -> i32 {
         "-isysroot",
         "--cflag",
         sdk.view(),
+        "--cflag",
+        "-Wl,-stack_size,0x1000000",
     ];
     if (!bundle(o, app.view(), true, flags[..])) {
         return fail("the app was not built");

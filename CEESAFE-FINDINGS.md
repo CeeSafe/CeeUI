@@ -371,5 +371,11 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   (ADR 0154). With the entry inlined (`-Os`), `main`'s frame was 621 KiB in the GPU host: twice on the main thread's
   1 MiB, so the app ended at once on an iPhone (the desktop host's frame is smaller, so it ran). Fixed in the
   compiler: a windowed program runs in a function of its own, never inlined, and `main` keeps nothing.
+- **O13 (open, CeeSafe's and ClayWind's). A function's frame holds every copy of a large value.** `var masks = match
+  (Raster.create(…)) { Ok(r) => r, … }` leaves four `Raster`s in the frame (the result, a temporary, `r`, `masks`),
+  each a slot of its own for the whole function, since the generated C declares every local and temporary at the
+  function's top; a `Raster` is 123 KiB (its layout and bidi buffers are inline), so the GPU host's `main` is 745 KiB.
+  With 0.62.1 (O11) that still overflowed an iPhone's 1 MiB main stack when built by ceesafec directly (Xcode's `-Os`
+  build, 621 KiB, fitted). `claywind-pack` links iOS apps with a 16 MiB stack; the frames themselves are as large.
 - **O12 (ClayWind's own). The GPU host had its own list of fonts**, without a phone's, so it ended before Metal
   started; the Simulator hid it by reading the Mac's fonts. It uses claywind-desktop's `loadSystemFonts` now.
