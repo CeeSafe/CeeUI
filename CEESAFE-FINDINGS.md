@@ -371,14 +371,18 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   (ADR 0154). With the entry inlined (`-Os`), `main`'s frame was 621 KiB in the GPU host: twice on the main thread's
   1 MiB, so the app ended at once on an iPhone (the desktop host's frame is smaller, so it ran). Fixed in the
   compiler: a windowed program runs in a function of its own, never inlined, and `main` keeps nothing.
-- **O13 (ClayWind's part fixed; CeeSafe's open). A function's frame holds every copy of a large value.** `var masks =
-  match (Raster.create(…)) { Ok(r) => r, … }` leaves four `Raster`s in the frame (the result, a temporary, `r`,
-  `masks`), each a slot of its own for the whole function, since the generated C declares every local and temporary at
-  the function's top. A `Raster` was 123 KiB (its shaping and bidi buffers inline), so the GPU host's `main` was
-  745 KiB: with 0.62.1 (O11) that still overflowed an iPhone's 1 MiB main stack when built by ceesafec directly
-  (Xcode's `-Os` build, 621 KiB, fitted). ClayWind's part: the two buffers are in the Raster's memory now, a `Raster`
-  is about 3 KiB and that `main` 10 KiB; `claywind-pack` also links iOS apps with a 16 MiB stack. CeeSafe's part stays:
-  the copies and their slots are as before, for any other large value.
+- **O13 (ClayWind's part fixed; CeeSafe's open, and narrower than first written). A function's frame holds several
+  copies of a large value.** The GPU host's `main` was 745 KiB when a `Raster` was 123 KiB (its shaping and bidi
+  buffers inline): with 0.62.1 (O11) that still overflowed an iPhone's 1 MiB main stack when built by ceesafec
+  directly (Xcode's `-Os` build, 621 KiB, fitted). ClayWind's part: the two buffers are in the Raster's memory now, a
+  `Raster` is about 3 KiB and that `main` 10 KiB; `claywind-pack` also links iOS apps with a 16 MiB stack.
+  - **Corrected (2026-11-17).** This entry first said the frame held the value five times because the generated C
+    passes it through five variables. That counted the C's variables, not the binary's slots. CeeSafe's ADR 0162
+    (temporary forwarding) removes the pass-through ones, and measured: the same host's `main` is 745,408 bytes
+    without it and 745,456 with it at `-O2`, because clang already forwards those. It is a fifth smaller only as a
+    debug build.
+  - **What is open**: the copies that are real in a release build: the call's `Result`, the binding it is matched
+    into, the variable that binding is moved to, and the copy inside a struct made from it by value.
 - **O14 (ClayWind's own, fixed). An iPhone's text was boxes.** The font reader took a cmap of the Unicode platform
   only with encoding 3 or 4; Helvetica Neue's faces say 0/1, so no character had a glyph. The demo hid it (its
   fallback fonts drew the text, with no bold); the chat client showed boxes, which the owner saw on his iPhone.
