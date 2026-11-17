@@ -393,8 +393,11 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   - **0.64.0 (ADR 0163 part 1)**: `ceesafec build --explain-frames` lists each sync function whose values of 4 KiB
     or more add up to 64 KiB or more, and warning N0406 names one at 256 KiB. The host at `7315bac` gets the warning
     on `main` (estimate 370,552 bytes; 745,408 in the binary, where clang inlined two callees). Today's ClayWind has
-    no warning; the report names `Raster.create` at 245,504 bytes, which takes the two text buffers by value before
-    it puts them in its memory.
+    no warning; the report names `Raster.create` at an estimated 245,504 bytes, which takes the two text buffers by
+    value before it puts them in its memory. **That is the estimate, 3.6 times the frame**: in the binary
+    `Raster.create` is 67,632 bytes and `emptyLayoutBuffer` 24,576, about 92 KiB once at start-up. Left as it is
+    (the owner: "Leave the code and correct the records"): building the buffers in place would make both of them
+    slices with a region, through some 40 signatures of the shaper.
   - **Not done, by decision**: the two compiler changes (ADR 0163 parts 2 and 3). A survey of the compiler,
     ClayWind, the chat client, CeeSafe.Web and the HTTP client found the shape only here.
 - **O14 (ClayWind's own, fixed). An iPhone's text was boxes.** The font reader took a cmap of the Unicode platform
