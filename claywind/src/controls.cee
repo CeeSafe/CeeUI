@@ -106,6 +106,7 @@ public struct Controls {
         }
         let node = ui.access(h, AccessRole.TextField, id.bytes());
         ui.accessValue(node, buf[0..len]);
+        ui.accessCaret(node, len, len); // it edits at its end
         ui.open(Style.row().alignXY(AxisAlign.Start, AxisAlign.Center));
         if (len > 0) {
             ui.labelBytes(buf[0..len], Text.of().color(SLATE_100));
@@ -517,6 +518,7 @@ public struct Controls {
         ui.open(Controls.fieldStyle(h, focused));
         let node = ui.access(h, AccessRole.TextField, id.bytes());
         ui.accessValue(node, buf[0..len]);
+        ui.accessCaret(node, caret, caret);
         if (ui.pressedOn(h)) {
             ui.setFocus(h);
         } else if (ui.hasFocus(h) && ui.releasedOutside(h)) {

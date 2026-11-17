@@ -53,6 +53,8 @@ fn accessSum(ui: borrow Ui) -> u64 {
         sum = mix(sum, node.min.bits() as u64);
         sum = mix(sum, node.max.bits() as u64);
         sum = mix(sum, node.now.bits() as u64);
+        sum = mix(sum, node.caret as u64);
+        sum = mix(sum, node.anchor as u64);
         match (ui.accessBox(node)) {
             Some(box) => {
                 sum = mix(sum, box.x.bits() as u64);
@@ -141,6 +143,8 @@ public fn giveAccessNodes(ui: borrow Ui, window: borrow mut Window, last: borrow
             labelLength: truncate<u32>(label.length),
             valueStart: valueStart,
             valueLength: truncate<u32>(value.length),
+            caret: truncate<u32>(node.caret.min(value.length)),
+            anchor: truncate<u32>(node.anchor.min(value.length)),
         }) is Ok();
         if (!ok) {
             return;
