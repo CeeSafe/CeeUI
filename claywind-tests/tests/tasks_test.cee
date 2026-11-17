@@ -19,7 +19,19 @@ fn collect(task: borrow mut Task<u64>, ui: borrow mut Ui, want: u64) -> u64 {
             }
             null => {
                 if (!task.running() && spins > 1000) {
-                    return total;
+                    // The job has returned, so all it sent is in the channel now: what it sent between the poll
+                    // above and its return is taken here (without this the sum was short when the machine was busy).
+                    loop {
+                        match (task.poll(mut ui)) {
+                            Some(v) => {
+                                total += v;
+                                if (v == want) {
+                                    return total;
+                                }
+                            }
+                            null => { return total; }
+                        }
+                    }
                 }
                 spins += 1;
             }

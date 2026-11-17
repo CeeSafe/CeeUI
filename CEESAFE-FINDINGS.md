@@ -390,7 +390,9 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   the keyboard's going moved the Send button from under the finger (a second tap was needed); then, fixed at the
   release, the keyboard blinked when Send focused the field again. A field leaves at the end of the frame the tap
   ends in, unless it is focused again. Each found by the owner on his phones; a test covers the three.
-- **O17 (open, ClayWind's own). `aJobsValuesReachTheUi` failed once in three runs** ("expected 55, got 36") while
-  the machine's load was above 40, and passed otherwise: a test of threads that depends on time.
+- **O17 (ClayWind's own, fixed). `aJobsValuesReachTheUi` failed once in three runs** ("expected 55, got 36") while
+  the machine's load was above 40. The test's collector, not the library: it polled, found nothing, then saw the job
+  had returned and gave up, without taking what the job sent in between. It takes that now. Twelve runs passed on a
+  calm machine; a run under sixteen busy loops was stopped unfinished (the machine's load passed 200).
 - **O12 (ClayWind's own). The GPU host had its own list of fonts**, without a phone's, so it ended before Metal
   started; the Simulator hid it by reading the Mac's fonts. It uses claywind-desktop's `loadSystemFonts` now.
