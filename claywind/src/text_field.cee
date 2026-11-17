@@ -136,6 +136,10 @@ impl Controls {
                 }
                 null => {}
             }
+        } else if (ui.hasFocus(h) && ui.pressedOutside(h, 0)) {
+            // A press anywhere else leaves the field (on a phone, that hides the keyboard). A field pressed in the same
+            // frame takes the focus itself, before this or after it.
+            ui.clearFocus();
         } else if (ui.captured() == h && p.down && ui.pressCount() < 2) {
             match (box) {
                 Some(b) => { edit.caret = offsetAt(metrics, buf[0..len], p.position.x - b.x - padX); }
