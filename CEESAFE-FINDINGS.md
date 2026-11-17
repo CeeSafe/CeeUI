@@ -360,9 +360,15 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
 - **O8 (fixed in ceesafec 0.62.0). `sendFile`'s copy pushed a byte at a time.** Where there is no sendfile (the
   interpreter always), lib/std filled each 64 KiB piece with 65,536 calls of `push`, so one corpus program took 24 s
   interpreted and timed out on a loaded machine. Met in the contract suite for ADR 0159. One `resize` now: 0.5 s.
-- **O9 (open). The interpreter is slow at plain work.** `run-pass/ordered-map.cee` takes 31 s interpreted (44 s with
-  0.33.0, so no regression) and can pass the corpus's 60 s on a loaded machine. About a third of a profile is
-  allocation: a value is a vector of its own.
+- **O9 (fixed in part in 0.64.0; the rest is a redesign, shelved). The interpreter is slow at plain work.**
+  `run-pass/ordered-map.cee` took 31 s interpreted (44 s with 0.33.0, so no regression) and could pass the corpus's
+  60 s on a loaded machine. 37% of a profile was allocation: a value was two vectors, each grown a byte at a time.
+  - **0.64.0**: a value's bytes are taken once; a value of 8 bytes or fewer has no memory of its own; an ended local
+    of 16 bytes or fewer keeps its buffers for its next use. The same program, 0.63.0 against 0.64.0, run
+    alternately: 33.4 and 29.9 s against 19.1 and 18.8 s. Allocation is about a tenth of the profile now.
+  - **What is left** is the interpreter's own statement and expression code, and layouts worked out at run time.
+    More than this needs each function decoded once into fixed slots: an ADR and a rewrite of its core, not asked
+    for.
 - **O10 (open). The compiler's own sources must keep to what ceesafec 0.8.0 accepts**, and only the release
   bootstrap says so: `??`, a `var` of a view and a slice of a call's result in `src/interpreter/io.cee` built with
   the current compiler and failed the bootstrap for 0.62.0, twice. A check in the contract suite would say it sooner.
@@ -371,7 +377,7 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   (ADR 0154). With the entry inlined (`-Os`), `main`'s frame was 621 KiB in the GPU host: twice on the main thread's
   1 MiB, so the app ended at once on an iPhone (the desktop host's frame is smaller, so it ran). Fixed in the
   compiler: a windowed program runs in a function of its own, never inlined, and `main` keeps nothing.
-- **O13 (ClayWind's part fixed; CeeSafe's open, and narrower than first written). A function's frame holds several
+- **O13 (ClayWind's part fixed; CeeSafe reports it since 0.64.0, ADR 0163 part 1). A function's frame holds several
   copies of a large value.** The GPU host's `main` was 745 KiB when a `Raster` was 123 KiB (its shaping and bidi
   buffers inline): with 0.62.1 (O11) that still overflowed an iPhone's 1 MiB main stack when built by ceesafec
   directly (Xcode's `-Os` build, 621 KiB, fitted). ClayWind's part: the two buffers are in the Raster's memory now, a
@@ -381,8 +387,16 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
     (temporary forwarding) removes the pass-through ones, and measured: the same host's `main` is 745,408 bytes
     without it and 745,456 with it at `-O2`, because clang already forwards those. It is a fifth smaller only as a
     debug build.
-  - **What is open**: the copies that are real in a release build: the call's `Result`, the binding it is matched
-    into, the variable that binding is moved to, and the copy inside a struct made from it by value.
+  - **What the copies are** in a release build: the call's `Result`, the local its payload ends in, and the struct
+    made from it by value. ADR 0163 measured hand-edited C: passing the value by pointer alone, or using the payload
+    where it is alone, leaves three; both together leave two.
+  - **0.64.0 (ADR 0163 part 1)**: `ceesafec build --explain-frames` lists each sync function whose values of 4 KiB
+    or more add up to 64 KiB or more, and warning N0406 names one at 256 KiB. The host at `7315bac` gets the warning
+    on `main` (estimate 370,552 bytes; 745,408 in the binary, where clang inlined two callees). Today's ClayWind has
+    no warning; the report names `Raster.create` at 245,504 bytes, which takes the two text buffers by value before
+    it puts them in its memory.
+  - **Not done, by decision**: the two compiler changes (ADR 0163 parts 2 and 3). A survey of the compiler,
+    ClayWind, the chat client, CeeSafe.Web and the HTTP client found the shape only here.
 - **O14 (ClayWind's own, fixed). An iPhone's text was boxes.** The font reader took a cmap of the Unicode platform
   only with encoding 3 or 4; Helvetica Neue's faces say 0/1, so no character had a glyph. The demo hid it (its
   fallback fonts drew the text, with no bold); the chat client showed boxes, which the owner saw on his iPhone.
