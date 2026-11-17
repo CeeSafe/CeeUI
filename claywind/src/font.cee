@@ -2,7 +2,7 @@
 // TrueType fonts: a port of ThorVG 1.1.2's sfnt/TTF reader (tvgSfntReader.cpp, tvgTtfReader.cpp), which is what
 // renders ClayWind's text today, so glyph shapes, advances, kerning and the ascent match it.
 //   - tables by binary search of the table directory; head (unitsPerEm, loca format), hhea (ascent, descent,
-//     line gap, long metrics count), maxp, cmap (3/10 or 0/4 format 12, else 3/1 or 0/3 format 4 or 6), hmtx;
+//     line gap, long metrics count), maxp, cmap (3/10, 0/4 or 0/6 format 12, else 3/1 or 0/0 to 0/3 format 4 or 6), hmtx;
 //   - outlines from glyf/loca: quadratic contours become cubics (the 2/3 rule), y flipped; composite glyphs place
 //     their components by offset (ThorVG ignores component scales too);
 //   - kerning from a format-0 `kern` table (no GPOS, as ThorVG).
@@ -333,6 +333,14 @@ public fn cmapGlyph(cmap: Slice<u8>, codepoint: u32) -> u32 {
     return if (g == INVALID_GLYPH) 0 else g;
 }
 
+/// Whether a cmap record's platform × 64 + encoding is one of all of Unicode: the Unicode platform's 4 and 6, or
+/// Windows' 10.
+fn cmapIsFull(kind: u32) -> bool => kind == 4 || kind == 6 || kind == 202;
+
+/// Whether it is one of the Basic Multilingual Plane: the Unicode platform's 0 to 3 (its versions 1.0, 1.1, ISO 10646
+/// and 2.0: Apple's fonts say 1, Helvetica Neue among them), or Windows' 1.
+fn cmapIsBmp(kind: u32) -> bool => kind <= 3 || kind == 193;
+
 /// glyphIndex for the cmap table at `base` of `d`.
 fn cmapLookup(d: Slice<u8>, base: usize, codepoint: u32) -> u32 {
     let count = u16at(d, base + 2) as usize;
@@ -342,7 +350,7 @@ fn cmapLookup(d: Slice<u8>, base: usize, codepoint: u32) -> u32 {
     for (i in 0..count) {
         let entry = base + 4 + i * 8;
         let kind = u16at(d, entry) * 64 + u16at(d, entry + 2);
-        if (kind == 4 || kind == 202) {
+        if (cmapIsFull(kind)) {
             let table = base + (u32at(d, entry + 4) as usize);
             if (!valid(d, table, 8)) {
                 return INVALID_GLYPH;
@@ -353,7 +361,7 @@ fn cmapLookup(d: Slice<u8>, base: usize, codepoint: u32) -> u32 {
     for (i in 0..count) {
         let entry = base + 4 + i * 8;
         let kind = u16at(d, entry) * 64 + u16at(d, entry + 2);
-        if (kind == 3 || kind == 193) {
+        if (cmapIsBmp(kind)) {
             let table = base + (u32at(d, entry + 4) as usize);
             if (!valid(d, table, 6)) {
                 return INVALID_GLYPH;
@@ -384,7 +392,7 @@ fn cmapSubtable(d: Slice<u8>, base: usize) -> [usize; 2]? {
         for (i in 0..count) {
             let entry = base + 4 + i * 8;
             let kind = u16at(d, entry) * 64 + u16at(d, entry + 2);
-            let wanted = if (pass == 0) kind == 4 || kind == 202 else kind == 3 || kind == 193;
+            let wanted = if (pass == 0) cmapIsFull(kind) else cmapIsBmp(kind);
             if (wanted) {
                 let table = base + (u32at(d, entry + 4) as usize);
                 if (!valid(d, table, 2)) {

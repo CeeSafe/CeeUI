@@ -377,5 +377,9 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   function's top; a `Raster` is 123 KiB (its layout and bidi buffers are inline), so the GPU host's `main` is 745 KiB.
   With 0.62.1 (O11) that still overflowed an iPhone's 1 MiB main stack when built by ceesafec directly (Xcode's `-Os`
   build, 621 KiB, fitted). `claywind-pack` links iOS apps with a 16 MiB stack; the frames themselves are as large.
+- **O14 (ClayWind's own, fixed). An iPhone's text was boxes.** The font reader took a cmap of the Unicode platform
+  only with encoding 3 or 4; Helvetica Neue's faces say 0/1, so no character had a glyph. The demo hid it (its
+  fallback fonts drew the text, with no bold); the chat client showed boxes, which the owner saw on his iPhone.
+  Every encoding of the Unicode platform is read now; a test builds such a cmap.
 - **O12 (ClayWind's own). The GPU host had its own list of fonts**, without a phone's, so it ended before Metal
   started; the Simulator hid it by reading the Mac's fonts. It uses claywind-desktop's `loadSystemFonts` now.

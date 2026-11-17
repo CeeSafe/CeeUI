@@ -136,3 +136,31 @@ fn uiLaysOutAndRendersWithTheRasterFonts() -> Result<void, TestFailure> {
     }
     return Check.isTrue(ink > 40, "white glyph ink on the dark label");
 }
+
+/// A cmap table with one record, `platform` and `encoding`, whose format 4 subtable maps 'A' to 'Z' to glyphs 1 to 26.
+fn cmapOf(platform: u8, encoding: u8) -> [u8; 44] => [
+    0, 0, 0, 1, // version, one record
+    0, platform, 0, encoding, 0, 0, 0, 12, // the record: its subtable at 12
+    0, 4, 0, 32, 0, 0, // format 4, length, language
+    0, 4, 0, 4, 0, 1, 0, 0, // two segments: segCountX2, searchRange, entrySelector, rangeShift
+    0, 90, 0xFF, 0xFF, // end codes
+    0, 0, // reserved
+    0, 65, 0xFF, 0xFF, // start codes
+    0xFF, 0xC0, 0, 1, // deltas: -64, so 'A' is glyph 1
+    0, 0, 0, 0, // range offsets
+];
+
+/// The Unicode platform's older encodings are Unicode too: Apple's fonts (Helvetica Neue, an iPhone's text face) say
+/// 0/1, and every character of such a font was a box.
+@test
+fn readsEveryUnicodePlatformCmap() -> Result<void, TestFailure> {
+    for (encoding in 0u8..4) {
+        let cmap = cmapOf(0, encoding);
+        Check.equalU64(1, cmapGlyph(cmap[..], 'A') as u64)?;
+        Check.equalU64(26, cmapGlyph(cmap[..], 'Z') as u64)?;
+    }
+    let windows = cmapOf(3, 1);
+    Check.equalU64(2, cmapGlyph(windows[..], 'B') as u64)?;
+    let symbol = cmapOf(3, 0); // Windows' symbol encoding is not Unicode: no glyph
+    return Check.isTrue(cmapGlyph(symbol[..], 'A') != 1, "a symbol cmap is not read as Unicode");
+}
