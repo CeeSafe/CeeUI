@@ -87,6 +87,7 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 | `claywind-tasks/` | Background work for a UI (hosted): a `Task` runs jobs on threads of their own, whose results wake the window (`Window.waitEvent`) and reach the frame through `poll`; a new job cancels the one before |
 | `claywind-demo/` | The demo app (the C version's `main.c`) and `ScriptPlatform`, a scripted input source for tests |
 | `claywind-dev/` | Hot reload: rebuilds an app when its sources change and restarts it where it was (`--hot`) |
+| `claywind-pack/` | Packaging: an app as a macOS `.app`, an iOS `.app` (simulator, or signed for a device) or an Android `.apk`, from its package directory |
 | `claywind-demo-tasks/` | What both hosts share for the demo: its saved state (`hotSave`, `hotRestore`: hot reload's, and a phone's when the app leaves the screen) and its background jobs on threads (`claywind-tasks`): the Controls page's Tasks tab counts primes on one |
 | `claywind-hosts/desktop/` | The demo in a native window: AppKit, Win32 or X11, through CeeSafe's `Window`. The Controls page's Live state panel opens in a second window that shares the app's state and the renderer |
 | `claywind-hosts/headless/` | The demo rendered to files: screenshots, golden tests and benchmarks |
@@ -232,6 +233,30 @@ again when the handle changes, and presents nothing while there is none; the swa
 unrotated, so a phone held sideways is drawn upright. It saves and restores its state as the desktop host does.
 The iOS Simulator's Metal cannot run it (no reading of the render target in a fragment shader); an iPhone can. On an
 iPhone it needs ceesafec 0.62.1 (findings O11).
+
+Packaging (roadmap P4 step 8): `claywind-pack`, run in an app's package directory, makes what a system installs,
+under `out/pack`:
+
+```
+cd claywind-hosts/gpu
+../../claywind-pack/out/claywind_pack macos         --name "ClayWind GPU" --id com.example.gpu   # NAME.app, ad hoc
+../../claywind-pack/out/claywind_pack ios-simulator --name "ClayWind GPU" --id com.example.gpu   # xcrun simctl install
+../../claywind-pack/out/claywind_pack ios           --name "ClayWind GPU" --id com.example.gpu   # xcrun devicectl device install app
+../../claywind-pack/out/claywind_pack android       --name "ClayWind GPU" --id com.example.gpu   # NAME.apk: adb install
+```
+
+It runs `ceesafec build --windowed` for the target, writes the `Info.plist` or the `AndroidManifest.xml` (a
+`NativeActivity` kept through a rotation and the keyboard, `android:configChanges`; every orientation on iOS) and
+runs the system's tools. The name, identifier and version default to the package's (`com.example.<name>`).
+- **iOS device**: signed with the first "Apple Development" identity in the keychain (`--identity`) and the newest
+  provisioning profile on the Mac that fits the identifier and has not expired, an exact one before a wildcard
+  (`--profile`); Xcode makes both the first time it builds an app for the device. It does not make a profile.
+- **Android**: the NDK, build-tools and platform are the newest under `ANDROID_HOME` (`ANDROID_NDK_HOME`);
+  `--abi arm64-v8a,x86_64` builds a library for each; signed with `~/.android/debug.keystore` (`--keystore`,
+  `--keystore-pass`), so it installs but is not a store build.
+- **macOS**: signed ad hoc, for this Mac; no Developer ID, notarization or icon yet.
+It needs a Mac for the Apple targets and a Unix for all (it runs `mkdir`, `cp`, `rm`, `zip`): Windows is not a host
+for it yet.
 
 Hot reload: `claywind-dev`, run in an app's package directory, builds the app, runs it with `--hot out/hot`, and
 watches the sources of the package and of every package it depends on by path. When a source changes it builds

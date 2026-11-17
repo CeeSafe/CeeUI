@@ -1,0 +1,743 @@
+// SPDX-License-Identifier: MIT
+// claywind-pack: a ClayWind app as what a system installs (roadmap P4 step 8). Run it in the app's package directory:
+//
+//   cd claywind-hosts/gpu && ../../claywind-pack/out/claywind_pack android --name "ClayWind GPU" --id com.example.gpu
+//
+//   macos            out/pack/NAME.app, signed ad hoc (this Mac only)
+//   ios-simulator    out/pack/ios-simulator/NAME.app, for `xcrun simctl install`
+//   ios              out/pack/ios/NAME.app, signed for a device with a development identity and a provisioning
+//                    profile already on this Mac (Xcode makes them), for `xcrun devicectl device install app`
+//   android          out/pack/NAME.apk: a NativeActivity app, signed with the debug key, for `adb install`
+//
+// It runs ceesafec for the target, writes the Info.plist or AndroidManifest.xml, and runs the system's own tools
+// (xcrun, codesign, security; the NDK's clang, aapt2, zipalign, apksigner). It needs a Mac for the Apple targets, and
+// a Unix (`mkdir`, `cp`, `rm`, `zip`, `sh`) for all of them: Windows is not a host for it yet.
+
+/// What to pack, and as what.
+struct Options {
+    target: String;
+    name: String;     // the app's name on the system: --name, else the package's
+    id: String;       // its bundle identifier or Android package: --id, else com.example.<package>
+    version: String;  // --version, else the package's
+    binary: String;   // the executable's name inside a bundle: the package's name
+    abis: String;     // --abi, Android's, comma separated: arm64-v8a by default
+    profile: String;  // --profile, a .mobileprovision; else the newest fitting one Xcode keeps
+    identity: String; // --identity, a signing identity; else the first "Apple Development" one
+    keystore: String; // --keystore, else ~/.android/debug.keystore (password "android")
+    storePass: String;
+}
+
+fn fail(what: StringView) -> i32 {
+    Console.writeError("claywind-pack: ");
+    Console.writeErrorLine(what);
+    return 1;
+}
+
+fn fail2(what: StringView, more: StringView) -> i32 {
+    Console.writeError("claywind-pack: ");
+    Console.writeError(what);
+    Console.writeErrorLine(more);
+    return 1;
+}
+
+fn text(s: StringView) -> String => String.from(s)!;
+
+/// The pieces joined.
+fn cat<const N: usize>(parts: [StringView; N]) -> String {
+    var s = String.create();
+    for (p in parts[..]) {
+        s.append(p)!;
+    }
+    return s;
+}
+
+/// The text of the file at `path`, or empty.
+fn readText(path: StringView) -> String {
+    var s = String.create();
+    match (File.open(path)) {
+        Ok(f) => {
+            var file = f;
+            var chunk = [0u8; 8192];
+            var bytes = Vector<u8>.create();
+            loop {
+                let n = match (file.read(mut chunk[..])) {
+                    Ok(k) => k,
+                    Err(_) => 0,
+                };
+                if (n == 0) {
+                    break;
+                }
+                bytes.extend(chunk[0..n])!;
+            }
+            let ok = s.appendUtf8(bytes.view())!;
+        }
+        Err(_) => {}
+    }
+    return s;
+}
+
+fn writeText(path: StringView, content: StringView) -> bool {
+    return match (File.create(path)) {
+        Ok(f) => {
+            var file = f;
+            match (file.write(content.bytes())) {
+                Ok() => true,
+                Err(_) => false,
+            }
+        }
+        Err(_) => false,
+    };
+}
+
+/// Runs `program` with `arguments`, its output shown; whether it ended with 0.
+fn run<const N: usize>(program: StringView, arguments: [StringView; N]) -> bool {
+    var args = Vector<StringView>.create();
+    args.extend(arguments[..])!;
+    return match (Process.run(program, args)) {
+        Ok(status) => status == 0,
+        Err(_) => {
+            Console.writeError("claywind-pack: cannot run ");
+            Console.writeErrorLine(program);
+            false
+        }
+    };
+}
+
+/// What `program` prints, trimmed; empty when it cannot run or fails.
+fn output<const N: usize>(program: StringView, arguments: [StringView; N]) -> String {
+    var args = Vector<StringView>.create();
+    args.extend(arguments[..])!;
+    var s = String.create();
+    match (Process.capture(program, args, "".bytes())) {
+        Ok(result) => {
+            if (result.status == 0) {
+                match (StringView.fromUtf8(result.stdout.view())) {
+                    Some(t) => { s.append(t.trim())!; }
+                    null => {}
+                }
+            }
+        }
+        Err(_) => {}
+    }
+    return s;
+}
+
+/// The value of `key = "value"` in a ceesafe.toml's text, or empty.
+fn tomlValue(toml: StringView, key: StringView) -> String {
+    var lines = toml.split("\n");
+    loop {
+        let line = match (lines.next()) {
+            Some(l) => l.trim(),
+            null => { break; }
+        };
+        match (line.splitOnce("=")) {
+            Some(halves) => {
+                if (halves.left.trim() == key) {
+                    let value = halves.right.trim();
+                    if (value.length >= 2 && value.bytes()[0] == '"') {
+                        match (value[1..].indexOf("\"")) {
+                            Some(end) => { return text(value[1..1 + end]); }
+                            null => {}
+                        }
+                    }
+                }
+            }
+            null => {}
+        }
+    }
+    return String.create();
+}
+
+/// `s` with what XML reserves escaped.
+fn xml(s: StringView) -> String {
+    var out = String.create();
+    let b = s.bytes();
+    var start: usize = 0; // the run of plain text not yet copied: whole characters, since the reserved ones are ASCII
+    for (i in 0..b.length + 1) {
+        let escape = if (i == b.length) ""
+            else if (b[i] == '&') "&amp;"
+            else if (b[i] == '<') "&lt;"
+            else if (b[i] == '>') "&gt;"
+            else if (b[i] == '"') "&quot;"
+            else "";
+        if (i == b.length || escape.length > 0) {
+            out.append(s[start..i])!;
+            out.append(escape)!;
+            start = i + 1;
+        }
+    }
+    return out;
+}
+
+/// An empty directory at `path`, its parents made.
+fn freshDirectory(path: StringView) -> bool {
+    return run("rm", ["-rf", path]) && run("mkdir", ["-p", path]);
+}
+
+/// The first directory entry of `dir` in descending order: the newest of versions named by number.
+fn newest(dir: StringView) -> String {
+    var best = String.create();
+    match (Directory.list(dir)) {
+        Ok(names) => {
+            for (n in names.view()) {
+                if (n.view().bytes().length > 0 && n.view().bytes()[0] != '.' && later(n.view(), best.view())) {
+                    best = text(n.view());
+                }
+            }
+        }
+        Err(_) => {}
+    }
+    return best;
+}
+
+/// Whether version `a` is after `b`, number by number ("36.1.0" after "9.0.0"; "android-36" after "android-9").
+fn later(a: StringView, b: StringView) -> bool {
+    let x = a.bytes();
+    let y = b.bytes();
+    var i: usize = 0;
+    var j: usize = 0;
+    loop {
+        if (i >= x.length) {
+            return false;
+        }
+        if (j >= y.length) {
+            return true;
+        }
+        let dx = x[i] >= '0' && x[i] <= '9';
+        let dy = y[j] >= '0' && y[j] <= '9';
+        if (dx && dy) {
+            var n: u64 = 0;
+            while (i < x.length && x[i] >= '0' && x[i] <= '9') {
+                n = n.wrappingMul(10).wrappingAdd((x[i] - '0') as u64);
+                i += 1;
+            }
+            var m: u64 = 0;
+            while (j < y.length && y[j] >= '0' && y[j] <= '9') {
+                m = m.wrappingMul(10).wrappingAdd((y[j] - '0') as u64);
+                j += 1;
+            }
+            if (n != m) {
+                return n > m;
+            }
+        } else {
+            if (x[i] != y[j]) {
+                return x[i] > y[j];
+            }
+            i += 1;
+            j += 1;
+        }
+    }
+}
+
+/// An Apple bundle's Info.plist.
+fn infoPlist(o: borrow Options, phone: bool) -> String {
+    var p = String.create();
+    p.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")!;
+    p.append(
+        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n",
+    )!;
+    p.append("<plist version=\"1.0\">\n<dict>\n")!;
+    let pairs: [StringView; 12] = [
+        "CFBundleExecutable",
+        o.binary.view(),
+        "CFBundleIdentifier",
+        o.id.view(),
+        "CFBundleName",
+        o.name.view(),
+        "CFBundleDisplayName",
+        o.name.view(),
+        "CFBundleShortVersionString",
+        o.version.view(),
+        "CFBundlePackageType",
+        "APPL",
+    ];
+    for (k in 0usize..6) {
+        p.append("\t<key>")!;
+        p.append(pairs[k * 2])!;
+        p.append("</key><string>")!;
+        p.append(xml(pairs[k * 2 + 1]).view())!;
+        p.append("</string>\n")!;
+    }
+    p.append("\t<key>CFBundleVersion</key><string>1</string>\n")!;
+    if (phone) {
+        p.append("\t<key>LSRequiresIPhoneOS</key><true/>\n")!;
+        p.append("\t<key>MinimumOSVersion</key><string>17.0</string>\n")!;
+        p.append("\t<key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>\n")!;
+        p.append("\t<key>UILaunchScreen</key><dict/>\n")!;
+        p.append("\t<key>CFBundleSupportedPlatforms</key><array><string>iPhoneOS</string></array>\n")!;
+        // Every orientation: a ClayWind app lays out again at each size (its size classes).
+        p.append("\t<key>UISupportedInterfaceOrientations</key><array>")!;
+        p.append("<string>UIInterfaceOrientationPortrait</string>")!;
+        p.append("<string>UIInterfaceOrientationLandscapeLeft</string>")!;
+        p.append("<string>UIInterfaceOrientationLandscapeRight</string></array>\n")!;
+    } else {
+        p.append("\t<key>LSMinimumSystemVersion</key><string>12.0</string>\n")!;
+        p.append("\t<key>NSHighResolutionCapable</key><true/>\n")!;
+    }
+    p.append("</dict>\n</plist>\n")!;
+    return p;
+}
+
+/// Builds the package here with `arguments` after `build --windowed`; whether it built.
+fn build(arguments: Slice<StringView>) -> bool {
+    var args = Vector<StringView>.create();
+    args.push("build")!;
+    args.push("--windowed")!;
+    args.extend(arguments)!;
+    return match (Process.run("ceesafec", args)) {
+        Ok(status) => status == 0,
+        Err(_) => {
+            Console.writeErrorLine("claywind-pack: cannot run ceesafec (is it on PATH?)");
+            false
+        }
+    };
+}
+
+/// The .app at `app` for a Mac or a phone: the directory, the executable built into it, and its Info.plist.
+fn bundle(o: borrow Options, app: StringView, phone: bool, flags: Slice<StringView>) -> bool {
+    let inner = if (phone) text(app) else cat([app, "/Contents/MacOS"]);
+    if (!freshDirectory(inner.view())) {
+        return false;
+    }
+    let exe = cat([inner.view(), "/", o.binary.view()]);
+    var args = Vector<StringView>.create();
+    args.extend(flags)!;
+    args.push("-o")!;
+    args.push(exe.view())!;
+    if (!build(args.view())) {
+        return false;
+    }
+    let plist = if (phone) cat([app, "/Info.plist"]) else cat([app, "/Contents/Info.plist"]);
+    return writeText(plist.view(), infoPlist(o, phone).view());
+}
+
+fn packMac(o: borrow Options) -> i32 {
+    let app = cat(["out/pack/", o.name.view(), ".app"]);
+    let none = Vector<StringView>.create();
+    if (!bundle(o, app.view(), false, none.view())) {
+        return fail("the app was not built");
+    }
+    if (!run("codesign", ["-s", "-", "-f", app.view()])) {
+        return fail("codesign failed");
+    }
+    Console.write("packed ");
+    Console.writeLine(app.view());
+    return 0;
+}
+
+/// The cc flags of an iOS build for `sdk` ("iphoneos" or "iphonesimulator") and `triple`, after finding its clang.
+fn packIos(o: borrow Options, simulator: bool) -> i32 {
+    let sdkName = if (simulator) "iphonesimulator" else "iphoneos";
+    let clang = output("xcrun", ["--sdk", sdkName, "-f", "clang"]);
+    let sdk = output("xcrun", ["--sdk", sdkName, "--show-sdk-path"]);
+    if (clang.view().length == 0 || sdk.view().length == 0) {
+        return fail("no iOS SDK: xcrun did not find one (is Xcode installed and selected?)");
+    }
+    let triple = if (simulator) "arm64-apple-ios17.0-simulator" else "arm64-apple-ios17.0";
+    let app = cat(["out/pack/", if (simulator) "ios-simulator/" else "ios/", o.name.view(), ".app"]);
+    let flags: [StringView; 10] = [
+        "--cc",
+        clang.view(),
+        "--cflag",
+        "-target",
+        "--cflag",
+        triple,
+        "--cflag",
+        "-isysroot",
+        "--cflag",
+        sdk.view(),
+    ];
+    if (!bundle(o, app.view(), true, flags[..])) {
+        return fail("the app was not built");
+    }
+    if (simulator) {
+        if (!run("codesign", ["-s", "-", "-f", app.view()])) {
+            return fail("codesign failed");
+        }
+    } else {
+        let signed = signForDevice(o, app.view());
+        if (signed != 0) {
+            return signed;
+        }
+    }
+    Console.write("packed ");
+    Console.writeLine(app.view());
+    return 0;
+}
+
+/// The text between `<string>` and `</string>` after `key` in a property list's XML, or empty.
+fn plistString(plist: StringView, key: StringView) -> String {
+    let marker = cat(["<key>", key, "</key>"]);
+    match (plist.indexOf(marker.view())) {
+        Some(at) => {
+            let rest = plist[at + marker.view().length..];
+            match (rest.indexOf("<string>")) {
+                Some(open) => {
+                    let value = rest[open + 8..];
+                    match (value.indexOf("</string>")) {
+                        Some(close) => { return text(value[0..close]); }
+                        null => {}
+                    }
+                }
+                null => {}
+            }
+        }
+        null => {}
+    }
+    return String.create();
+}
+
+/// The same for a `<date>`.
+fn plistDate(plist: StringView, key: StringView) -> String {
+    let marker = cat(["<key>", key, "</key>"]);
+    match (plist.indexOf(marker.view())) {
+        Some(at) => {
+            let rest = plist[at + marker.view().length..];
+            match (rest.indexOf("<date>")) {
+                Some(open) => {
+                    let value = rest[open + 6..];
+                    match (value.indexOf("</date>")) {
+                        Some(close) => { return text(value[0..close]); }
+                        null => {}
+                    }
+                }
+                null => {}
+            }
+        }
+        null => {}
+    }
+    return String.create();
+}
+
+/// A provisioning profile for `id` that has not expired: the file and its application identifier (TEAM.id or
+/// TEAM.*). An exact one before a wildcard, then the one that expires last. Empty when there is none.
+struct Profile {
+    path: String;
+    appId: String;
+}
+
+fn findProfile(id: StringView) -> Profile {
+    var found = Profile { path: String.create(), appId: String.create() };
+    var foundExact = false;
+    var foundExpiry = String.create();
+    let now = output("date", ["-u", "+%Y-%m-%dT%H:%M:%SZ"]);
+    let home = Environment.variable("HOME") ?? "";
+    var places = Vector<String>.create();
+    places.push(cat([home, "/Library/Developer/Xcode/UserData/Provisioning Profiles"]))!;
+    places.push(cat([home, "/Library/MobileDevice/Provisioning Profiles"]))!;
+    for (place in places.view()) {
+        let names = match (Directory.list(place.view())) {
+            Ok(n) => n,
+            Err(_) => Vector<String>.create(),
+        };
+        for (name in names.view()) {
+            if (!name.view().endsWith(".mobileprovision")) {
+                continue;
+            }
+            let path = cat([place.view(), "/", name.view()]);
+            let plist = output("security", ["cms", "-D", "-i", path.view()]);
+            let appId = plistString(plist.view(), "application-identifier");
+            let expiry = plistDate(plist.view(), "ExpirationDate");
+            let dot = match (appId.view().indexOf(".")) {
+                Some(d) => d,
+                null => { continue; }
+            };
+            let pattern = appId.view()[dot + 1..];
+            let exact = pattern == id;
+            if (!exact && pattern != "*") {
+                continue;
+            }
+            if (!later(expiry.view(), now.view())) {
+                continue; // expired
+            }
+            let better = if (exact != foundExact) exact else later(expiry.view(), foundExpiry.view());
+            if (found.path.view().length == 0 || better) {
+                found = Profile { path: path, appId: appId };
+                foundExact = exact;
+                foundExpiry = expiry;
+            }
+        }
+    }
+    return found;
+}
+
+/// Signs the bundle at `app` for a device: the profile inside it, and the entitlements the profile's app needs.
+fn signForDevice(o: borrow Options, app: StringView) -> i32 {
+    var profilePath = text(o.profile.view());
+    var appId = String.create();
+    if (profilePath.view().length > 0) {
+        let plist = output("security", ["cms", "-D", "-i", profilePath.view()]);
+        appId = plistString(plist.view(), "application-identifier");
+    } else {
+        let p = findProfile(o.id.view());
+        profilePath = text(p.path.view());
+        appId = text(p.appId.view());
+    }
+    let dot = match (appId.view().indexOf(".")) {
+        Some(d) => d,
+        null => {
+            return fail2(
+                "no provisioning profile on this Mac fits ",
+                o.id.view(),
+            ) + fail("  build any app for the device in Xcode once (it makes a wildcard profile), or pass --profile");
+        }
+    };
+    let team = appId.view()[0..dot];
+    var identity = text(o.identity.view());
+    if (identity.view().length == 0) {
+        // The first "Apple Development" identity: its 40 hex digits, which name it without its owner's name.
+        let listed = output("security", ["find-identity", "-v", "-p", "codesigning"]);
+        var lines = listed.view().split("\n");
+        loop {
+            let line = match (lines.next()) {
+                Some(l) => l.trim(),
+                null => { break; }
+            };
+            if (line.contains("\"Apple Development:")) {
+                match (line.splitOnce(") ")) {
+                    Some(h) => {
+                        match (h.right.splitOnce(" ")) {
+                            Some(parts) => { identity = text(parts.left); }
+                            null => {}
+                        }
+                    }
+                    null => {}
+                }
+                break;
+            }
+        }
+    }
+    if (identity.view().length == 0) {
+        return fail("no \"Apple Development\" signing identity in the keychain; pass --identity");
+    }
+    if (!run("cp", [profilePath.view(), cat([app, "/embedded.mobileprovision"]).view()])) {
+        return fail("could not copy the provisioning profile");
+    }
+    let fullId = cat([team, ".", o.id.view()]);
+    var e = String.create();
+    e.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n")!;
+    e.append("\t<key>application-identifier</key><string>")!;
+    e.append(xml(fullId.view()).view())!;
+    e.append("</string>\n\t<key>com.apple.developer.team-identifier</key><string>")!;
+    e.append(team)!;
+    e.append("</string>\n\t<key>get-task-allow</key><true/>\n")!;
+    e.append("\t<key>keychain-access-groups</key><array><string>")!;
+    e.append(xml(fullId.view()).view())!;
+    e.append("</string></array>\n</dict>\n</plist>\n")!;
+    let entitlements = "out/pack/ios/entitlements.plist";
+    if (!writeText(entitlements, e.view())) {
+        return fail("could not write the entitlements");
+    }
+    if (!run("codesign", ["-f", "-s", identity.view(), "--entitlements", entitlements, app])) {
+        return fail("codesign failed");
+    }
+    return 0;
+}
+
+/// Android's NDK triple for an ABI, or empty for one that is not Android's.
+fn androidTriple(abi: StringView) -> StringView => if (abi == "arm64-v8a") "aarch64-linux-android"
+    else if (abi == "x86_64") "x86_64-linux-android"
+    else if (abi == "armeabi-v7a") "armv7a-linux-androideabi"
+    else if (abi == "x86") "i686-linux-android"
+    else "";
+
+fn androidManifest(o: borrow Options) -> String {
+    var m = String.create();
+    m.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")!;
+    m.append("<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"")!;
+    m.append(xml(o.id.view()).view())!;
+    m.append("\"\n          android:versionCode=\"1\" android:versionName=\"")!;
+    m.append(xml(o.version.view()).view())!;
+    m.append("\">\n  <uses-sdk android:minSdkVersion=\"28\" android:targetSdkVersion=\"36\"/>\n")!;
+    m.append("  <application android:label=\"")!;
+    m.append(xml(o.name.view()).view())!;
+    m.append("\" android:hasCode=\"false\" android:extractNativeLibs=\"true\">\n")!;
+    // The activity is kept through a rotation, a new size and the keyboard (CeeSafe ADR 0156 §2.3): destroyed, the
+    // program would end with it.
+    m.append("    <activity android:name=\"android.app.NativeActivity\" android:exported=\"true\"\n")!;
+    m.append("              android:configChanges=\"orientation|screenSize|screenLayout|keyboardHidden|density|")!;
+    m.append("smallestScreenSize\">\n")!;
+    m.append("      <meta-data android:name=\"android.app.lib_name\" android:value=\"main\"/>\n")!;
+    m.append("      <intent-filter>\n        <action android:name=\"android.intent.action.MAIN\"/>\n")!;
+    m.append("        <category android:name=\"android.intent.category.LAUNCHER\"/>\n      </intent-filter>\n")!;
+    m.append("    </activity>\n  </application>\n</manifest>\n")!;
+    return m;
+}
+
+fn packAndroid(o: borrow Options) -> i32 {
+    let home = Environment.variable("HOME") ?? "";
+    let sdk = match (Environment.variable("ANDROID_HOME")) {
+        Some(s) => text(s),
+        null => match (Environment.variable("ANDROID_SDK_ROOT")) {
+            Some(s) => text(s),
+            null => {
+                let mac = cat([home, "/Library/Android/sdk"]);
+                if (File.kind(mac.view()) is Ok(Some(PathKind.Directory))) mac else cat([home, "/Android/Sdk"])
+            }
+        },
+    };
+    let ndk = match (Environment.variable("ANDROID_NDK_HOME")) {
+        Some(n) => text(n),
+        null => {
+            let dir = cat([sdk.view(), "/ndk"]);
+            cat([dir.view(), "/", newest(dir.view()).view()])
+        }
+    };
+    let toolsDir = cat([sdk.view(), "/build-tools"]);
+    let tools = cat([toolsDir.view(), "/", newest(toolsDir.view()).view()]);
+    let platformsDir = cat([sdk.view(), "/platforms"]);
+    let jar = cat([platformsDir.view(), "/", newest(platformsDir.view()).view(), "/android.jar"]);
+    let prebuiltDir = cat([ndk.view(), "/toolchains/llvm/prebuilt"]);
+    let bin = cat([prebuiltDir.view(), "/", newest(prebuiltDir.view()).view(), "/bin"]);
+    if (!(File.kind(
+        jar.view(),
+    ) is Ok(Some(PathKind.File))) || !(File.kind(bin.view()) is Ok(Some(PathKind.Directory)))) {
+        return fail2(
+            "no Android SDK with an NDK, build-tools and a platform under ",
+            sdk.view(),
+        ) + fail("  set ANDROID_HOME (and ANDROID_NDK_HOME)");
+    }
+    let stage = "out/pack/android";
+    if (!freshDirectory(stage)) {
+        return fail("could not make out/pack/android");
+    }
+    var abis = o.abis.view().split(",");
+    loop {
+        let abi = match (abis.next()) {
+            Some(a) => a.trim(),
+            null => { break; }
+        };
+        let triple = androidTriple(abi);
+        if (triple.length == 0) {
+            return fail2("not an Android ABI: ", abi);
+        }
+        let cc = cat([bin.view(), "/", triple, "28-clang"]);
+        let lib = cat([stage, "/lib/", abi]);
+        if (!run("mkdir", ["-p", lib.view()])) {
+            return fail("could not make the library's directory");
+        }
+        let so = cat([lib.view(), "/libmain.so"]);
+        let flags: [StringView; 12] = [
+            "--cc",
+            cc.view(),
+            "--cflag",
+            "-shared",
+            "--cflag",
+            "-fPIC",
+            "--cflag",
+            "-landroid",
+            "--cflag",
+            "-llog",
+            "-o",
+            so.view(),
+        ];
+        if (!build(flags[..])) {
+            return fail2("the app was not built for ", abi);
+        }
+    }
+    let manifest = cat([stage, "/AndroidManifest.xml"]);
+    if (!writeText(manifest.view(), androidManifest(o).view())) {
+        return fail("could not write AndroidManifest.xml");
+    }
+    let base = cat([stage, "/base.apk"]);
+    let aligned = cat([stage, "/aligned.apk"]);
+    let apk = cat(["out/pack/", o.name.view(), ".apk"]);
+    if (!run(
+        cat([tools.view(), "/aapt2"]).view(),
+        ["link", "-o", base.view(), "-I", jar.view(), "--manifest", manifest.view()],
+    )) {
+        return fail("aapt2 failed");
+    }
+    // The libraries go into the archive under lib/<abi>/, which zip takes from the directory it runs in.
+    if (!run("sh", ["-c", "cd out/pack/android && zip -q -r base.apk lib"])) {
+        return fail("zip failed");
+    }
+    if (!run(cat([tools.view(), "/zipalign"]).view(), ["-f", "-p", "4", base.view(), aligned.view()])) {
+        return fail("zipalign failed");
+    }
+    let keystore = if (o.keystore.view().length > 0) text(o.keystore.view())
+        else cat([home, "/.android/debug.keystore"]);
+    let pass = cat(["pass:", o.storePass.view()]);
+    if (!run(
+        cat([tools.view(), "/apksigner"]).view(),
+        ["sign", "--ks", keystore.view(), "--ks-pass", pass.view(), "--out", apk.view(), aligned.view()],
+    )) {
+        return fail("apksigner failed (is there a keystore? Android Studio makes ~/.android/debug.keystore)");
+    }
+    Console.write("packed ");
+    Console.writeLine(apk.view());
+    return 0;
+}
+
+fn usage() -> i32 {
+    Console.writeErrorLine("usage: claywind_pack <macos|ios|ios-simulator|android> [--name NAME] [--id ID]");
+    Console.writeErrorLine("           [--version V] [--abi arm64-v8a,x86_64] [--profile FILE] [--identity NAME]");
+    Console.writeErrorLine("           [--keystore FILE] [--keystore-pass PASSWORD]");
+    Console.writeErrorLine("run in the app's package directory; the result is under out/pack");
+    return 2;
+}
+
+fn main() -> i32 {
+    let toml = readText("ceesafe.toml");
+    let package = tomlValue(toml.view(), "name");
+    if (package.view().length == 0) {
+        return fail("no ceesafe.toml with a name here: run it in the app's package directory");
+    }
+    var packageVersion = tomlValue(toml.view(), "version");
+    if (packageVersion.view().length == 0) {
+        packageVersion = text("1.0");
+    }
+    var o = Options {
+        target: text(Process.argument(1) ?? ""),
+        name: text(package.view()),
+        id: cat(["com.example.", package.view()]),
+        version: packageVersion,
+        binary: text(package.view()),
+        abis: text("arm64-v8a"),
+        profile: String.create(),
+        identity: String.create(),
+        keystore: String.create(),
+        storePass: text("android"),
+    };
+    var i: usize = 2;
+    while (i < Process.argumentCount()) {
+        let flag = Process.argument(i) ?? "";
+        let value = match (Process.argument(i + 1)) {
+            Some(v) => v,
+            null => { return usage(); }
+        };
+        if (flag == "--name") {
+            o.name = text(value);
+        } else if (flag == "--id") {
+            o.id = text(value);
+        } else if (flag == "--version") {
+            o.version = text(value);
+        } else if (flag == "--abi") {
+            o.abis = text(value);
+        } else if (flag == "--profile") {
+            o.profile = text(value);
+        } else if (flag == "--identity") {
+            o.identity = text(value);
+        } else if (flag == "--keystore") {
+            o.keystore = text(value);
+        } else if (flag == "--keystore-pass") {
+            o.storePass = text(value);
+        } else {
+            return usage();
+        }
+        i += 2;
+    }
+    if (o.target.view() == "macos") {
+        return packMac(o);
+    }
+    if (o.target.view() == "ios") {
+        return packIos(o, false);
+    }
+    if (o.target.view() == "ios-simulator") {
+        return packIos(o, true);
+    }
+    if (o.target.view() == "android") {
+        return packAndroid(o);
+    }
+    return usage();
+}
