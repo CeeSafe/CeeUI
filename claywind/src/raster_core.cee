@@ -124,10 +124,11 @@ public struct Raster<region r> {
     /// The fallback chain (raster_text.cee): font ids tried for a character a run's font lacks.
     fallbacks: [u32; 24];
     fallbackCount: usize;
-    /// The shaping buffer (raster_text.cee, font_layout.cee): borrowed while a line is shaped, even by measuring.
-    layout: RefCell<LayoutBuffer>;
+    /// The shaping buffer (raster_text.cee, font_layout.cee), in the Raster's memory: borrowed while a line is shaped,
+    /// even by measuring.
+    layout: borrow(r) RefCell<LayoutBuffer>;
     /// The bidi buffer (raster_text.cee): borrowed while a line with right-to-left text is shaped.
-    bidi: RefCell<BidiBuffer>;
+    bidi: borrow(r) RefCell<BidiBuffer>;
     width: i32;
     height: i32;
     /// The largest frame `create` made room for; `resize` stays within it.
@@ -161,6 +162,9 @@ public struct Raster<region r> {
         let images = memory.allocArray(capacity.images, ImageRecord { handle: 0, offset: 0, w: 0, h: 0 })?;
         let imagePool = memory.allocArray(capacity.imagePixels, 0u32)?;
         let fontPool = memory.allocArray(capacity.fontBytes, 0u8)?;
+        // The two text buffers are 120 KiB together: in the memory, not in the Raster, which is moved about by value.
+        let layout: borrow(r) RefCell<LayoutBuffer> = memory.alloc(RefCell<LayoutBuffer>.create(emptyLayoutBuffer()))?;
+        let bidi: borrow(r) RefCell<BidiBuffer> = memory.alloc(RefCell<BidiBuffer>.create(emptyBidiBuffer()))?;
         let noFont = FontInfo {
             unitsPerEm: 1.0,
             ascent: 0.0,
@@ -213,8 +217,8 @@ public struct Raster<region r> {
             colorGeneration: 0,
             fallbacks: [0u32; 24],
             fallbackCount: 0,
-            layout: RefCell<LayoutBuffer>.create(emptyLayoutBuffer()),
-            bidi: RefCell<BidiBuffer>.create(emptyBidiBuffer()),
+            layout: layout,
+            bidi: bidi,
             width: truncate<i32>(capacity.width),
             height: truncate<i32>(capacity.height),
             capacityWidth: truncate<i32>(capacity.width),

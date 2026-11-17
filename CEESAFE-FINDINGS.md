@@ -371,12 +371,14 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   (ADR 0154). With the entry inlined (`-Os`), `main`'s frame was 621 KiB in the GPU host: twice on the main thread's
   1 MiB, so the app ended at once on an iPhone (the desktop host's frame is smaller, so it ran). Fixed in the
   compiler: a windowed program runs in a function of its own, never inlined, and `main` keeps nothing.
-- **O13 (open, CeeSafe's and ClayWind's). A function's frame holds every copy of a large value.** `var masks = match
-  (Raster.create(…)) { Ok(r) => r, … }` leaves four `Raster`s in the frame (the result, a temporary, `r`, `masks`),
-  each a slot of its own for the whole function, since the generated C declares every local and temporary at the
-  function's top; a `Raster` is 123 KiB (its layout and bidi buffers are inline), so the GPU host's `main` is 745 KiB.
-  With 0.62.1 (O11) that still overflowed an iPhone's 1 MiB main stack when built by ceesafec directly (Xcode's `-Os`
-  build, 621 KiB, fitted). `claywind-pack` links iOS apps with a 16 MiB stack; the frames themselves are as large.
+- **O13 (ClayWind's part fixed; CeeSafe's open). A function's frame holds every copy of a large value.** `var masks =
+  match (Raster.create(…)) { Ok(r) => r, … }` leaves four `Raster`s in the frame (the result, a temporary, `r`,
+  `masks`), each a slot of its own for the whole function, since the generated C declares every local and temporary at
+  the function's top. A `Raster` was 123 KiB (its shaping and bidi buffers inline), so the GPU host's `main` was
+  745 KiB: with 0.62.1 (O11) that still overflowed an iPhone's 1 MiB main stack when built by ceesafec directly
+  (Xcode's `-Os` build, 621 KiB, fitted). ClayWind's part: the two buffers are in the Raster's memory now, a `Raster`
+  is about 3 KiB and that `main` 10 KiB; `claywind-pack` also links iOS apps with a 16 MiB stack. CeeSafe's part stays:
+  the copies and their slots are as before, for any other large value.
 - **O14 (ClayWind's own, fixed). An iPhone's text was boxes.** The font reader took a cmap of the Unicode platform
   only with encoding 3 or 4; Helvetica Neue's faces say 0/1, so no character had a glyph. The demo hid it (its
   fallback fonts drew the text, with no bold); the chat client showed boxes, which the owner saw on his iPhone.
