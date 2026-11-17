@@ -9,6 +9,7 @@ import claywind.Dims;
 import claywind.Vec2;
 import claywind.Insets;
 import claywind.TextKind;
+import claywind.ReturnKey;
 import claywind.keyIndex;
 import claywind.Ui;
 import claywind.EditCommand;
@@ -189,6 +190,15 @@ public struct DesktopPlatform {
                 TextKind.Email => WindowTextKind.Email,
                 TextKind.Url => WindowTextKind.Url,
                 TextKind.Password => WindowTextKind.Password,
+            });
+            // What its Return key says (CeeSafe ADR 0161).
+            window.setReturnKey(match (ui.returnKey()) {
+                ReturnKey.Done => WindowReturnKey.Done,
+                ReturnKey.Go => WindowReturnKey.Go,
+                ReturnKey.Next => WindowReturnKey.Next,
+                ReturnKey.Search => WindowReturnKey.Search,
+                ReturnKey.Send => WindowReturnKey.Send,
+                ReturnKey.System => WindowReturnKey.Default,
             });
         }
         if (wanted != this.textInput) {

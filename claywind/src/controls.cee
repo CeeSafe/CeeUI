@@ -77,8 +77,8 @@ public struct Controls {
         ui.open(Controls.fieldStyle(h, focused));
         if (ui.pressedOn(h)) {
             ui.setFocus(h);
-        } else if (ui.hasFocus(h) && ui.pressedOutside(h, 0)) {
-            ui.clearFocus(); // a press anywhere else leaves the field (on a phone, that hides the keyboard)
+        } else if (ui.hasFocus(h) && ui.releasedOutside(h)) {
+            ui.leaveFocus(h); // a click or a tap anywhere else leaves the field (on a phone, that hides the keyboard)
         }
         if (focused) {
             loop {
@@ -473,8 +473,8 @@ public struct Controls {
         ui.open(Controls.fieldStyle(h, focused));
         if (ui.pressedOn(h)) {
             ui.setFocus(h);
-        } else if (ui.hasFocus(h) && ui.pressedOutside(h, 0)) {
-            ui.clearFocus(); // a press anywhere else leaves the field (on a phone, that hides the keyboard)
+        } else if (ui.hasFocus(h) && ui.releasedOutside(h)) {
+            ui.leaveFocus(h); // a click or a tap anywhere else leaves the field (on a phone, that hides the keyboard)
         }
         if (focused) {
             loop {

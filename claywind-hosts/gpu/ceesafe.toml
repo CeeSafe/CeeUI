@@ -3,7 +3,7 @@ name = "gpu"
 version = "0.1.0"
 kind = "executable"
 windowed = true # a GUI program: no console window on Windows (CeeSafe ADR 0151)
-ceesafec = ">=0.62.1"
+ceesafec = ">=0.63.0"
 c = ["src/metal.c", "src/vulkan.c", "src/d3d12.c"]
 include-dirs = ["src"]
 

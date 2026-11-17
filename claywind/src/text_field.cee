@@ -136,10 +136,11 @@ impl Controls {
                 }
                 null => {}
             }
-        } else if (ui.hasFocus(h) && ui.pressedOutside(h, 0)) {
-            // A press anywhere else leaves the field (on a phone, that hides the keyboard). A field pressed in the same
-            // frame takes the focus itself, before this or after it.
-            ui.clearFocus();
+        } else if (ui.hasFocus(h) && ui.releasedOutside(h)) {
+            // A click or a tap anywhere else leaves the field when it ends (on a phone, that hides the keyboard), at
+            // the frame's end: what was tapped may focus the field again first (a Send button). A field that was
+            // pressed took the focus at the press.
+            ui.leaveFocus(h);
         } else if (ui.captured() == h && p.down && ui.pressCount() < 2) {
             match (box) {
                 Some(b) => { edit.caret = offsetAt(metrics, buf[0..len], p.position.x - b.x - padX); }

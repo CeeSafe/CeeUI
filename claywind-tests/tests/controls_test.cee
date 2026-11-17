@@ -289,3 +289,58 @@ fn choiceControlsSelectAndClose() -> Result<void, TestFailure> {
     Check.equalU64(2, picked as u64)?;
     return Check.isTrue(!open, "choosing an item closes the dropdown");
 }
+
+/// A frame of the showcase in which a hit of Save focuses the name field again, as a chat's Send button keeps its
+/// line; whether the name field had the focus while the frame was built, and whether Save was hit.
+fn stepKeeping(ui: borrow mut Ui, platform: borrow mut FakePlatform, app: borrow mut App, keep: bool) -> Result<[bool; 2], TestFailure> {
+    ui.begin(mut platform);
+    showcase(mut ui, mut app);
+    let focusedInFrame = ui.hasFocusNamed("name");
+    let hit = app.saveHit;
+    if (hit && keep) {
+        ui.setFocus(hashId("name"));
+    }
+    let metrics = FixedAdvance { unused: 0 };
+    let ok = match (ui.endFrame(mut platform, metrics)) {
+        Ok() => true,
+        Err(_) => false,
+    };
+    platform.pointerState.pressed = false;
+    platform.pointerState.released = false;
+    platform.clock += 1.0 / 60.0;
+    Check.isTrue(ok, "frame fits")?;
+    return Ok([focusedInFrame, hit]);
+}
+
+/// A tap away from a text field leaves it, which puts a phone's keyboard away: when the tap ends, not when it
+/// starts, or the page would move under the finger and the button tapped would miss its click; and at the frame's
+/// end, so a button that focuses the field again keeps it without a frame out of focus (the keyboard would blink).
+@test
+fn aTapElsewhereLeavesATextFieldWhenItEnds() -> Result<void, TestFailure> {
+    var storage = [0u8; 1048576];
+    let memory = FixedBufferAllocator.over(mut storage);
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(800.0, 600.0, -1.0, -1.0);
+    var app = App { saveHit: false, name: [0u8; 32], nameLen: 0, nameCaret: 0, volume: 0.25, qty: 3 };
+    step(mut ui, mut platform, mut app)?;
+    for (keep in [false, true]) {
+        platform.pointerState.position = centerOf(ui, "name");
+        click(mut ui, mut platform, mut app)?;
+        Check.isTrue(ui.hasFocusNamed("name"), "a click focuses the field")?;
+        // The press on the button: the field keeps the focus, and nothing is hit yet.
+        platform.pointerState.position = centerOf(ui, "save");
+        platform.pointerState.pressed = true;
+        platform.pointerState.down = true;
+        let pressed = stepKeeping(mut ui, mut platform, mut app, keep)?;
+        Check.isTrue(pressed[0] && !pressed[1] && ui.hasFocusNamed("name"), "the press leaves the focus where it was")?;
+        // The release: the button is hit in a frame where the field still had the focus.
+        platform.pointerState.down = false;
+        platform.pointerState.released = true;
+        let released = stepKeeping(mut ui, mut platform, mut app, keep)?;
+        Check.isTrue(released[0] && released[1], "the button is hit while the field is still focused")?;
+        Check.isTrue(ui.hasFocusNamed("name") == keep, "the field is left at the frame's end, unless focused again")?;
+        let after = stepKeeping(mut ui, mut platform, mut app, keep)?;
+        Check.isTrue(after[0] == keep, "and stays so in the next frame")?;
+    }
+    return Ok();
+}

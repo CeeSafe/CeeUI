@@ -9,7 +9,7 @@
 //     app.frame(ui);
 //     ui.endFrame(...);
 //     match (ui.copiedText()) { Some(t) => window.setClipboardText(t), null => {} }
-//     window.setTextInputKind(ui.textInputKind());
+//     window.setTextInputKind(ui.textInputKind()); window.setReturnKey(ui.returnKey());
 //     window.setTextInput(ui.wantsTextInput()); window.setTextInputArea(ui.textInputArea());
 
 /// The kind of text a field takes: on a phone it chooses the soft keyboard (Ui.reportTextKind).
@@ -23,6 +23,21 @@ public enum TextKind {
     Url,
     /// The keyboard neither learns nor suggests what is typed.
     Password,
+}
+
+/// What a soft keyboard's Return key says in the focused field (Ui.reportReturnKey): its face only. The key is Enter
+/// whichever it shows, and a text field leaves on Enter, which is why `Done` is what a field says unless told.
+public enum ReturnKey {
+    Done,
+    /// Goes to what was typed: an address.
+    Go,
+    /// Moves to the next field.
+    Next,
+    Search,
+    /// Sends what was typed: a message.
+    Send,
+    /// The system's own key ("return").
+    System,
 }
 
 /// An editing command from the platform's shortcut (Cmd on macOS, Ctrl elsewhere).
@@ -114,6 +129,15 @@ impl<region r> Ui<r> {
     /// ui.reportTextKind(TextKind.Number); }`. It lasts the frame.
     public fn reportTextKind(borrow mut this, kind: TextKind) {
         this.textKind = kind;
+    }
+
+    /// What the soft keyboard's Return key says for the focused field, as of the last report: `Done` without one.
+    public fn returnKey(borrow this) -> ReturnKey => this.returnKeyFace;
+
+    /// The focused text field's Return key says this: after a field, `if (ui.hasFocusNamed("draft")) {
+    /// ui.reportReturnKey(ReturnKey.Send); }`. It lasts the frame.
+    public fn reportReturnKey(borrow mut this, key: ReturnKey) {
+        this.returnKeyFace = key;
     }
 
     /// A focused text field reports its caret: the input method is wanted, and its candidate window goes there.

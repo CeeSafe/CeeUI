@@ -454,6 +454,9 @@ fn softKeyboardAndTextKind() -> Result<void, TestFailure> {
         _ => false,
     };
     Check.isTrue(text, "a frame without a report is plain text")?;
+    Check.isTrue(ui.returnKey() is ReturnKey.Done, "a field's Return key says Done unless told")?;
+    ui.reportReturnKey(ReturnKey.Send);
+    Check.isTrue(ui.returnKey() is ReturnKey.Send, "the Return key's face lasts its frame")?;
     finish(mut ui, mut platform)?;
     return Ok();
 }

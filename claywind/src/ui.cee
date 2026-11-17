@@ -100,7 +100,10 @@ public struct Ui<region r> {
     composingCaret: usize;
     caretArea: Rect;
     wantsText: bool;
+    /// The element that gives up the focus when the frame ends (leaveFocus); 0 = none.
+    leavingId: u32;
     textKind: TextKind;
+    returnKeyFace: ReturnKey;
     // Actions (actions.cee): the bindings, this frame's keystrokes and the actions they triggered, the key contexts
     // open around the element being built, and those around the focused element last frame.
     bindings: FixedList<r, Binding>;
@@ -204,7 +207,9 @@ public struct Ui<region r> {
             composingCaret: 0,
             caretArea: Rect.zero(),
             wantsText: false,
+            leavingId: 0,
             textKind: TextKind.Text,
+            returnKeyFace: ReturnKey.Done,
             bindings: FixedList<Binding>.over(bindings),
             keystrokes: FixedList<Keystroke>.over(keystrokes),
             triggered: FixedList<u32>.over(triggered),
@@ -290,6 +295,7 @@ public struct Ui<region r> {
         this.copiedLength = 0;
         this.wantsText = false;
         this.textKind = TextKind.Text;
+        this.returnKeyFace = ReturnKey.Done;
         // Keystrokes to actions, through the key contexts around last frame's focused element.
         this.takeKeystrokes(mut platform);
         this.tree.hitTest(pointer.position);
@@ -505,6 +511,12 @@ public struct Ui<region r> {
     public fn secondaryPressedOn(borrow this, id: u32) -> bool =>
         this.pointerState.secondaryPressed && this.tree.isPointerOver(id);
 
+    /// The primary button came up away from element `id`, which is not capturing a drag: a click or a tap elsewhere
+    /// has ended. A text field leaves on this and not on the press, so that what was tapped (a Send button beside
+    /// it) is still where it was when the tap ends: on a phone the keyboard goes with the focus, and the page moves.
+    public fn releasedOutside(borrow this, id: u32) -> bool =>
+        this.pointerState.released && this.activeId != id && !this.tree.isPointerOver(id);
+
     /// ClayWind_PressedOutside: the primary button went down over neither `a` nor `b` (0 = none).
     public fn pressedOutside(borrow this, a: u32, b: u32) -> bool {
         if (!this.pointerState.pressed) {
@@ -521,6 +533,14 @@ public struct Ui<region r> {
     public fn hasFocusNamed(borrow this, name: StringView) -> bool => this.hasFocus(hashId(name));
     public fn setFocus(borrow mut this, id: u32) {
         this.focusedId = id;
+        this.leavingId = 0; // focused again in the frame it was to leave (a Send button that keeps the field)
+    }
+
+    /// Element `id` gives up the focus at the end of this frame, unless `setFocus` is called before then. Until
+    /// then it is focused as before, so the frame reports what a focused field reports (its caret, its keyboard):
+    /// a field left and focused again in one frame never loses the soft keyboard for a moment.
+    public fn leaveFocus(borrow mut this, id: u32) {
+        this.leavingId = id;
     }
     public fn clearFocus(borrow mut this) {
         this.focusedId = 0;
@@ -816,6 +836,12 @@ impl<region r> Ui<r> {
         platform: borrow mut dyn Platform,
         metrics: borrow M,
     ) -> Result<void, AllocError> {
+        if (this.leavingId != 0) {
+            if (this.focusedId == this.leavingId) {
+                this.focusedId = 0;
+            }
+            this.leavingId = 0;
+        }
         let result = this.tree.endLayout(metrics);
         // Scroll containers that were declared this frame record their size and content; the rest go away.
         var k: usize = 0;

@@ -100,7 +100,7 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 
 ## Getting started
 
-Install the CeeSafe compiler, **ceesafec 0.62.1 or later** (the hosts use its window text input and clipboard, ADR 0141, sleep while nothing changes, ADRs 0142 and 0145, show the system's menus and file dialogs, ADR 0146, take files dropped from the system, ADR 0150, are GUI programs on Windows, ADR 0151, and take a touch screen's
+Install the CeeSafe compiler, **ceesafec 0.63.0 or later** (the hosts use its window text input and clipboard, ADR 0141, sleep while nothing changes, ADRs 0142 and 0145, show the system's menus and file dialogs, ADR 0146, take files dropped from the system, ADR 0150, are GUI programs on Windows, ADR 0151, and take a touch screen's
 fingers, ADR 0155, a phone's safe area, ADR 0156, its soft keyboard, ADR 0157, its file dialogs, ADR 0158, and an app's life, ADR 0159; ClayWind's array sizes are constant expressions, ADR 0143; 0.50.2 links with MinGW's gcc on Windows):
 
 ```sh
@@ -208,6 +208,12 @@ its content stays clear (`Insets.sides()` and `ends()` for a bar that reaches an
 the Tailwind breakpoints; a rotation is a new screen size. The pixel ratio is the window's scale, as on the desktop.
 The desktop and GPU hosts pass the window's safe area (`Window.safeArea`, CeeSafe ADR 0156: iOS and Android); the
 desktop host built for Android draws the demo below the status bar and above the gesture bar, upright and turned.
+
+Leaving a field: a click or a tap anywhere else leaves a text field, which on a phone puts the keyboard away. It
+leaves when the tap ends, so what was tapped is still where it was (the keyboard's going moves the page), and at
+the frame's end, so a button that focuses the field again (a chat's Send) keeps the keyboard without a blink
+(`Ui.leaveFocus`). The keyboard's Return key says `Done` in a field unless the app reports another face
+(`ui.reportReturnKey(ReturnKey.Send)`; CeeSafe ADR 0161): the key is Enter whichever it shows.
 
 A phone's keyboard: a text field's focus is what shows the soft keyboard (the hosts' `setTextInput`), and typed text,
 the input method's composition, Backspace and Enter reach the field as on the desktop. `Platform.keyboardInset` says

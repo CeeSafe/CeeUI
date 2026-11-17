@@ -383,5 +383,14 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   only with encoding 3 or 4; Helvetica Neue's faces say 0/1, so no character had a glyph. The demo hid it (its
   fallback fonts drew the text, with no bold); the chat client showed boxes, which the owner saw on his iPhone.
   Every encoding of the Unicode platform is read now; a test builds such a cmap.
+- **O15 (fixed in ceesafec 0.63.0). A soft keyboard had no key that said it would go.** The Return key reached the
+  program as Enter, and ClayWind's fields leave on Enter, but the key said "return". ADR 0161: `Window.setReturnKey`.
+  Asked for by the owner on his iPhone.
+- **O16 (ClayWind's own, fixed). A tap away from a field did not put the keyboard away;** then, fixed at the press,
+  the keyboard's going moved the Send button from under the finger (a second tap was needed); then, fixed at the
+  release, the keyboard blinked when Send focused the field again. A field leaves at the end of the frame the tap
+  ends in, unless it is focused again. Each found by the owner on his phones; a test covers the three.
+- **O17 (open, ClayWind's own). `aJobsValuesReachTheUi` failed once in three runs** ("expected 55, got 36") while
+  the machine's load was above 40, and passed otherwise: a test of threads that depends on time.
 - **O12 (ClayWind's own). The GPU host had its own list of fonts**, without a phone's, so it ended before Metal
   started; the Simulator hid it by reading the Mac's fonts. It uses claywind-desktop's `loadSystemFonts` now.
