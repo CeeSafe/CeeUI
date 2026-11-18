@@ -2,4 +2,4 @@
 name = "claywind_pack"
 version = "0.1.0"
 kind = "executable"
-ceesafec = ">=0.62.1"
+ceesafec = ">=0.69.0" # the phones' builds pass --target (CeeSafe ADR 0171)
