@@ -435,3 +435,9 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   attempts"; a rerun of the failed jobs published the release.
 - **P4 (open, not reproduced).** On 0.72.0's release commit, the contract suite's `run tsan` failed one of its 58
   async programs once; the step alone, three times after, passed 58 of 58. The log does not name the program.
+- **P5 (fixed on CeeSafe main, ADR 0174, not released). A program could not take a package from a checkout that
+  another of its dependencies names by git.** IPos takes ClayWind from the sibling checkout; ceesafe_reporting,
+  which IPos also takes, pins ClayWind by git: two sources for one package, N0326, and no way to say "this one,
+  everywhere". The owner chose "Add [patch] to CeeSafe": the root manifest's `[patch]` gives a package of the build
+  its source, wherever the graph reaches it (only the root's patches apply; a patch naming nothing of the build, one
+  with no source, or a package patched twice is N0321). IPos builds with the branch's ceesafec until a release has it.
