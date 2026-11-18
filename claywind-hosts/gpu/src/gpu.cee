@@ -353,7 +353,7 @@ impl<region r> GpuBackend<r> {
     public fn create(raster: Raster<r>) -> GpuBackend<r> {
         var shaped = Vector<ShapedGlyph>.withCapacity(4096)!;
         for (i in 0..4096) {
-            shaped.push(ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 })!;
+            shaped.push(ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 })!;
         }
         return GpuBackend {
             raster: raster,

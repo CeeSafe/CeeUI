@@ -68,7 +68,7 @@ fn shapingMatchesHarfBuzz() -> Result<void, TestFailure> {
     var at: usize = 0;
     var currentFont = Vector<u8>.create();
     var utf8 = [0u8; 1024];
-    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 128];
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 128];
     // One Raster per font: a font cannot be unloaded.
     var memory = FixedBufferAllocator.over(mut storage.viewMut());
     var c = RasterCapacity.of(16, 16);

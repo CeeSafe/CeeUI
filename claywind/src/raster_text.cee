@@ -17,6 +17,10 @@ public struct ShapedGlyph {
     public y: f32;
     /// The byte offset in the run's UTF-8 of the character it draws (a ligature's first).
     public cluster: usize;
+    /// How far it moves the pen, in pixels (its advance, kerning and letter spacing applied; a mark's is usually
+    /// none). Its place less the pen before it is its offset: a layout that keeps its own pen (advancing it glyph
+    /// by glyph, as CosmoFonts and HarfBuzz's clients do) places it at pen + offset and moves by this.
+    public advance: f32;
 }
 
 /// What Raster.shapeRun shaped.
@@ -817,6 +821,7 @@ impl<region r> Raster<r> {
                         x: g.pen * scale,
                         y: 0.0 - g.rise * scale,
                         cluster: g.cluster,
+                        advance: g.advance * scale,
                     };
                 }
             }

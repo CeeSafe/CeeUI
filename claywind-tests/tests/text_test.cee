@@ -59,7 +59,7 @@ fn fallbackGlyphsAreShapedMeasuredAndDrawn() -> Result<void, TestFailure> {
     Check.isTrue(ras.loadFont(16, wide.view()), "Arial Unicode loads")?;
     let chain = [16u32];
     ras.setFallbacks(chain[..]);
-    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 8];
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 8];
     // "A中": the A from Arial, 中 from the fallback, after the A's advance (0.667 em at 20px = 13.34).
     let run = ras.shapeRun("A中".bytes(), 0, 20.0, 0.0, mut out[..])!;
     Check.equalU64(2, run.count as u64)?;
@@ -175,7 +175,7 @@ fn cffOutlinesDraw() -> Result<void, TestFailure> {
         null => {}
     }
     // Ink in each of the first four glyphs' cells, and none far below the baseline.
-    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 8];
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 8];
     let shaped = ras.shapeRun(text.bytes(), 0, 48.0, 0.0, mut out[..])!;
     for (k in 0usize..4) {
         let x0 = 4 + truncate<usize>(out[k].x);
@@ -207,7 +207,7 @@ fn marksSitOnTheirBases() -> Result<void, TestFailure> {
     c.fontBytes = 2097152;
     var ras = Raster.create(memory, c)!;
     Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
-    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 8];
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 8];
     // e + COMBINING ACUTE: Arial's GPOS 'mark' puts the accent over the e, not after it.
     let run = ras.shapeRun("e\u{301}".bytes(), 0, 40.0, 0.0, mut out[..])!;
     Check.equalU64(2, run.count as u64)?;
@@ -232,7 +232,7 @@ fn rightToLeftRunsReadRightToLeft() -> Result<void, TestFailure> {
     c.fontBytes = 2097152;
     var ras = Raster.create(memory, c)!;
     Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
-    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 8];
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 8];
     // "a", a space, then Hebrew alef bet: the a on the left, then bet, then alef at the right end.
     let run = ras.shapeRun("a \u{5D0}\u{5D1}".bytes(), 0, 40.0, 0.0, mut out[..])!;
     Check.equalU64(4, run.count as u64)?;
@@ -242,7 +242,7 @@ fn rightToLeftRunsReadRightToLeft() -> Result<void, TestFailure> {
     Check.isTrue(out[2].x < out[3].x, "bet is left of alef")?;
     expect("the width is the characters' own", run.width, ras.measure("a \u{5D0}\u{5D1}".bytes(), TextConfig.of(40.0)).w)?;
     // In a right-to-left run a bracket takes its mirrored glyph: "(" shows as ")".
-    var close = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 2];
+    var close = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 2];
     let one = ras.shapeRun(")".bytes(), 0, 40.0, 0.0, mut close[..])!;
     let mixed = ras.shapeRun("\u{5D0}(\u{5D1})".bytes(), 0, 40.0, 0.0, mut out[..])!;
     Check.equalU64(4, mixed.count as u64)?;
@@ -276,11 +276,11 @@ fn arabicLettersJoin() -> Result<void, TestFailure> {
         Console.writeLine("  (this Arial has no Arabic: skipped)");
         return Ok();
     }
-    var alone = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 2];
+    var alone = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 2];
     let one = ras.shapeRun("\u{628}".bytes(), 0, 40.0, 0.0, mut alone[..])!;
     // beh beh beh, right to left: final, medial and initial forms. (Arial draws the final beh with the isolated
     // glyph, and the medial with the initial one.)
-    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 4];
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 4];
     let run = ras.shapeRun("\u{628}\u{628}\u{628}".bytes(), 0, 40.0, 0.0, mut out[..])!;
     Check.equalU64(3, run.count as u64)?;
     Check.equalU64(4, out[0].cluster as u64)?;
@@ -308,7 +308,7 @@ fn nastaliqHangsLettersByCursiveAttachment() -> Result<void, TestFailure> {
     var ras = Raster.create(memory, c)!;
     Check.isTrue(ras.loadFont(0, nastaliq.view()), "Noto Nastaliq loads")?;
     // "pakistan": its letters join, and Nastaliq sets each joined letter higher than the next.
-    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 16];
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 16];
     let run = ras.shapeRun("\u{67E}\u{627}\u{6A9}\u{633}\u{62A}\u{627}\u{646}".bytes(), 0, 40.0, 0.0, mut out[..])!;
     var raised = false;
     for (k in 0..run.count) {
@@ -337,7 +337,7 @@ fn devanagariAndTamilShapeAsHarfBuzzDoes() -> Result<void, TestFailure> {
     var ras = Raster.create(memory, c)!;
     Check.isTrue(ras.loadFont(0, kohinoor.view()), "Kohinoor loads")?;
     Check.isTrue(ras.loadFont(1, tamil.view()), "Tamil Sangam MN loads")?;
-    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 16];
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 16];
     // हिन्दी: the i-matra moves before its consonant, न् takes its half form; hb-shape's glyphs.
     let hindi = ras.shapeRun("हिन्दी".bytes(), 0, 1000.0, 0.0, mut out[..])!;
     let hindiGlyphs = [780u32, 83, 577, 29];
@@ -376,7 +376,7 @@ fn caretsFollowTheGlyphsAsDrawn() -> Result<void, TestFailure> {
     // "a ", then Hebrew alef bet drawn right to left: before alef is the run's right edge, before bet is between
     // them (alef's left edge), and the end of the text is the run's left edge, after bet.
     let mixed = "a \u{5D0}\u{5D1}".bytes();
-    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 8];
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 8];
     let run = ras.shapeRun(mixed, 0, 40.0, 0.0, mut out[..])!;
     let start = ras.caretX(mixed, config, 2);
     let middle = ras.caretX(mixed, config, 4);
@@ -385,4 +385,37 @@ fn caretsFollowTheGlyphsAsDrawn() -> Result<void, TestFailure> {
     expect("before bet: alef's left edge", middle, out[3].x)?;
     expect("at the end: bet's left edge", end, out[2].x)?;
     return Check.isTrue(end < middle && middle < start, "carets in the Hebrew run go right to left");
+}
+
+/// A glyph's advance is how far it moves the pen: the advances add up to the run's width; a letter's place is the
+/// advances before it; a mark's place (over its base) is its offset from the pen, which it does not move.
+@test
+fn aGlyphsAdvanceMovesThePenAndAMarksIsOffItsPlace() -> Result<void, TestFailure> {
+    let arial = readFile(arialPath());
+    if (arial.length == 0) {
+        Console.writeLine("  (Arial not found: skipped)");
+        return Ok();
+    }
+    var storage = heap(8388608);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(64, 64);
+    c.imagePixels = 4;
+    c.fontBytes = 2097152;
+    var ras = Raster.create(memory, c)!;
+    Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 8];
+    // Shaped at Arial's 2048 units an em: one pixel a unit, so every sum is exact.
+    let run = ras.shapeRun("ae\u{301}o".bytes(), 0, 2048.0, 0.0, mut out[..])!;
+    Check.equalU64(4, run.count as u64)?;
+    var pen: f32 = 0.0;
+    for (k in 0..run.count) {
+        if (k != 2) {
+            Check.isTrue(out[k].x == pen, "a letter is where the advances before it end")?;
+        }
+        pen += out[k].advance;
+    }
+    Check.isTrue(pen == run.width, "the advances add up to the run's width")?;
+    Check.isTrue(out[2].advance == 0.0, "the accent does not move the pen")?;
+    Check.isTrue(out[2].x != out[1].x + out[1].advance, "the accent is off the pen, over its e")?;
+    return Ok();
 }

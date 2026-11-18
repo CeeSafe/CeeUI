@@ -110,7 +110,7 @@ fn emojiSequencesBecomeOneGlyph() -> Result<void, TestFailure> {
         "1\u{FE0F}\u{20E3}",
         "\u{2764}\u{FE0F}",
     ];
-    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 8];
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 8];
     for (k in 0usize..5) {
         let text = sequences[k];
         let more = fonts.supply(mut ras, text.bytes(), 0);
@@ -156,7 +156,7 @@ fn colourGlyphsMakeRoomForNewOnes() -> Result<void, TestFailure> {
         return Ok();
     }
     // Twelve emoji, one after another: they cannot all be kept, so older ones go.
-    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }; 2];
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 2];
     for (k in 0u32..12) {
         var bytes = [0u8; 4];
         let n = encodeUtf8(0x1F600 + k, mut bytes);

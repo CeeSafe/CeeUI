@@ -261,7 +261,7 @@ impl SystemFonts {
         }
         var glyphs = Vector<ShapedGlyph>.create();
         for (i in 0..utf8.length) {
-            if (glyphs.push(ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0 }).isErr()) {
+            if (glyphs.push(ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }).isErr()) {
                 return 0;
             }
         }
