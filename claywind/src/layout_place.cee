@@ -206,6 +206,10 @@ fn placeElement<M: TextMetrics>(l: borrow mut LayoutTree, index: usize, position
         if (layout.hasBlend()) {
             ok = ok && emit(mut l, Command.BlendStart(layout.blend));
         }
+        // An image's shadow lies under it (as any box's); its background is its tint (Clay's), never a fill over it.
+        if (decl.image != 0 && decl.shadow.color.a > 0) {
+            ok = ok && emit(mut l, Command.DropShadow(area, decl.shadow, radius));
+        }
         if (decl.image != 0) {
             ok = ok && emit(mut l, Command.Picture(area, decl.background, radius, decl.image));
         }
@@ -218,10 +222,10 @@ fn placeElement<M: TextMetrics>(l: borrow mut LayoutTree, index: usize, position
         if (decl.clip.any()) {
             ok = ok && emit(mut l, Command.ClipStart(area, radius, decl.clip.horizontal, decl.clip.vertical));
         }
-        if (decl.shadow.color.a > 0) {
+        if (decl.shadow.color.a > 0 && decl.image == 0) {
             ok = ok && emit(mut l, Command.DropShadow(area, decl.shadow, radius));
         }
-        if (decl.background.a > 0) {
+        if (decl.background.a > 0 && decl.image == 0) {
             ok = ok && emit(mut l, Command.Fill(area, decl.background, radius));
         }
         if (decl.gradient.present()) {

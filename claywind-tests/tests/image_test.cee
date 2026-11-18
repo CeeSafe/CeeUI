@@ -226,3 +226,32 @@ fn aRemovedImageGivesItsMemoryBack() -> Result<void, TestFailure> {
     }
     return Ok();
 }
+
+@test
+fn anImagesBackgroundAndShadowLieUnderIt() -> Result<void, TestFailure> {
+    // A box with an image, a white background and a shadow: the image is drawn over its shadow and is not covered by
+    // a fill of its background (an image's background is its tint, as Clay's; white tints nothing).
+    let bytes = readFixture("bgr24.bmp".bytes(), "");
+    var storage = heap(4194304);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(13, 11);
+    c.fontBytes = 16;
+    var ras = Raster.create(memory, c)!;
+    var scratch = heap(16);
+    let _ = loadImage(mut ras, 7, bytes.view(), mut scratch.viewMut());
+    var t = LayoutTree.create(memory, LayoutCapacity.of(8))!;
+    t.begin(13.0, 11.0);
+    var d = fixedBox(13.0, 11.0);
+    d.image = 7;
+    d.background = Color.rgb(255, 255, 255);
+    d.shadow = Shadow { color: Color.rgba(0, 0, 0, 160), offsetX: 0.0, offsetY: 0.0, blur: 4.0, spread: 0.0 };
+    leaf(mut t, "img", d);
+    finishTree(mut t)?;
+    ras.begin(Color.rgb(0, 0, 0));
+    t.renderInto(mut ras);
+    ras.finish();
+    let px = ras.pixelAt(5, 3);
+    Check.equalU64(85, px.r as u64)?;
+    Check.equalU64(63, px.g as u64)?;
+    return Check.equalU64(72, px.b as u64);
+}
