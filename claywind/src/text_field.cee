@@ -90,6 +90,62 @@ fn replaceSelection(buf: SliceMut<u8>, len: borrow mut usize, edit: borrow mut T
     return changed;
 }
 
+/// The most a masked field shows: 340 dots.
+const MASK_BYTES: usize = 1020;
+
+/// What a masked field shows for `text`: a dot (U+2022, three bytes) for each grapheme cluster, into `dots`; the
+/// bytes written.
+fn maskInto(text: Slice<u8>, dots: borrow mut [u8; 1020]) -> usize {
+    var n: usize = 0;
+    var at: usize = 0;
+    while (at < text.length && n + 3 <= MASK_BYTES) {
+        at = graphemeEnd(text, at);
+        dots[n] = 0xE2;
+        dots[n + 1] = 0x80;
+        dots[n + 2] = 0xA2;
+        n += 3;
+    }
+    return n;
+}
+
+/// The place in a masked field's dots of byte `at` of its text.
+fn maskedAt(text: Slice<u8>, at: usize) -> usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < at && i < text.length && n + 3 <= MASK_BYTES) {
+        i = graphemeEnd(text, i);
+        n += 3;
+    }
+    return n;
+}
+
+/// Where a caret at byte `at` of `text` is drawn, in points from the text's left edge: among the dots when masked.
+fn fieldCaretX<M: TextMetrics>(metrics: borrow M, text: Slice<u8>, masked: bool, at: usize) -> f32 {
+    let config = TextConfig.of(FIELD_TEXT);
+    if (!masked) {
+        return metrics.caretX(text, config, at);
+    }
+    var dots = [0u8; 1020];
+    let n = maskInto(text, mut dots);
+    return metrics.caretX(dots[0..n], config, maskedAt(text, at));
+}
+
+/// The grapheme boundary of `text` nearest `x` points from the text's left edge, as the field shows it.
+fn fieldOffsetAt<M: TextMetrics>(metrics: borrow M, text: Slice<u8>, masked: bool, x: f32) -> usize {
+    if (!masked) {
+        return offsetAt(metrics, text, x);
+    }
+    var dots = [0u8; 1020];
+    let n = maskInto(text, mut dots);
+    var clusters = offsetAt(metrics, dots[0..n], x) / 3;
+    var at: usize = 0;
+    while (clusters > 0 && at < text.length) {
+        at = graphemeEnd(text, at);
+        clusters -= 1;
+    }
+    return at;
+}
+
 impl Controls {
     /// ClayWind_TextField: a one-line text field with a selection (see TextEdit). The pointer places the caret and
     /// a drag selects; the arrows, Home and End move it (with Shift, extending the selection); Backspace and Delete
@@ -104,6 +160,29 @@ impl Controls {
         buf: SliceMut<u8>,
         len: borrow mut usize,
         edit: borrow mut TextEdit,
+    ) -> bool => Controls.textFieldOf(mut ui, metrics, id, buf, mut len, mut edit, false);
+
+    /// A text field for a secret: it shows a dot for each character, gives nothing to Copy or Cut, selects
+    /// everything on a double click (a word's ends would say where the spaces are), tells a screen reader only the
+    /// dots, and asks a phone for the keyboard that neither learns nor suggests. An input method does not compose
+    /// in it.
+    public fn passwordField<M: TextMetrics>(
+        ui: borrow mut Ui,
+        metrics: borrow M,
+        id: StringView,
+        buf: SliceMut<u8>,
+        len: borrow mut usize,
+        edit: borrow mut TextEdit,
+    ) -> bool => Controls.textFieldOf(mut ui, metrics, id, buf, mut len, mut edit, true);
+
+    fn textFieldOf<M: TextMetrics>(
+        ui: borrow mut Ui,
+        metrics: borrow M,
+        id: StringView,
+        buf: SliceMut<u8>,
+        len: borrow mut usize,
+        edit: borrow mut TextEdit,
+        masked: bool,
     ) -> bool {
         let h = hashId(id);
         ui.registerFocusable(h);
@@ -120,16 +199,16 @@ impl Controls {
             ui.capture(h);
             match (box) {
                 Some(b) => {
-                    edit.caret = offsetAt(metrics, buf[0..len], p.position.x - b.x - padX);
+                    edit.caret = fieldOffsetAt(metrics, buf[0..len], masked, p.position.x - b.x - padX);
                     if (!ui.shiftDown()) {
                         edit.anchor = edit.caret;
                     }
                     // A double click selects the word, a triple click everything.
-                    if (ui.pressCount() == 2) {
+                    if (ui.pressCount() == 2 && !masked) {
                         let w = wordAround(buf[0..len], edit.caret);
                         edit.anchor = w[0];
                         edit.caret = w[1];
-                    } else if (ui.pressCount() >= 3) {
+                    } else if (ui.pressCount() >= 2) {
                         edit.anchor = 0;
                         edit.caret = len;
                     }
@@ -143,7 +222,7 @@ impl Controls {
             ui.leaveFocus(h);
         } else if (ui.captured() == h && p.down && ui.pressCount() < 2) {
             match (box) {
-                Some(b) => { edit.caret = offsetAt(metrics, buf[0..len], p.position.x - b.x - padX); }
+                Some(b) => { edit.caret = fieldOffsetAt(metrics, buf[0..len], masked, p.position.x - b.x - padX); }
                 null => {}
             }
         }
@@ -156,7 +235,7 @@ impl Controls {
                 edit.anchor = 0;
                 edit.caret = len;
             }
-            if ((ui.commanded(EditCommand.Copy) || ui.commanded(EditCommand.Cut)) && edit.selects()) {
+            if ((ui.commanded(EditCommand.Copy) || ui.commanded(EditCommand.Cut)) && edit.selects() && !masked) {
                 ui.copyText(buf[edit.from()..edit.to()]);
                 if (ui.commanded(EditCommand.Cut)) {
                     let none = [0u8; 1];
@@ -236,13 +315,24 @@ impl Controls {
         }
         ui.open(Controls.fieldStyle(h, focused));
         let node = ui.access(h, AccessRole.TextField, id.bytes());
-        ui.accessValue(node, buf[0..len]);
-        ui.accessCaret(node, edit.caret, edit.anchor);
+        var dots = [0u8; 1020];
+        let dotCount = if (masked) maskInto(buf[0..len], mut dots) else 0;
+        if (masked) {
+            ui.accessValue(node, dots[0..dotCount]);
+            ui.accessFlag(node, ACCESS_SECURE, true);
+            ui.accessCaret(node, maskedAt(buf[0..len], edit.caret), maskedAt(buf[0..len], edit.anchor));
+            if (focused) {
+                ui.reportTextKind(TextKind.Password);
+            }
+        } else {
+            ui.accessValue(node, buf[0..len]);
+            ui.accessCaret(node, edit.caret, edit.anchor);
+        }
         let config = TextConfig.of(FIELD_TEXT);
         // The selection, behind the text.
         if (focused && edit.selects()) {
-            let a = metrics.caretX(buf[0..len], config, edit.from());
-            let b = metrics.caretX(buf[0..len], config, edit.to());
+            let a = fieldCaretX(metrics, buf[0..len], masked, edit.from());
+            let b = fieldCaretX(metrics, buf[0..len], masked, edit.to());
             let x0 = a.min(b);
             let x1 = a.max(b);
             ui.open(
@@ -254,8 +344,8 @@ impl Controls {
             ui.close();
         }
         // The text, with the composition (underlined) at the caret while the input method composes.
-        let composing = focused && ui.composition().length > 0;
-        var caretX = metrics.caretX(buf[0..len], config, edit.caret);
+        let composing = focused && !masked && ui.composition().length > 0;
+        var caretX = fieldCaretX(metrics, buf[0..len], masked, edit.caret);
         ui.open(Style.row().alignXY(AxisAlign.Start, AxisAlign.Center));
         if (composing) {
             // One line: the text with the composition spliced in at the caret, the composition underlined, and
@@ -282,6 +372,8 @@ impl Controls {
                 .w(Size.fixed((u1 - u0).abs())).h(Size.fixed(1.0)).bg(SLATE_100));
             ui.close();
             caretX = metrics.caretX(line[0..all], config, before + ui.compositionCaret().min(n));
+        } else if (masked && dotCount > 0) {
+            ui.labelBytes(dots[0..dotCount], Text.of().color(SLATE_100));
         } else if (len > 0) {
             ui.labelBytes(buf[0..len], Text.of().color(SLATE_100));
         }

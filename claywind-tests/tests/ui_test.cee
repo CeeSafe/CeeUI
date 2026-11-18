@@ -958,3 +958,94 @@ fn keystrokesTriggerTheirActionsInContext() -> Result<void, TestFailure> {
     keymapFrame(mut ui, mut platform, controlK[..], false)?;
     return Check.isTrue(ui.action("kill"), "ctrl-k");
 }
+
+fn passwordFrame(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    buf: SliceMut<u8>,
+    len: borrow mut usize,
+    edit: borrow mut TextEdit,
+    command: u32,
+) -> Result<void, TestFailure> {
+    ui.begin(mut platform);
+    if (command == 1) {
+        ui.editCommand(EditCommand.Copy);
+    } else if (command == 4) {
+        ui.editCommand(EditCommand.SelectAll);
+    }
+    let measure = ClayMeasure { unused: 0 };
+    ui.open(Style.column().w(Size.fixed(300.0)).h(Size.fixed(100.0)));
+    let changed = Controls.passwordField(mut ui, measure, "secret", buf, mut len, mut edit);
+    ui.close();
+    platform.typedCount = 0;
+    platform.typedRead = 0;
+    platform.pressed = 0;
+    platform.pointerState.pressed = false;
+    platform.pointerState.released = false;
+    return finish(mut ui, mut platform);
+}
+
+/// A password field keeps what is typed and shows, copies and tells a reader none of it.
+@test
+fn aPasswordFieldShowsDotsAndCopiesNothing() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(400.0, 300.0, 20.0, 15.0);
+    var buf = [0u8; 64];
+    var len: usize = 0;
+    var edit = TextEdit.at(0);
+    passwordFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 0)?;
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    passwordFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 0)?;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    let typed = "pa é";
+    var count: usize = 0;
+    var at: usize = 0;
+    while (at < typed.bytes().length) {
+        let c = decodeUtf8(typed.bytes(), at);
+        at += c[1] as usize;
+        platform.typed[count] = c[0];
+        count += 1;
+    }
+    platform.typedCount = count;
+    passwordFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 0)?;
+    Check.isTrue(len == 5 && buf[0] == 'p', "the field keeps what was typed")?;
+    // What is drawn and what a reader is told: four dots, and that it is a secret.
+    var dots: usize = 0;
+    var letters: usize = 0;
+    for (k in 0..ui.commandCount()) {
+        let command = ui.commandAt(k);
+        match (command) {
+            Command.Text(_, _) => {
+                let shown = ui.textOf(command);
+                if (shown.length == 12 && shown[0] == 0xE2) {
+                    dots += 1;
+                }
+                for (b in shown) {
+                    if (b == 'p') {
+                        letters += 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Check.isTrue(dots == 1 && letters == 0, "four dots are drawn, and no letter")?;
+    let node = ui.accessAt(0);
+    Check.isTrue(node.has(ACCESS_SECURE), "a reader is told it is a secret")?;
+    Check.isTrue(ui.accessValueOf(node).length == 12, "and only the dots")?;
+    Check.isTrue(node.caret == 12, "with the caret after the fourth")?;
+    let password = match (ui.textInputKind()) {
+        TextKind.Password => true,
+        _ => false,
+    };
+    Check.isTrue(password, "a phone is asked for the password keyboard")?;
+    // Select All and Copy: nothing is copied.
+    passwordFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 4)?;
+    Check.isTrue(edit.from() == 0 && edit.to() == 5, "Select All selects")?;
+    passwordFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 1)?;
+    return Check.isTrue(ui.copiedText() == null, "Copy takes nothing from a password");
+}
