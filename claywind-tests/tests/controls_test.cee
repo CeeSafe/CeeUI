@@ -290,6 +290,89 @@ fn choiceControlsSelectAndClose() -> Result<void, TestFailure> {
     return Check.isTrue(!open, "choosing an item closes the dropdown");
 }
 
+/// One frame of a dropdown with a clickable row right below it, which its open list covers (an invoice list under
+/// its search's type, in the IPos port); whether the row was clicked.
+fn dropdownOverRow(
+    ui: borrow mut Ui,
+    p: borrow mut FakePlatform,
+    picked: borrow mut usize,
+    open: borrow mut bool,
+) -> Result<bool, TestFailure> {
+    let metrics = FixedAdvance { unused: 0 };
+    let kinds: [StringView; 2] = ["Sales Invoice", "Sales Return"];
+    ui.begin(mut p);
+    ui.open(Style.column().id("root").w(Size.grow()).h(Size.grow()).p(16.0).gap(12.0));
+    ui.open(Style.box().id("dd-wrap").w(Size.grow()));
+    Controls.dropdown(mut ui, "kind", kinds[..], mut picked, mut open);
+    ui.close();
+    ui.open(Style.column().id("list").w(Size.grow()).h(Size.grow()).scroll(ScrollAxis.Vertical));
+    ui.open(Style.box().id("row").w(Size.grow()).h(Size.fixed(60.0)));
+    let hit = ui.clicked("row");
+    ui.close();
+    ui.close();
+    ui.close();
+    let ok = match (ui.endFrame(mut p, metrics)) {
+        Ok() => true,
+        Err(_) => false,
+    };
+    p.pointerState.pressed = false;
+    p.pointerState.released = false;
+    p.clock += 1.0 / 60.0;
+    Check.isTrue(ok, "frame fits")?;
+    return Ok(hit);
+}
+
+/// An open dropdown's list takes the click on its item: the row it covers is not clicked, whichever comes first.
+@test
+fn anOpenDropdownTakesTheClickFromWhatItCovers() -> Result<void, TestFailure> {
+    var storage = [0u8; 1048576];
+    let memory = FixedBufferAllocator.over(mut storage);
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var p = platformAt(800.0, 600.0, -1.0, -1.0);
+    var picked: usize = 0;
+    var open = false;
+    var rowHit = dropdownOverRow(mut ui, mut p, mut picked, mut open)?;
+    // Open it: a press and a release on the trigger.
+    p.pointerState.position = centerOf(ui, "kind");
+    p.pointerState.pressed = true;
+    p.pointerState.down = true;
+    rowHit = rowHit || dropdownOverRow(mut ui, mut p, mut picked, mut open)?;
+    p.pointerState.down = false;
+    p.pointerState.released = true;
+    rowHit = rowHit || dropdownOverRow(mut ui, mut p, mut picked, mut open)?;
+    Check.isTrue(open, "the dropdown opened")?;
+    // Its second item lies over the row.
+    let item = centerOf(ui, "kind~1");
+    let row = ui.boxOf("row")!;
+    Check.isTrue(row.contains(item), "the item covers the row")?;
+    p.pointerState.position = item;
+    p.pointerState.pressed = true;
+    p.pointerState.down = true;
+    rowHit = rowHit || dropdownOverRow(mut ui, mut p, mut picked, mut open)?;
+    p.pointerState.down = false;
+    p.pointerState.released = true;
+    rowHit = rowHit || dropdownOverRow(mut ui, mut p, mut picked, mut open)?;
+    Check.equalU64(1, picked as u64)?;
+    Check.isTrue(!open, "choosing an item closes the dropdown")?;
+    Check.isTrue(!rowHit, "the row under the list is not clicked")?;
+    // Again with each click's press and release in one frame, as a quick click (or a script's) reaches a host.
+    picked = 0;
+    p.pointerState.position = centerOf(ui, "kind");
+    p.pointerState.pressed = true;
+    p.pointerState.released = true;
+    rowHit = dropdownOverRow(mut ui, mut p, mut picked, mut open)?;
+    rowHit = rowHit || dropdownOverRow(mut ui, mut p, mut picked, mut open)?;
+    Check.isTrue(open, "a quick click opens the dropdown")?;
+    p.pointerState.position = centerOf(ui, "kind~1");
+    p.pointerState.pressed = true;
+    p.pointerState.released = true;
+    rowHit = rowHit || dropdownOverRow(mut ui, mut p, mut picked, mut open)?;
+    rowHit = rowHit || dropdownOverRow(mut ui, mut p, mut picked, mut open)?;
+    Check.equalU64(1, picked as u64)?;
+    Check.isTrue(!open, "a quick click on an item closes the dropdown")?;
+    return Check.isTrue(!rowHit, "a quick click on the list does not reach the row");
+}
+
 /// A frame of the showcase in which a hit of Save focuses the name field again, as a chat's Send button keeps its
 /// line; whether the name field had the focus while the frame was built, and whether Save was hit.
 fn stepKeeping(ui: borrow mut Ui, platform: borrow mut FakePlatform, app: borrow mut App, keep: bool) -> Result<[bool; 2], TestFailure> {
