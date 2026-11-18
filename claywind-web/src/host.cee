@@ -58,6 +58,12 @@ extern "C" {
     fn web_pasted(length: *mut usize) -> *u8;
     /// Puts `length` bytes of UTF-8 on the clipboard.
     fn web_copy(text: *u8, length: usize);
+    /// The text an input method is composing, in the module's memory, and its length (0 when none).
+    fn web_composition(length: *mut usize) -> *u8;
+    /// Whether a text field has the focus (`on`), the kind of text it takes (TextKind's order), what its Return key
+    /// says (ReturnKey's order) and its caret's box in points: the page's own text input goes there, which brings a
+    /// phone's keyboard and the input method.
+    fn web_text_input(on: u32, kind: u32, returnKey: u32, x: f32, y: f32, width: f32, height: f32);
     /// One of the frame's elements for a screen reader, in reading order: its id, role (accessRoleNumber), flags
     /// (ACCESS_*), box in points, range and value, label and value text, and a text field's caret and anchor.
     fn web_access_node(
@@ -226,8 +232,10 @@ impl WebPlatform {
         }
     }
 
-    /// After `ui.begin` (whose key bindings made this frame's shortcuts edit commands): the text for a Paste.
-    /// Safety: web_pasted gives a pointer to `length` bytes that stay until the next call, or null.
+    /// After `ui.begin` (whose key bindings made this frame's shortcuts edit commands): the text for a Paste, and
+    /// what the input method is composing.
+    /// Safety: web_pasted and web_composition give a pointer to `length` bytes that stay until the next call, or
+    /// null.
     public fn editInto(borrow this, ui: borrow mut Ui) {
         if (ui.commanded(EditCommand.Paste)) {
             unsafe {
@@ -237,6 +245,15 @@ impl WebPlatform {
                     ui.paste(Slice.fromRaw(bytes, length));
                 }
             }
+        }
+        unsafe {
+            var length: usize = 0;
+            let bytes = web_composition(borrow mut length as *mut usize);
+            if (bytes as usize == 0) {
+                length = 0;
+            }
+            // The composition's caret is at its end: a page is not told where it is inside.
+            ui.setComposition(Slice.fromRaw(bytes, length), length);
         }
     }
 
@@ -270,7 +287,8 @@ impl WebPlatform {
         }
     }
 
-    /// After the frame: what it copied onto the clipboard, the pointer's shape, and then a sleep while nothing
+    /// After the frame: what it copied onto the clipboard, the pointer's shape, whether and where a text field
+    /// wants the keyboard, and then a sleep while nothing
     /// changes: until an event, a caret's blink or a frame the Ui asked for later.
     /// Safety: web_copy reads the bytes during the call.
     public fn finishFrame(borrow mut this, ui: borrow Ui) {
@@ -287,6 +305,42 @@ impl WebPlatform {
             if (kind != this.shownCursor) {
                 web_cursor(kind);
                 this.shownCursor = kind;
+            }
+            // The page's text input follows the focused field's caret; the page is told when any of it changes.
+            let wanted = ui.wantsTextInput();
+            let textKind = match (ui.textInputKind()) {
+                TextKind.Text => 0u32,
+                TextKind.Number => 1u32,
+                TextKind.Decimal => 2u32,
+                TextKind.Email => 3u32,
+                TextKind.Url => 4u32,
+                TextKind.Password => 5u32,
+            };
+            let face = match (ui.returnKey()) {
+                ReturnKey.Done => 0u32,
+                ReturnKey.Go => 1u32,
+                ReturnKey.Next => 2u32,
+                ReturnKey.Search => 3u32,
+                ReturnKey.Send => 4u32,
+                ReturnKey.System => 5u32,
+            };
+            let area = if (wanted) ui.textInputArea() else Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 };
+            let state = [
+                if (wanted) 1.0f32 else 0.0,
+                round<f32>(textKind),
+                round<f32>(face),
+                area.x,
+                area.y,
+                area.w,
+                area.h,
+            ];
+            var same = true;
+            for (i in 0..state.length) {
+                same = same && state[i] == this.textInput[i];
+            }
+            if (!same) {
+                this.textInput = state;
+                web_text_input(if (wanted) 1 else 0, textKind, face, area.x, area.y, area.w, area.h);
             }
             this.endFrame();
             match (ui.frameDelay()) {

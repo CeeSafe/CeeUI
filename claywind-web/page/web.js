@@ -7,9 +7,9 @@
 // the texts of the last paste and the last copy.
 
 const MAX_WIDTH = 2880, MAX_HEIGHT = 1800;   // the largest frame, in pixels (main.cee has the same)
-const PASTE_BYTES = 1048576, COPY_BYTES = 1048576;
+const PASTE_BYTES = 1048576, COPY_BYTES = 1048576, COMPOSE_BYTES = 4096;
 const EVENTS = 1024;                       // events the ring holds; each is a kind and four numbers
-const TICK = 0, WIDTH = 2, HEIGHT = 3, CURSOR = 4, HEAD = 5, TAIL = 6, STATE = 7, WAKE = 8, BOXES = 9, PASTED = 10, COPIES = 11, COPIED = 12;
+const TICK = 0, WIDTH = 2, HEIGHT = 3, CURSOR = 4, HEAD = 5, TAIL = 6, STATE = 7, WAKE = 8, BOXES = 9, PASTED = 10, COPIES = 11, COPIED = 12, COMPOSED = 13;
 const BOX = 16, MAX_BOXES = 16;            // the changed boxes not yet painted: four numbers each, from control[BOX]
 const MOVE = 1, BUTTON = 2, WHEEL = 3, KEY = 4, TEXT = 5, RESIZE = 6, FOCUS = 7, TOUCH = 8, ACCESS = 9;
 // ClayWind's Key, in keyIndex's order (claywind/src/platform.cee).
@@ -20,6 +20,7 @@ const KEYS = ['Escape', 'Enter', 'Tab', 'Backspace', 'Delete', 'ArrowLeft', 'Arr
 const canvas = document.getElementById('frame');
 const note = document.getElementById('note');
 const access = document.getElementById('access');
+const text = document.getElementById('text');
 const context = canvas.getContext('2d');
 
 function say(text) { note.textContent = text; }
@@ -34,6 +35,7 @@ const events = new Float64Array(new SharedArrayBuffer(EVENTS * 5 * 8));
 const frame = new Uint8Array(new SharedArrayBuffer(MAX_WIDTH * MAX_HEIGHT * 4));
 const pasted = new Uint8Array(new SharedArrayBuffer(PASTE_BYTES));
 const copied = new Uint8Array(new SharedArrayBuffer(COPY_BYTES));
+const composing = new Uint8Array(new SharedArrayBuffer(COMPOSE_BYTES));
 const apple = /Mac|iPhone|iPad/.test(navigator.platform);
 
 // The canvas fills the window: its size in layout points (CSS pixels).
@@ -63,12 +65,14 @@ function touch(e, phase) {
 }
 canvas.addEventListener('pointermove', (e) => { if (touch(e, 1)) queue(MOVE, ...at(e)); });
 canvas.addEventListener('pointerdown', (e) => {
-  canvas.focus();
+  if (!textWanted) canvas.focus();   // while a field has the keyboard, the text input keeps the focus
   try { canvas.setPointerCapture(e.pointerId); } catch (error) { /* not a pointer the browser knows: no capture */ }
   if (touch(e, 0)) queue(BUTTON, e.button, 1, ...at(e));
 });
 canvas.addEventListener('pointerup', (e) => { if (touch(e, 2)) queue(BUTTON, e.button, 0, ...at(e)); });
 canvas.addEventListener('pointercancel', (e) => { if (touch(e, 3)) queue(BUTTON, 0, 0, ...at(e)); });
+// A press on the canvas would take the focus from the text input, and a phone's keyboard with it.
+canvas.addEventListener('mousedown', (e) => { if (textWanted) e.preventDefault(); });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); queue(WHEEL, -e.deltaX / 40, -e.deltaY / 40); }, { passive: false });
 // The keyboard is the app's while the canvas or one of its elements for a screen reader has the focus.
@@ -86,6 +90,8 @@ function key(e, down) {
   // Paste: the text comes with the browser's paste event, which queues the key itself (below).
   // Copy and Cut likewise: the browser's event asks the program for the text.
   if (down && ['KeyV', 'KeyC', 'KeyX'].includes(e.code) && (apple ? e.metaKey : e.ctrlKey) && !e.altKey) return;
+  // A key the input method takes, a dead key, or a phone's keyboard: its text comes from the text input (below).
+  if (e.isComposing || e.keyCode === 229 || e.key === 'Dead' || e.key === 'Unidentified') return;
   const index = KEYS.indexOf(e.code);
   const printable = e.key.length === 1 || [...e.key].length === 1;
   const character = printable ? e.key.codePointAt(0) : 0;
@@ -94,9 +100,10 @@ function key(e, down) {
   if (down && printable && !e.ctrlKey && !e.metaKey) queue(TEXT, character);
   // The page keeps its own shortcuts (reload, the developer tools); everything else is the app's.
   if (index >= 0 && !e.metaKey && !(e.code.startsWith('F') && e.code.length > 1)) e.preventDefault();
-  if (e.code === 'Space') e.preventDefault();
+  // A key typed here is not typed into the text input as well.
+  if (printable && !e.ctrlKey && !e.metaKey) e.preventDefault();
 }
-for (const target of [canvas, access]) {
+for (const target of [canvas, access, text]) {
   target.addEventListener('keydown', (e) => key(e, true));
   target.addEventListener('keyup', (e) => key(e, false));
 }
@@ -148,6 +155,68 @@ function resize() {
   queue(RESIZE, w, h, devicePixelRatio);
 }
 addEventListener('resize', resize);   // a change of zoom, or of the screen's pixel ratio, is a resize too
+
+// Text input. While one of the app's text fields has the focus, the page's own text input has the page's, unseen at
+// the field's caret: a phone shows its keyboard for it, and an input method composes in it, its candidates beside the
+// caret. A hardware key is typed by `key` above and never reaches the input; what does reach it (a phone's keys, an
+// input method's or a dead key's result) goes to the app as typed text, and what is being composed as the Ui's
+// composition. The input holds one space, so that a phone's backspace has something to delete.
+const INPUT_MODES = ['text', 'numeric', 'decimal', 'email', 'url', 'text'];
+const ENTER_HINTS = ['done', 'go', 'next', 'search', 'send', 'enter'];
+let textWanted = false;
+
+function rest() {
+  text.value = ' ';
+  text.setSelectionRange(1, 1);
+}
+
+function compose(string) {
+  const bytes = new TextEncoder().encode(string);
+  let n = Math.min(bytes.length, COMPOSE_BYTES);
+  while (n > 0 && n < bytes.length && (bytes[n] & 0xC0) === 0x80) n--;   // not through the middle of a character
+  composing.set(bytes.subarray(0, n));
+  Atomics.store(control, COMPOSED, n);
+  Atomics.add(control, WAKE, 1);
+  Atomics.notify(control, WAKE);
+}
+
+function typed(string) { for (const character of string) queue(TEXT, character.codePointAt(0)); }
+function press(code) { const index = KEYS.indexOf(code); queue(KEY, index, 1, 0, 0); queue(KEY, index, 0, 0, 0); }
+
+text.addEventListener('compositionstart', () => compose(''));
+text.addEventListener('compositionupdate', (e) => compose(e.data));
+text.addEventListener('compositionend', (e) => { compose(''); typed(e.data); rest(); });
+text.addEventListener('beforeinput', (e) => {
+  if (e.isComposing || e.inputType === 'insertCompositionText' || e.inputType === 'insertFromComposition') return;
+  e.preventDefault();
+  if (e.inputType === 'insertText' || e.inputType === 'insertReplacementText') typed(e.data || '');
+  else if (e.inputType === 'deleteContentBackward' || e.inputType === 'deleteWordBackward') press('Backspace');
+  else if (e.inputType === 'deleteContentForward') press('Delete');
+  else if (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph') press('Enter');
+});
+text.addEventListener('input', (e) => { if (!e.isComposing) rest(); });
+// The focus taken from the input while a field wants it (a tap outside it) comes back.
+text.addEventListener('blur', () => setTimeout(() => {
+  if (textWanted && document.hasFocus() && document.activeElement !== text) text.focus({ preventScroll: true });
+}, 0));
+
+// What the app says of its focused text field: whether there is one, its kind, its Return key and its caret's box.
+function textInput(state) {
+  textWanted = state.on;
+  if (!state.on) {
+    if (document.activeElement === text) { compose(''); canvas.focus({ preventScroll: true }); }
+    return;
+  }
+  text.style.left = Math.max(0, Math.min(state.x, innerWidth - 2)) + 'px';
+  text.style.top = Math.max(0, Math.min(state.y, innerHeight - 2)) + 'px';
+  text.style.height = Math.max(1, state.h) + 'px';
+  text.inputMode = INPUT_MODES[state.kind] || 'text';
+  text.enterKeyHint = ENTER_HINTS[state.returnKey] || 'enter';
+  if (document.activeElement !== text && (document.activeElement === canvas || access.contains(document.activeElement))) {
+    rest();
+    text.focus({ preventScroll: true });
+  }
+}
 
 // Accessibility. The canvas is pixels, so the app's elements (ClayWind's access list: a role, a name, a state and a
 // box each) are kept as elements of the page over it, in reading order, for a screen reader to find. What the reader
@@ -213,8 +282,10 @@ function mirror(nodes) {
     if (!live.has(id)) { element.remove(); mirrored.delete(id); }
   }
   // The app's focus is the page's, so a reader says where it went; with none, the canvas keeps the keyboard.
-  const wanted = focused === null ? canvas : focused;
-  const inside = document.activeElement === canvas || access.contains(document.activeElement);
+  // A text field's focus is the text input's, named as the field is.
+  if (textWanted && focused !== null) text.setAttribute('aria-label', focused.getAttribute('aria-label') || '');
+  const wanted = textWanted ? text : focused === null ? canvas : focused;
+  const inside = document.activeElement === canvas || document.activeElement === text || access.contains(document.activeElement);
   if (inside && document.activeElement !== wanted) {
     focusing = wanted;
     wanted.focus({ preventScroll: true });
@@ -277,9 +348,10 @@ worker.onerror = (e) => say('The worker failed: ' + e.message);
 worker.onmessage = (e) => {
   if (e.data === 'running') { say(''); access.setAttribute('aria-label', document.title); canvas.focus(); }
   else if (e.data.access !== undefined) mirror(e.data.access);
+  else if (e.data.input !== undefined) textInput(e.data.input);
   // A copy the page did not ask for (a menu's, a button's): the browser may refuse it without a recent key or click.
   else if (e.data.copied !== undefined) { if (e.data.copied !== taken) navigator.clipboard.writeText(copyText()).catch(() => {}); }
   else say(String(e.data));
 };
-worker.postMessage({ control, events, frame, pasted, copied, fonts, width, height, ratio: devicePixelRatio, apple });
+worker.postMessage({ control, events, frame, pasted, copied, composing, fonts, width, height, ratio: devicePixelRatio, apple });
 requestAnimationFrame(paint);

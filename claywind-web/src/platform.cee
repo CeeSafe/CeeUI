@@ -40,6 +40,8 @@ public struct WebPlatform {
     shownCursor: u32;
     /// What the page's elements for a screen reader come to (Ui.accessSum), as it was last given them.
     accessSum: u64;
+    /// What the page was last told of the text input: wanted, kind, Return key, and the caret's box.
+    textInput: [f32; 7];
     /// The page's touches this frame, for the Ui's gestures; past 64 a frame, later moves are left out, never a
     /// finger's start or end (as the desktop host's).
     touches: [Touch; 64];
@@ -65,6 +67,7 @@ public struct WebPlatform {
         apple: false,
         shownCursor: 0,
         accessSum: 0,
+        textInput: [0.0f32; 7],
         touches: [Touch { id: 0, phase: TouchPhase.Began, position: Vec2.zero(), time: 0.0 }; 64],
         touchCount: 0,
         touchRead: 0,

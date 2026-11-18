@@ -4,13 +4,13 @@
 // the pointer's shape, the clipboard, a panic.
 
 const EVENTS = 1024;
-const TICK = 0, WIDTH = 2, HEIGHT = 3, CURSOR = 4, HEAD = 5, TAIL = 6, STATE = 7, WAKE = 8, BOXES = 9, PASTED = 10, COPIES = 11, COPIED = 12;
+const TICK = 0, WIDTH = 2, HEIGHT = 3, CURSOR = 4, HEAD = 5, TAIL = 6, STATE = 7, WAKE = 8, BOXES = 9, PASTED = 10, COPIES = 11, COPIED = 12, COMPOSED = 13;
 const BOX = 16, MAX_BOXES = 16;
 const PASTE_BYTES = 1048576;
 
 onmessage = async (message) => {
-  const { control, events, frame, pasted, copied, fonts, width, height, ratio, apple } = message.data;
-  let changed = [], nodes = [], placed = [], pasteAt = 0n, take;
+  const { control, events, frame, pasted, copied, composing, fonts, width, height, ratio, apple } = message.data;
+  let changed = [], nodes = [], placed = [], pasteAt = 0n, composeAt = 0n, take;
   const putLength = (pointer, n) => new BigUint64Array(memory.buffer, Number(pointer), 1).set([BigInt(n)]);
   let memory, seen = Atomics.load(control, TICK), last = performance.now();
   const bytes = () => new Uint8Array(memory.buffer);
@@ -79,6 +79,17 @@ onmessage = async (message) => {
       putLength(length, n);
       return pasteAt;
     },
+    // What the input method is composing, copied into a block of the module's memory taken at the first composition.
+    web_composition(length) {
+      const n = Math.min(Atomics.load(control, COMPOSED), composing.length);
+      if (n === 0) return 0n;
+      if (composeAt === 0n) composeAt = take(BigInt(composing.length));
+      if (composeAt === 0n) return 0n;
+      bytes().set(composing.subarray(0, n), Number(composeAt));
+      putLength(length, n);
+      return composeAt;
+    },
+    web_text_input(on, kind, returnKey, x, y, w, h) { postMessage({ input: { on: on !== 0, kind, returnKey, x, y, w, h } }); },
     // The frame's elements for a screen reader: gathered, then sent to the page as one list.
     web_access_node(id, role, flags, x, y, w, h, min, max, now, label, labelLength, value, valueLength, caret, anchor) {
       const read = (pointer, length) => new TextDecoder().decode(bytes().slice(Number(pointer), Number(pointer) + Number(length)));

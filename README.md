@@ -303,8 +303,10 @@ sleeping while nothing changes.
   `wasm-ld`, and the result is served by its own `serve.py`, or any server that sends the two cross-origin isolation
   headers. It is 64-bit WebAssembly, which Chrome and Firefox run and Safari does not yet. For a screen reader the
   page keeps the app's elements (role, name, state, place) as unseen elements of its own over the canvas; a reader's
-  press, focus and slider step go to the app. Not there: input methods and a phone's keyboard, a text field's caret
-  for a reader, file dialogs, drag and drop from outside, a second window.
+  press, focus and slider step go to the app. While a text field has the focus, the page's own unseen text input
+  has the page's, at the field's caret: a phone shows its keyboard for it (of the field's kind, with its Return
+  key), and an input method composes in it. Not there: fallback fonts (text outside the app's fonts draws as boxes),
+  a text field's caret for a reader, file dialogs, drag and drop from outside, a second window.
 - **Linux:** the desktop host needs X11; Wayland is not supported yet.
 - **Not ported from the C version:** the debug view and Clay's built-in transitions. ClayWind has its own transition
   engine.
