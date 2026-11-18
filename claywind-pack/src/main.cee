@@ -642,11 +642,15 @@ fn packAndroid(o: borrow Options) -> i32 {
             return fail("could not make the library's directory");
         }
         let so = cat([lib.view(), "/libmain.so"]);
-        let flags: [StringView; 12] = [
+        // A shared library may have undefined symbols, and then the app cannot load on the phone: the link refuses
+        // them here, where it can be seen (a dependency's library that was not built for Android, say).
+        let flags: [StringView; 14] = [
             "--cc",
             cc.view(),
             "--cflag",
             "-shared",
+            "--cflag",
+            "-Wl,--no-undefined",
             "--cflag",
             "-fPIC",
             "--cflag",
