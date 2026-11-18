@@ -9,13 +9,33 @@
 // An element's style is resolved as RendererOpenElement does: base props, then hover (pointer over it), active
 // (hovered and pressed), group-hover, focus, and disabled (which wins and suppresses the rest), then transitions.
 
-/// Tailwind breakpoints from the screen width (GetBreakpoint): sm < 768 <= md < 1024 <= lg < 1280 <= xl.
+/// Tailwind's breakpoints, mobile first: the window's width is at least the breakpoint's (`SCREEN_SM` and the
+/// others), and `Base` is below `sm` (a phone held upright).
 public enum Breakpoint {
+    Base,
     Sm,
     Md,
     Lg,
     Xl,
+    Xxl,
 }
+
+/// Where each breakpoint begins, in points of the window's width, as Tailwind's (40rem, 48rem, 64rem, 80rem, 96rem).
+public const SCREEN_SM: f32 = 640.0;
+public const SCREEN_MD: f32 = 768.0;
+public const SCREEN_LG: f32 = 1024.0;
+public const SCREEN_XL: f32 = 1280.0;
+public const SCREEN_2XL: f32 = 1536.0;
+
+/// The width from which breakpoint `b` holds.
+public fn screenFrom(b: Breakpoint) -> f32 => match (b) {
+    Breakpoint.Base => 0.0,
+    Breakpoint.Sm => SCREEN_SM,
+    Breakpoint.Md => SCREEN_MD,
+    Breakpoint.Lg => SCREEN_LG,
+    Breakpoint.Xl => SCREEN_XL,
+    Breakpoint.Xxl => SCREEN_2XL,
+};
 
 /// A screen's size along one axis, as a layout chooses by it (Ui.widthClass, Ui.heightClass): `Compact` is a phone
 /// held upright (its width) or on its side (its height), `Regular` a tablet or a desktop window.
@@ -379,6 +399,16 @@ public struct Ui<region r> {
         let id = this.tree.idFor(style.elementId);
         var decl = style.base;
         applyProps(mut decl, style.props);
+        // The responsive variants, smallest first, each from its width up; then the states, as Tailwind orders them.
+        let widths = [SCREEN_SM, SCREEN_MD, SCREEN_LG, SCREEN_XL, SCREEN_2XL];
+        for (k in 0..5usize) {
+            if (this.screen.w >= widths[k]) {
+                match (style.screenProps[k]) {
+                    Some(p) => { applyProps(mut decl, p); }
+                    null => {}
+                }
+            }
+        }
         let enabled = !style.disabledNow;
         let hovered = this.tree.isPointerOver(id);
         if (enabled && hovered) {
@@ -618,20 +648,30 @@ public struct Ui<region r> {
     public fn heightClass(borrow this) -> SizeClass =>
         if (this.screen.h < COMPACT_HEIGHT) SizeClass.Compact else SizeClass.Regular;
 
-    /// GetBreakpoint.
+    /// The widest breakpoint the window's width reaches.
     public fn breakpoint(borrow this) -> Breakpoint {
         let w = this.screen.w;
-        if (w >= 1280.0) {
+        if (w >= SCREEN_2XL) {
+            return Breakpoint.Xxl;
+        }
+        if (w >= SCREEN_XL) {
             return Breakpoint.Xl;
         }
-        if (w >= 1024.0) {
+        if (w >= SCREEN_LG) {
             return Breakpoint.Lg;
         }
-        if (w >= 768.0) {
+        if (w >= SCREEN_MD) {
             return Breakpoint.Md;
         }
-        return Breakpoint.Sm;
+        if (w >= SCREEN_SM) {
+            return Breakpoint.Sm;
+        }
+        return Breakpoint.Base;
     }
+
+    /// Whether the window is at least as wide as breakpoint `b`: what builds an element only from a width up, as
+    /// Tailwind's `hidden md:block` shows it (`if (ui.atLeast(Breakpoint.Md)) { sidebar(ui); }`).
+    public fn atLeast(borrow this, b: Breakpoint) -> bool => this.screen.w >= screenFrom(b);
 
     /// Dark mode (ClayWind_darkMode) and THEME(dark, light).
     public fn setDarkMode(borrow mut this, on: bool) {

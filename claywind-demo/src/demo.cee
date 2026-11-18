@@ -651,10 +651,7 @@ fn update(ui: borrow mut Ui, app: borrow mut DemoApp) {
 // ---- sidebar -------------------------------------------------------------------------------------------------------------
 
 fn sidebar(ui: borrow mut Ui, app: borrow DemoApp) {
-    let wide = match (ui.breakpoint()) {
-        Breakpoint.Sm => false,
-        _ => true,
-    };
+    let wide = ui.atLeast(Breakpoint.Md); // md: the full sidebar; below it, only the initials
     ui.open(Style.column().id("sidebar").w(Size.fixed(if (wide) 220.0 else 72.0)).h(Size.grow()).bg(panelBg(ui))
         .p(space(5.0)).gap(space(2.0)));
     ui.open(Style.row().pb(space(3.0)));

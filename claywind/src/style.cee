@@ -126,6 +126,8 @@ struct GradientSpec {
 /// Every option of renderer.h's ComponentOptions, each optional ("unset" leaves the declaration alone).
 /// Booleans are switches: they can turn a feature on, as in C, not off.
 struct Props {
+    /// flex-row / flex-col: a row or a column whatever the style began as (`md(Style.of().flexRow())`).
+    direction: Direction?;
     background: Color?;
     gap: f32?;
     gapX: f32?;
@@ -193,6 +195,7 @@ struct Props {
 }
 
 fn noProps() -> Props => Props {
+    direction: null,
     background: null,
     gap: null,
     gapX: null,
@@ -263,6 +266,10 @@ public const DEFAULT_INK: u32 = 0xE5E7EBFF;
 
 /// Overlays `p` onto `d` (ParseComponentOptions, in its order, so later options win the same way).
 fn applyProps(d: borrow mut Decl, p: Props) {
+    match (p.direction) {
+        Some(direction) => { d.layout.direction = direction; } // first: the gaps below follow it
+        null => {}
+    }
     let row = d.layout.isRow();
     match (p.background) {
         Some(c) => { d.background = c; }
@@ -665,6 +672,8 @@ public struct Style {
     focusProps: Props?;
     disabledProps: Props?;
     groupProps: Props?;
+    /// The responsive variants (sm: md: lg: xl: 2xl:), smallest first: each applies from its breakpoint's width up.
+    screenProps: [Props?; 5];
     groupId: u32;
     focused: bool;
     disabledNow: bool;
@@ -679,6 +688,7 @@ public struct Style {
         focusProps: null,
         disabledProps: null,
         groupProps: null,
+        screenProps: [null, null, null, null, null],
         groupId: 0,
         focused: false,
         disabledNow: false,
@@ -749,6 +759,23 @@ public struct Style {
         s.disabledProps = v.props;
         return s;
     }
+    /// sm: `v` applies where the window is at least 640 points wide (Tailwind's breakpoints are mobile first: the
+    /// base style is a phone's, and each variant from its width up, the wider over the narrower).
+    public fn sm(this, v: Style) -> Style => this.atScreen(0, v);
+    /// md: from 768 points wide (a tablet held upright).
+    public fn md(this, v: Style) -> Style => this.atScreen(1, v);
+    /// lg: from 1024 points wide.
+    public fn lg(this, v: Style) -> Style => this.atScreen(2, v);
+    /// xl: from 1280 points wide.
+    public fn xl(this, v: Style) -> Style => this.atScreen(3, v);
+    /// 2xl: from 1536 points wide.
+    public fn xxl(this, v: Style) -> Style => this.atScreen(4, v);
+    fn atScreen(this, k: usize, v: Style) -> Style {
+        var s = this;
+        s.screenProps[k] = v.props;
+        return s;
+    }
+
     /// group-hover / peer-hover: `v` applies while the element named `group` is hovered.
     public fn groupHover(this, group: StringView, v: Style) -> Style {
         var s = this;
@@ -1063,6 +1090,18 @@ public struct Style {
     public fn wrap(this) -> Style {
         var s = this;
         s.props.wrap = true;
+        return s;
+    }
+    /// flex-row: lays the children out in a row, whatever the style began as.
+    public fn flexRow(this) -> Style {
+        var s = this;
+        s.props.direction = Direction.Row;
+        return s;
+    }
+    /// flex-col: lays the children out in a column, whatever the style began as.
+    public fn flexCol(this) -> Style {
+        var s = this;
+        s.props.direction = Direction.Column;
         return s;
     }
     public fn content(this, c: AlignContent) -> Style {

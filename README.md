@@ -206,6 +206,14 @@ screen: `Style.safe(ui.safeArea())` adds the insets to an element's padding, so 
 its content stays clear (`Insets.sides()` and `ends()` for a bar that reaches an edge itself). `Ui.widthClass` and
 `heightClass` are `Compact` or `Regular` (a phone held upright is compact in width, on its side in height), beside
 the Tailwind breakpoints; a rotation is a new screen size. The pixel ratio is the window's scale, as on the desktop.
+
+Responsive styles, mobile first as Tailwind's: the base style is a phone's, and `sm`, `md`, `lg`, `xl` and `xxl`
+(640, 768, 1024, 1280 and 1536 points of the window's width, Tailwind's `sm:` to `2xl:`) each hold from their width
+up, the wider over the narrower, before the hover and focus variants. `flexRow()` and `flexCol()` change a style's
+direction, so a column of a phone becomes a row of a tablet:
+`Style.column().gap(space(2.0)).md(Style.of().flexRow().gap(space(4.0)))`. What is built only from a width up
+(Tailwind's `hidden md:block`) is an `if`: `if (ui.atLeast(Breakpoint.Md)) { sidebar(ui); }`; `ui.breakpoint()`
+is the widest one reached (`Base` below `sm`), and `ui.containerWidth(id)` an element's own width, for `@container`.
 The desktop and GPU hosts pass the window's safe area (`Window.safeArea`, CeeSafe ADR 0156: iOS and Android); the
 desktop host built for Android draws the demo below the status bar and above the gesture bar, upright and turned.
 

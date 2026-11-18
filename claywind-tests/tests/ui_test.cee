@@ -368,6 +368,55 @@ fn breakpointsThemeAndContainers() -> Result<void, TestFailure> {
     return Ok();
 }
 
+/// One frame at `width`: a box 100 wide, 200 from md and 300 from lg, holding a column that is a row from md, of two
+/// 50-point squares; the box's width, and the column's width and height.
+fn responsiveFrame(width: f32) -> Result<[f32; 3], TestFailure> {
+    var storage = [0u8; 524288];
+    let memory = FixedBufferAllocator.over(mut storage);
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(width, 600.0, -1.0, -1.0);
+    ui.begin(mut platform);
+    ui.open(Style.column().id("box").w(Size.fixed(100.0)).md(Style.of().w(Size.fixed(200.0)))
+        .lg(Style.of().w(Size.fixed(300.0))));
+    ui.open(Style.column().id("pair").md(Style.of().flexRow()));
+    for (k in 0..2usize) {
+        ui.open(Style.box().w(Size.fixed(50.0)).h(Size.fixed(50.0)));
+        ui.close();
+    }
+    ui.close();
+    ui.close();
+    finish(mut ui, mut platform)?;
+    let box = ui.boxOf("box")!;
+    let pair = ui.boxOf("pair")!;
+    return Ok([box.w, pair.w, pair.h]);
+}
+
+/// Tailwind's breakpoints, mobile first: the base style is a phone's, each variant holds from its width up and the
+/// wider over the narrower; `flexRow` turns a column into a row; `atLeast` and `breakpoint` read the same widths.
+@test
+fn responsiveVariantsAreMobileFirst() -> Result<void, TestFailure> {
+    let widths = [390.0f32, 700.0, 800.0, 1100.0, 1300.0, 1600.0];
+    let boxes = [100.0f32, 100.0, 200.0, 300.0, 300.0, 300.0];
+    let rows = [false, false, true, true, true, true];
+    let named = [Breakpoint.Base, Breakpoint.Sm, Breakpoint.Md, Breakpoint.Lg, Breakpoint.Xl, Breakpoint.Xxl];
+    for (k in 0..6usize) {
+        let got = responsiveFrame(widths[k])?;
+        expect("the box's width", got[0], boxes[k])?;
+        expect("the pair's width", got[1], if (rows[k]) 100.0 else 50.0)?;
+        expect("the pair's height", got[2], if (rows[k]) 50.0 else 100.0)?;
+        var storage = [0u8; 262144];
+        let memory = FixedBufferAllocator.over(mut storage);
+        var ui = Ui.create(memory, UiCapacity.of(16))!;
+        var platform = platformAt(widths[k], 600.0, -1.0, -1.0);
+        ui.begin(mut platform);
+        Check.isTrue(ui.breakpoint() == named[k], "the breakpoint of the width")?;
+        Check.isTrue(ui.atLeast(Breakpoint.Md) == rows[k], "atLeast(Md) from 768")?;
+        Check.isTrue(ui.atLeast(Breakpoint.Base), "every width is at least Base")?;
+        finish(mut ui, mut platform)?;
+    }
+    return Ok();
+}
+
 fn isCompact(c: SizeClass) -> bool => match (c) {
     SizeClass.Compact => true,
     SizeClass.Regular => false,
