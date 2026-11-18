@@ -62,6 +62,9 @@ public struct AccessNode {
     /// is selected.
     public caret: usize;
     public anchor: usize;
+    /// The layer it is drawn in: 0 for the page, higher over it (an open dropdown's list); where elements overlap,
+    /// the point is the highest layer's (CeeSafe's `WindowAccessNode.layer`, ADR 0164 §10).
+    public layer: u32;
     element: usize; // its index in the frame's layout tree
     labelStart: usize;
     labelLength: usize;
@@ -86,6 +89,7 @@ fn emptyAccessNode() -> AccessNode => AccessNode {
     now: 0.0,
     caret: 0,
     anchor: 0,
+    layer: 0,
     element: 0,
     labelStart: 0,
     labelLength: 0,
@@ -130,6 +134,7 @@ impl<region r> Ui<r> {
         node.id = id;
         node.role = role;
         node.element = this.tree.openIndex();
+        node.layer = this.tree.openLayer();
         node.labelStart = this.accessBytes.length();
         node.labelLength = this.pushAccessBytes(label);
         if (this.hasFocus(id)) {

@@ -2,7 +2,7 @@
 name = "claywind_desktop"
 version = "0.1.0"
 kind = "library"
-ceesafec = ">=0.66.0"
+ceesafec = ">=0.72.0" # WindowAccessNode.layer (CeeSafe ADR 0164 §10)
 
 [dependencies]
 claywind = { path = "../claywind" }

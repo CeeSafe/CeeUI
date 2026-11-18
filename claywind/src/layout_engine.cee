@@ -511,6 +511,26 @@ public struct LayoutTree<region r> {
     public fn nextIndex(borrow this) -> usize => this.nodes.length();
     public fn openIndex(borrow this) -> usize => if (this.openStack.length() == 0) 0 else this.openStack.last();
 
+    /// The layer the open element is drawn in, as `hitTest` sees layers: 0 for the page, else the place of the
+    /// innermost open floating root that takes the pointer (a passthrough one does not) among the tree's roots, the
+    /// later on top. An element of an open dropdown's list is above the page it covers, wherever it is read.
+    public fn openLayer(borrow this) -> u32 {
+        var k = this.openStack.length();
+        while (k > 0) {
+            k -= 1;
+            let index = this.openStack.items[k];
+            let floating = this.nodes.items[index].decl.floating;
+            if (floating.isFloating() && !floating.passthrough) {
+                for (r in 0..this.roots.length()) {
+                    if (this.roots.items[r].index == index) {
+                        return truncate<u32>(r);
+                    }
+                }
+            }
+        }
+        return 0;
+    }
+
     /// Where element `index` of this frame was placed (a text leaf too, which `boxOf` does not know), or null if
     /// the frame is not laid out yet or the element is not in it.
     public fn areaAt(borrow this, index: usize) -> Rect? {

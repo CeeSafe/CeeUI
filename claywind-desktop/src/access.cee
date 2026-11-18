@@ -93,6 +93,7 @@ public fn giveAccessNodes(ui: borrow Ui, window: borrow mut Window, last: borrow
             valueLength: truncate<u32>(value.length),
             caret: truncate<u32>(node.caret.min(value.length)),
             anchor: truncate<u32>(node.anchor.min(value.length)),
+            layer: node.layer,
         }) is Ok();
         if (!ok) {
             return;

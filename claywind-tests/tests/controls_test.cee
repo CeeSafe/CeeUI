@@ -308,6 +308,7 @@ fn dropdownOverRow(
     ui.open(Style.column().id("list").w(Size.grow()).h(Size.grow()).scroll(ScrollAxis.Vertical));
     ui.open(Style.box().id("row").w(Size.grow()).h(Size.fixed(60.0)));
     let hit = ui.clicked("row");
+    let _ = ui.access(hashId("row"), AccessRole.ListItem, "Row".bytes());
     ui.close();
     ui.close();
     ui.close();
@@ -345,6 +346,23 @@ fn anOpenDropdownTakesTheClickFromWhatItCovers() -> Result<void, TestFailure> {
     let item = centerOf(ui, "kind~1");
     let row = ui.boxOf("row")!;
     Check.isTrue(row.contains(item), "the item covers the row")?;
+    // To a screen reader too: the item is read before the row, but is of a higher layer, so the point is its.
+    var itemLayer: u32 = 0;
+    var rowLayer: u32 = 99;
+    var itemFirst = false;
+    for (i in 0..ui.accessCount()) {
+        let node = ui.accessAt(i);
+        if (node.id == hashId("row")) {
+            rowLayer = node.layer;
+        }
+        if (node.id == hashId("kind~1")) {
+            itemLayer = node.layer;
+            itemFirst = rowLayer == 99;
+        }
+    }
+    Check.equalU64(0, rowLayer as u64)?;
+    Check.isTrue(itemLayer > 0, "the open list's item is above the page")?;
+    Check.isTrue(itemFirst, "the item is read before the row")?;
     p.pointerState.position = item;
     p.pointerState.pressed = true;
     p.pointerState.down = true;
