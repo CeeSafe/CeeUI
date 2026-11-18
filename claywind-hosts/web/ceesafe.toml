@@ -1,0 +1,10 @@
+[package]
+name = "web"
+version = "0.1.0"
+kind = "library"
+profile = "freestanding"
+c = ["src/host.c"]
+
+[dependencies]
+claywind = { path = "../../claywind" }
+claywind_demo = { path = "../../claywind-demo" }

@@ -295,6 +295,10 @@ sleeping while nothing changes.
   surface is the app's). A control of your own is one line after its `open`:
   `ui.access(id, AccessRole.Button, label)`; a field with no label of its own is named after it:
   `ui.accessName("server", "Server address")`.
+- **The web host** (`claywind-hosts/web`, a first step): the demo as a WebAssembly module, drawn by the software
+  renderer onto a canvas, with the pointer and the keyboard. `sh build.sh` there needs a clang with the `wasm64`
+  target and `wasm-ld`, then `python3 out/web/serve.py`. It is 64-bit WebAssembly, which Chrome and Firefox run and
+  Safari does not yet; it redraws the whole frame each time; no clipboard, input method, touch or accessibility.
 - **Linux:** the desktop host needs X11; Wayland is not supported yet.
 - **Not ported from the C version:** the debug view and Clay's built-in transitions. ClayWind has its own transition
   engine.
