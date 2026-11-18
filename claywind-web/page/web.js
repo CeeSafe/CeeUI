@@ -336,7 +336,8 @@ const [width, height] = size();
 canvas.style.width = width + 'px';
 canvas.style.height = height + 'px';
 say('Loading…');
-// app.json (claywind-pack writes it) lists the app's fonts, in the order the program asks for them.
+// app.json (claywind-pack writes it) lists the app's fonts, in the order the program asks for them, and its fallback
+// fonts, which are fetched only when a character needs one.
 const app = await (await fetch('app.json')).json();
 const fonts = await Promise.all(app.fonts.map(async (name) => {
   const response = await fetch('fonts/' + name);
@@ -353,5 +354,5 @@ worker.onmessage = (e) => {
   else if (e.data.copied !== undefined) { if (e.data.copied !== taken) navigator.clipboard.writeText(copyText()).catch(() => {}); }
   else say(String(e.data));
 };
-worker.postMessage({ control, events, frame, pasted, copied, composing, fonts, width, height, ratio: devicePixelRatio, apple });
+worker.postMessage({ control, events, frame, pasted, copied, composing, fonts, fallbacks: app.fallbacks || [], width, height, ratio: devicePixelRatio, apple });
 requestAnimationFrame(paint);

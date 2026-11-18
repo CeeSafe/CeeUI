@@ -42,6 +42,13 @@ public struct WebPlatform {
     accessSum: u64;
     /// What the page was last told of the text input: wanted, kind, Return key, and the caret's box.
     textInput: [f32; 7];
+    /// The page's fallback fonts: the next to fetch, whether there are no more, the characters none has, and
+    /// whether a font was just added (the next frame runs at once).
+    fallbackNext: u32;
+    fallbacksDone: bool;
+    hopeless: [u32; 256];
+    hopelessCount: usize;
+    again: bool;
     /// The page's touches this frame, for the Ui's gestures; past 64 a frame, later moves are left out, never a
     /// finger's start or end (as the desktop host's).
     touches: [Touch; 64];
@@ -68,6 +75,11 @@ public struct WebPlatform {
         shownCursor: 0,
         accessSum: 0,
         textInput: [0.0f32; 7],
+        fallbackNext: 0,
+        fallbacksDone: false,
+        hopeless: [0u32; 256],
+        hopelessCount: 0,
+        again: false,
         touches: [Touch { id: 0, phase: TouchPhase.Began, position: Vec2.zero(), time: 0.0 }; 64],
         touchCount: 0,
         touchRead: 0,

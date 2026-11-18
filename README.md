@@ -305,7 +305,8 @@ sleeping while nothing changes.
   page keeps the app's elements (role, name, state, place) as unseen elements of its own over the canvas; a reader's
   press, focus and slider step go to the app. While a text field has the focus, the page's own unseen text input
   has the page's, at the field's caret: a phone shows its keyboard for it (of the field's kind, with its Return
-  key), and an input method composes in it. Not there: fallback fonts (text outside the app's fonts draws as boxes),
+  key), and an input method composes in it. Fallback fonts (`claywind-pack web --fallback FILE...`) are fetched only when
+  text has a character the app's fonts lack. Not there: colour emoji, the system's own fonts,
   a text field's caret for a reader, file dialogs, drag and drop from outside, a second window.
 - **Linux:** the desktop host needs X11; Wayland is not supported yet.
 - **Not ported from the C version:** the debug view and Clay's built-in transitions. ClayWind has its own transition

@@ -31,7 +31,10 @@ public const WEB_MAX_PIXELS_WIDTH: usize = 2880;
 public const WEB_MAX_PIXELS_HEIGHT: usize = 1800;
 
 /// The memory a Raster of webRasterCapacity needs.
-public const WEB_RASTER_BYTES: usize = 201326592;
+public const WEB_RASTER_BYTES: usize = 264241152;
+
+/// The font id of the page's fallback font `k` once loaded.
+const FIRST_FALLBACK_ID: u32 = 64;
 
 extern "C" {
     /// `size` bytes of the module's memory (host.c), which stay the caller's; null when there are not that many left.
@@ -42,6 +45,9 @@ extern "C" {
     fn web_start(values: *mut f64);
     /// The page's font `index`, in the module's memory, and its length; null past the last.
     fn web_font(index: u32, length: *mut usize) -> *u8;
+    /// The page's fallback font `index`, fetched now, in the module's memory, and its length; null past the last or
+    /// when it cannot be had.
+    fn web_fallback(index: u32, length: *mut usize) -> *u8;
     /// Waits for the page's next frame; the seconds since the last wait returned.
     fn web_wait() -> f64;
     /// Sleeps until the page queues an event or `seconds` pass; a negative number is no limit.
@@ -129,8 +135,13 @@ public struct WebFonts {
     }
 }
 
-/// A Raster's capacity for the web host: frames up to WEB_MAX_PIXELS.
-public fn webRasterCapacity() -> RasterCapacity => RasterCapacity.of(WEB_MAX_PIXELS_WIDTH, WEB_MAX_PIXELS_HEIGHT);
+/// A Raster's capacity for the web host: frames up to WEB_MAX_PIXELS, and room for the page's fallback fonts (a font
+/// with the CJK characters is tens of megabytes).
+public fn webRasterCapacity() -> RasterCapacity {
+    var capacity = RasterCapacity.of(WEB_MAX_PIXELS_WIDTH, WEB_MAX_PIXELS_HEIGHT);
+    capacity.fontBytes = 67108864;
+    return capacity;
+}
 
 /// The ratio to draw at: the page's, lowered until `size` points fit the largest frame (as the desktop host's).
 fn ratioFor(size: Dims, wanted: f32) -> f32 {
@@ -257,14 +268,77 @@ impl WebPlatform {
         }
     }
 
+    /// Whether a character was given up on: no fallback font has it.
+    fn isHopeless(borrow this, cp: u32) -> bool {
+        for (i in 0..this.hopelessCount) {
+            if (this.hopeless[i] == cp) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// The page's fallback fonts (claywind-pack's `--fallback`, in their order) for the characters of the frame's
+    /// text that its fonts lack: the next ones are fetched and added to `raster`'s fallback chain until one has the
+    /// character; how many were added. Text in the app's own fonts fetches nothing.
+    /// Safety: web_fallback gives a pointer to `length` bytes, which stay, or null.
+    fn supplyFonts(borrow mut this, ui: borrow Ui, raster: borrow mut Raster) -> u32 {
+        var added: u32 = 0;
+        for (k in 0..ui.commandCount()) {
+            let command = ui.commandAt(k);
+            match (command) {
+                Command.Text(_, run) => {
+                    let utf8 = ui.textOf(command);
+                    var i: usize = 0;
+                    while (i < utf8.length) {
+                        let cp = decodeUtf8(utf8, i);
+                        i += cp[1] as usize;
+                        // A private-use character means something else in every font: none is looked for.
+                        let privateUse = (cp[0] >= 0xE000 && cp[0] <= 0xF8FF) || cp[0] >= 0xF0000;
+                        if (cp[0] < 0x80 || privateUse || raster.covers(run.fontId, cp[0]) || this.isHopeless(cp[0])) {
+                            continue;
+                        }
+                        while (!this.fallbacksDone && !raster.covers(run.fontId, cp[0])) {
+                            unsafe {
+                                var length: usize = 0;
+                                let bytes = web_fallback(this.fallbackNext, borrow mut length as *mut usize);
+                                if (bytes as usize == 0) {
+                                    this.fallbacksDone = true;
+                                } else {
+                                    let id = FIRST_FALLBACK_ID + this.fallbackNext;
+                                    if (raster.loadFont(id, Slice.fromRaw(bytes, length)) && raster.addFallback(id)) {
+                                        added += 1;
+                                    }
+                                    this.fallbackNext += 1;
+                                }
+                            }
+                        }
+                        if (!raster.covers(run.fontId, cp[0]) && this.hopelessCount < this.hopeless.length) {
+                            this.hopeless[this.hopelessCount] = cp[0];
+                            this.hopelessCount += 1;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        return added;
+    }
+
     /// After a frame that fit (`ui.endFrame`): draws what changed of it into `raster` over `clear`, and shows just
-    /// that; a frame like the last shows nothing. The page is given the frame's elements for a screen reader.
+    /// that; a frame like the last shows nothing. The page is given the frame's elements for a screen reader, and
+    /// asked for a fallback font when the frame's text has a character its fonts lack.
     /// Safety: web_present reads the frame's pixels during the call.
     public fn show(borrow mut this, ui: borrow Ui, raster: borrow mut Raster, damage: borrow mut Damage, clear: Color) {
         let scale = ratioFor(this.size, this.ratio);
         let w = pixels(this.size.w, scale, WEB_MAX_PIXELS_WIDTH);
         let h = pixels(this.size.h, scale, WEB_MAX_PIXELS_HEIGHT);
         this.giveAccess(ui);
+        if (this.supplyFonts(ui, mut raster) > 0) {
+            // The same commands draw other glyphs now, and the next frame, which runs at once, lays them out.
+            damage.invalidate();
+            this.again = true;
+        }
         let boxes = damage.plan(ui, clear, w, h, scale);
         if (boxes == 0) {
             return;
@@ -343,6 +417,10 @@ impl WebPlatform {
                 web_text_input(if (wanted) 1 else 0, textKind, face, area.x, area.y, area.w, area.h);
             }
             this.endFrame();
+            if (this.again) {
+                this.again = false;
+                return;
+            }
             match (ui.frameDelay()) {
                 Some(seconds) => {
                     if (seconds > 0.0) {

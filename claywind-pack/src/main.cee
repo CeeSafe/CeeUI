@@ -9,7 +9,8 @@
 //                    profile already on this Mac (Xcode makes them), for `xcrun devicectl device install app`
 //   android          out/pack/NAME.apk: a NativeActivity app, signed with the debug key, for `adb install`
 //   web              out/pack/web: a page and a WebAssembly module, for a package on the web host (claywind-web);
-//                    `--font FILE`, once for each font the app loads, in its order. Serve it with the serve.py in
+//                    `--font FILE`, once for each font the app loads, in its order; `--fallback FILE`, once for
+//                    each font to fetch when text has a character those lack, in the order they are tried. Serve it with the serve.py in
 //                    it, or with any server that sends the same two headers. Needs a clang with the wasm64 target
 //                    (CLANG, else Homebrew's llvm, else `clang`) and wasm-ld (WASM_LD).
 //
@@ -34,7 +35,8 @@ struct Options {
     storePass: String;
     network: String; // --network, why the app uses the network: Android's INTERNET permission and iOS's local
     // network description; empty for an app that uses none
-    fonts: String; // --font, each on a line: the web target's fonts, in the app's order
+    fonts: String;     // --font, each on a line: the web target's fonts, in the app's order
+    fallbacks: String; // --fallback, each on a line: the web target's fallback fonts, in the order they are tried
 }
 
 fn fail(what: StringView) -> i32 {
@@ -750,6 +752,36 @@ const WEB_COMPILE: StringView = "set -e\n" +
     "done\n" +
     "\"${WASM_LD:-wasm-ld}\" -m wasm64 --no-entry --import-undefined --export=run --export=web_take -o out/pack/web/web.wasm $objects\n";
 
+/// Copies the font files named on the lines of `list` into out/pack/web/fonts as PREFIX0, PREFIX1, ..., and appends
+/// their names to `json` as an array; false when one cannot be copied.
+fn copyFonts(list: StringView, prefix: StringView, json: borrow mut String) -> bool {
+    json.append("[")!;
+    var fonts = list.split("\n");
+    var count: usize = 0;
+    loop {
+        let font = match (fonts.next()) {
+            Some(f) => f,
+            null => { break; }
+        };
+        if (font.length == 0) {
+            continue;
+        }
+        let name = cat([prefix, decimal(count).view()]);
+        if (!run("cp", [font, cat(["out/pack/web/fonts/", name.view()]).view()])) {
+            return false;
+        }
+        if (count > 0) {
+            json.append(", ")!;
+        }
+        json.append("\"")!;
+        json.append(name.view())!;
+        json.append("\"")!;
+        count += 1;
+    }
+    json.append("]")!;
+    return true;
+}
+
 /// The web target: the package's C from ceesafec, compiled and linked for 64-bit WebAssembly by clang and wasm-ld,
 /// beside the web host's page, the app's fonts and app.json, which lists them.
 fn packWeb(o: borrow Options, toml: StringView) -> i32 {
@@ -793,30 +825,15 @@ fn packWeb(o: borrow Options, toml: StringView) -> i32 {
         }
     }
     // The fonts under plain names, and app.json with the names in the app's order.
-    var json = text("{\"fonts\": [");
-    var fonts = o.fonts.view().split("\n");
-    var count: usize = 0;
-    loop {
-        let font = match (fonts.next()) {
-            Some(f) => f,
-            null => { break; }
-        };
-        if (font.length == 0) {
-            continue;
-        }
-        let name = cat(["font-", decimal(count).view()]);
-        if (!run("cp", [font, cat(["out/pack/web/fonts/", name.view()]).view()])) {
-            return fail2("cannot copy the font ", font);
-        }
-        if (count > 0) {
-            json.append(", ")!;
-        }
-        json.append("\"")!;
-        json.append(name.view())!;
-        json.append("\"")!;
-        count += 1;
+    var json = text("{\"fonts\": ");
+    if (!copyFonts(o.fonts.view(), "font-", mut json)) {
+        return fail("cannot copy a font");
     }
-    json.append("]}\n")!;
+    json.append(", \"fallbacks\": ")!;
+    if (!copyFonts(o.fallbacks.view(), "fallback-", mut json)) {
+        return fail("cannot copy a fallback font");
+    }
+    json.append("}\n")!;
     if (!writeText("out/pack/web/app.json", json.view())) {
         return fail("cannot write out/pack/web/app.json");
     }
@@ -827,7 +844,9 @@ fn packWeb(o: borrow Options, toml: StringView) -> i32 {
 fn usage() -> i32 {
     Console.writeErrorLine("usage: claywind_pack <macos|ios|ios-simulator|android|web> [--name NAME] [--id ID]");
     Console.writeErrorLine("           [--version V] [--abi arm64-v8a,x86_64] [--profile FILE] [--identity NAME]");
-    Console.writeErrorLine("           [--keystore FILE] [--keystore-pass PASSWORD] [--network WHY] [--font FILE]...");
+    Console.writeErrorLine(
+        "           [--keystore FILE] [--keystore-pass PASSWORD] [--network WHY] [--font FILE]... [--fallback FILE]...",
+    );
     Console.writeErrorLine("run in the app's package directory; the result is under out/pack");
     return 2;
 }
@@ -855,6 +874,7 @@ fn main() -> i32 {
         storePass: text("android"),
         network: String.create(),
         fonts: String.create(),
+        fallbacks: String.create(),
     };
     var i: usize = 2;
     while (i < Process.argumentCount()) {
@@ -881,6 +901,9 @@ fn main() -> i32 {
             o.storePass = text(value);
         } else if (flag == "--network") {
             o.network = text(value);
+        } else if (flag == "--fallback") {
+            o.fallbacks.append(value)!;
+            o.fallbacks.append("\n")!;
         } else if (flag == "--font") {
             o.fonts.append(value)!;
             o.fonts.append("\n")!;

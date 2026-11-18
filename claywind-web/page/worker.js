@@ -9,7 +9,7 @@ const BOX = 16, MAX_BOXES = 16;
 const PASTE_BYTES = 1048576;
 
 onmessage = async (message) => {
-  const { control, events, frame, pasted, copied, composing, fonts, width, height, ratio, apple } = message.data;
+  const { control, events, frame, pasted, copied, composing, fonts, fallbacks, width, height, ratio, apple } = message.data;
   let changed = [], nodes = [], placed = [], pasteAt = 0n, composeAt = 0n, take;
   const putLength = (pointer, n) => new BigUint64Array(memory.buffer, Number(pointer), 1).set([BigInt(n)]);
   let memory, seen = Atomics.load(control, TICK), last = performance.now();
@@ -22,6 +22,27 @@ onmessage = async (message) => {
       if (index >= placed.length) return 0n;
       putLength(length, placed[index][1]);
       return placed[index][0];
+    },
+    // Fallback font `index`: fetched when a frame first has a character the app's fonts lack. A worker may wait
+    // for a request, which the program's loop needs.
+    web_fallback(index, length) {
+      if (index >= fallbacks.length) return 0n;
+      try {
+        const request = new XMLHttpRequest();
+        request.open('GET', 'fonts/' + fallbacks[index], false);
+        request.responseType = 'arraybuffer';
+        request.send();
+        if (request.status !== 200) return 0n;
+        const font = new Uint8Array(request.response);
+        const p = take(BigInt(font.length));
+        if (p === 0n) return 0n;
+        bytes().set(font, Number(p));
+        putLength(length, font.length);
+        return p;
+      } catch (error) {
+        console.error(error);
+        return 0n;
+      }
     },
     // Returns at the page's next frame, with the seconds since the last.
     web_wait() {

@@ -7,6 +7,8 @@ set -e
 cd "$(dirname "$0")"
 FONT_DIR=${FONT_DIR:-/System/Library/Fonts/Supplemental}
 (cd ../../claywind-pack && ceesafec build)
-# The demo's faces: a regular, a bold and a monospaced one. They are the system's, copied for this machine only.
+# The demo's faces: a regular, a bold and a monospaced one, and a fallback with most scripts, fetched only when text
+# needs it. They are the system's, copied for this machine only.
 ../../claywind-pack/out/claywind_pack web --name "ClayWind" \
-    --font "$FONT_DIR/Arial.ttf" --font "$FONT_DIR/Arial Bold.ttf" --font "$FONT_DIR/Courier New.ttf"
+    --font "$FONT_DIR/Arial.ttf" --font "$FONT_DIR/Arial Bold.ttf" --font "$FONT_DIR/Courier New.ttf" \
+    --fallback "$FONT_DIR/Arial Unicode.ttf"
