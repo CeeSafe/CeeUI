@@ -5,14 +5,15 @@
 import claywind;
 
 /// The kinds of event the page queues (web.js writes the same numbers).
-const EVENT_MOVE: i32 = 1;   // x, y
-const EVENT_BUTTON: i32 = 2; // button (0 primary, 1 middle, 2 secondary), down, x, y
-const EVENT_WHEEL: i32 = 3;  // dx, dy in lines; positive dy scrolls up
-const EVENT_KEY: i32 = 4;    // the key's index or -1, down + 2 * repeat, modifiers (1 shift, 2 control, 4 alt, 8 command), its character or 0
-const EVENT_TEXT: i32 = 5;   // a typed Unicode scalar
-const EVENT_RESIZE: i32 = 6; // width, height in layout points, the device pixels to a point
-const EVENT_FOCUS: i32 = 7;  // focused
-const EVENT_TOUCH: i32 = 8;  // the finger's id * 4 + its phase (0 began, 1 moved, 2 ended, 3 cancelled), x, y, seconds
+const EVENT_MOVE: i32 = 1;          // x, y
+const EVENT_BUTTON: i32 = 2;        // button (0 primary, 1 middle, 2 secondary), down, x, y
+const EVENT_WHEEL: i32 = 3;         // dx, dy in lines; positive dy scrolls up
+const EVENT_KEY: i32 = 4;           // the key's index or -1, down + 2 * repeat, modifiers (1 shift, 2 control, 4 alt, 8 command), its character or 0
+const EVENT_TEXT: i32 = 5;          // a typed Unicode scalar
+const EVENT_RESIZE: i32 = 6;        // width, height in layout points, the device pixels to a point
+const EVENT_FOCUS: i32 = 7;         // focused
+public const EVENT_ACCESS: i32 = 9; // a screen reader's request: the element's id, the action (0 press, 1 focus, 2 increment, 3 decrement)
+const EVENT_TOUCH: i32 = 8;         // the finger's id * 4 + its phase (0 began, 1 moved, 2 ended, 3 cancelled), x, y, seconds
 
 /// Wheel lines to ClayWind's wheel units, as the desktop host has it.
 const WHEEL_UNITS: f32 = 2.5;
@@ -37,6 +38,8 @@ public struct WebPlatform {
     /// Whether the page is on an Apple system, where shortcuts are Command's (Ui.setSecondaryIsCommand).
     public apple: bool;
     shownCursor: u32;
+    /// What the page's elements for a screen reader come to (Ui.accessSum), as it was last given them.
+    accessSum: u64;
     /// The page's touches this frame, for the Ui's gestures; past 64 a frame, later moves are left out, never a
     /// finger's start or end (as the desktop host's).
     touches: [Touch; 64];
@@ -61,6 +64,7 @@ public struct WebPlatform {
         ratio: ratio,
         apple: false,
         shownCursor: 0,
+        accessSum: 0,
         touches: [Touch { id: 0, phase: TouchPhase.Began, position: Vec2.zero(), time: 0.0 }; 64],
         touchCount: 0,
         touchRead: 0,

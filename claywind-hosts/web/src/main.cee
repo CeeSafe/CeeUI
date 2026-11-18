@@ -44,7 +44,7 @@ fn run() -> i32 {
     ui.setDarkMode(true);
     ui.setSecondaryIsCommand(platform.apple);
     loop {
-        platform.beginFrame();
+        platform.beginFrame(mut ui);
         ui.begin(mut platform);
         platform.editInto(mut ui);
         demoFrame(mut ui, mut app, raster);

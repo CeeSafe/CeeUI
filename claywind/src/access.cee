@@ -95,6 +95,31 @@ fn emptyAccessNode() -> AccessNode => AccessNode {
 
 fn emptyPendingAccess() -> PendingAccess => PendingAccess { id: 0, action: AccessAction.Press };
 
+/// A role as a number: the order of AccessRole, which hosts that pass roles as numbers share.
+public fn accessRoleNumber(role: AccessRole) -> u64 => match (role) {
+    AccessRole.Text => 0,
+    AccessRole.Button => 1,
+    AccessRole.Checkbox => 2,
+    AccessRole.Radio => 3,
+    AccessRole.TextField => 4,
+    AccessRole.Slider => 5,
+    AccessRole.Tab => 6,
+    AccessRole.ListItem => 7,
+    AccessRole.MenuItem => 8,
+    AccessRole.Dropdown => 9,
+    AccessRole.Image => 10,
+};
+
+fn accessMix(sum: u64, value: u64) -> u64 => (sum ^ value).wrappingMul(0x100000001B3);
+
+fn accessMixBytes(sum: u64, bytes: Slice<u8>) -> u64 {
+    var s = accessMix(sum, bytes.length as u64);
+    for (b in bytes) {
+        s = accessMix(s, b as u64);
+    }
+    return s;
+}
+
 impl<region r> Ui<r> {
     // ---- reporting, while the frame is built ------------------------------------------------------------------------
     /// The element being built is a `role` named `label`: call it after the `open` that has `id`. Text leaves inside
@@ -185,6 +210,34 @@ impl<region r> Ui<r> {
     // ---- reading, after the frame is laid out -----------------------------------------------------------------------
 
     /// The frame's accessible elements, in reading order.
+    /// What a frame's accessible elements come to, as one number: equal for two frames a reader could not tell apart.
+    public fn accessSum(borrow this) -> u64 {
+        var sum: u64 = 0xCBF29CE484222325;
+        for (i in 0..this.accessCount()) {
+            let node = this.accessAt(i);
+            sum = accessMix(sum, node.id as u64);
+            sum = accessMix(sum, accessRoleNumber(node.role));
+            sum = accessMix(sum, node.flags as u64);
+            sum = accessMix(sum, node.min.bits() as u64);
+            sum = accessMix(sum, node.max.bits() as u64);
+            sum = accessMix(sum, node.now.bits() as u64);
+            sum = accessMix(sum, node.caret as u64);
+            sum = accessMix(sum, node.anchor as u64);
+            match (this.accessBox(node)) {
+                Some(box) => {
+                    sum = accessMix(sum, box.x.bits() as u64);
+                    sum = accessMix(sum, box.y.bits() as u64);
+                    sum = accessMix(sum, box.w.bits() as u64);
+                    sum = accessMix(sum, box.h.bits() as u64);
+                }
+                null => { sum = accessMix(sum, 1); }
+            }
+            sum = accessMixBytes(sum, this.accessLabel(node));
+            sum = accessMixBytes(sum, this.accessValueOf(node));
+        }
+        return sum;
+    }
+
     public fn accessCount(borrow this) -> usize => this.accessNodes.length();
 
     public fn accessAt(borrow this, index: usize) -> AccessNode => this.accessNodes.get(index);

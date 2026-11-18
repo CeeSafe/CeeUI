@@ -10,7 +10,7 @@ const PASTE_BYTES = 1048576;
 
 onmessage = async (message) => {
   const { control, events, frame, pasted, copied, fonts, width, height, ratio, apple } = message.data;
-  let changed = [], placed = [], pasteAt = 0n, take;
+  let changed = [], nodes = [], placed = [], pasteAt = 0n, take;
   const putLength = (pointer, n) => new BigUint64Array(memory.buffer, Number(pointer), 1).set([BigInt(n)]);
   let memory, seen = Atomics.load(control, TICK), last = performance.now();
   const bytes = () => new Uint8Array(memory.buffer);
@@ -79,6 +79,13 @@ onmessage = async (message) => {
       putLength(length, n);
       return pasteAt;
     },
+    // The frame's elements for a screen reader: gathered, then sent to the page as one list.
+    web_access_node(id, role, flags, x, y, w, h, min, max, now, label, labelLength, value, valueLength, caret, anchor) {
+      const read = (pointer, length) => new TextDecoder().decode(bytes().slice(Number(pointer), Number(pointer) + Number(length)));
+      nodes.push({ id, role, flags, x, y, w, h, min, max, now, label: read(label, labelLength), value: read(value, valueLength),
+        caret: Number(caret), anchor: Number(anchor) });
+    },
+    web_access_end() { postMessage({ access: nodes }); nodes = []; },
     // A worker has no clipboard: the text goes where the page reads it, which is told.
     web_copy(text, length) {
       let n = Math.min(Number(length), copied.length);

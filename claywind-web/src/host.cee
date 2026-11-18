@@ -10,7 +10,7 @@
 //       var platform = WebPlatform.open();
 //       ui.setSecondaryIsCommand(platform.apple);
 //       loop {
-//           platform.beginFrame();
+//           platform.beginFrame(mut ui);
 //           ui.begin(mut platform);
 //           platform.editInto(mut ui);
 //           ... the app's frame ...
@@ -58,6 +58,28 @@ extern "C" {
     fn web_pasted(length: *mut usize) -> *u8;
     /// Puts `length` bytes of UTF-8 on the clipboard.
     fn web_copy(text: *u8, length: usize);
+    /// One of the frame's elements for a screen reader, in reading order: its id, role (accessRoleNumber), flags
+    /// (ACCESS_*), box in points, range and value, label and value text, and a text field's caret and anchor.
+    fn web_access_node(
+        id: u32,
+        role: u32,
+        flags: u32,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        min: f32,
+        max: f32,
+        now: f32,
+        label: *u8,
+        labelLength: usize,
+        value: *u8,
+        valueLength: usize,
+        caret: usize,
+        anchor: usize,
+    );
+    /// The elements given since the last call are the page's whole list now.
+    fn web_access_end();
 }
 
 /// A block of the module's memory, for a FixedBufferAllocator. The module's memory is fixed when it is built
@@ -133,9 +155,10 @@ impl WebPlatform {
         return platform;
     }
 
-    /// Before `ui.begin`: waits for the browser's next frame, and takes what the page queued since the last.
+    /// Before `ui.begin`: waits for the browser's next frame, and takes what the page queued since the last; what
+    /// a screen reader asked goes to `ui`, whose controls see it in this frame.
     /// Safety: web_event writes four numbers.
-    public fn beginFrame(borrow mut this) {
+    public fn beginFrame(borrow mut this, ui: borrow mut Ui) {
         unsafe {
             this.setFrameTime(round<f32>(web_wait()));
             var values = [0.0f64; 4];
@@ -144,8 +167,62 @@ impl WebPlatform {
                 if (kind == 0) {
                     break;
                 }
-                this.apply(kind, values);
+                if (kind == EVENT_ACCESS) {
+                    let action = match (truncate<i64>(values[1])) {
+                        0 => AccessAction.Press,
+                        1 => AccessAction.Focus,
+                        2 => AccessAction.Increment,
+                        _ => AccessAction.Decrement,
+                    };
+                    let _ = ui.accessAct(truncate<u32>(truncate<i64>(values[0])), action);
+                } else {
+                    this.apply(kind, values);
+                }
             }
+        }
+    }
+
+    /// The frame's elements for a screen reader, to the page, when they are not what it has: an element with no
+    /// place or the id 0 is left out. The page keeps them as elements of its own over the canvas (page/web.js).
+    /// Safety: web_access_node reads the two texts during the call.
+    fn giveAccess(borrow mut this, ui: borrow Ui) {
+        let sum = ui.accessSum();
+        if (sum == this.accessSum) {
+            return;
+        }
+        this.accessSum = sum;
+        unsafe {
+            for (i in 0..ui.accessCount()) {
+                let node = ui.accessAt(i);
+                let box = match (ui.accessBox(node)) {
+                    Some(b) => b,
+                    null => { continue; }
+                };
+                if (node.id == 0) {
+                    continue;
+                }
+                let label = ui.accessLabel(node);
+                let value = ui.accessValueOf(node);
+                web_access_node(
+                    node.id,
+                    truncate<u32>(accessRoleNumber(node.role)),
+                    node.flags,
+                    box.x,
+                    box.y,
+                    box.w,
+                    box.h,
+                    node.min,
+                    node.max,
+                    node.now,
+                    label.ptr,
+                    label.length,
+                    value.ptr,
+                    value.length,
+                    node.caret.min(value.length),
+                    node.anchor.min(value.length),
+                );
+            }
+            web_access_end();
         }
     }
 
@@ -164,12 +241,13 @@ impl WebPlatform {
     }
 
     /// After a frame that fit (`ui.endFrame`): draws what changed of it into `raster` over `clear`, and shows just
-    /// that; a frame like the last shows nothing.
+    /// that; a frame like the last shows nothing. The page is given the frame's elements for a screen reader.
     /// Safety: web_present reads the frame's pixels during the call.
     public fn show(borrow mut this, ui: borrow Ui, raster: borrow mut Raster, damage: borrow mut Damage, clear: Color) {
         let scale = ratioFor(this.size, this.ratio);
         let w = pixels(this.size.w, scale, WEB_MAX_PIXELS_WIDTH);
         let h = pixels(this.size.h, scale, WEB_MAX_PIXELS_HEIGHT);
+        this.giveAccess(ui);
         let boxes = damage.plan(ui, clear, w, h, scale);
         if (boxes == 0) {
             return;

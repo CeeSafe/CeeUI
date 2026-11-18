@@ -301,8 +301,10 @@ sleeping while nothing changes.
   shape, and copy, cut and paste with the system's clipboard. `claywind-pack web --font FILE...` packs an app
   (`sh build.sh` in `claywind-hosts/web` does it for the demo): it needs a clang with the `wasm64` target and
   `wasm-ld`, and the result is served by its own `serve.py`, or any server that sends the two cross-origin isolation
-  headers. It is 64-bit WebAssembly, which Chrome and Firefox run and Safari does not yet. Not there: input methods
-  and a phone's keyboard, accessibility, file dialogs, drag and drop from outside, a second window.
+  headers. It is 64-bit WebAssembly, which Chrome and Firefox run and Safari does not yet. For a screen reader the
+  page keeps the app's elements (role, name, state, place) as unseen elements of its own over the canvas; a reader's
+  press, focus and slider step go to the app. Not there: input methods and a phone's keyboard, a text field's caret
+  for a reader, file dialogs, drag and drop from outside, a second window.
 - **Linux:** the desktop host needs X11; Wayland is not supported yet.
 - **Not ported from the C version:** the debug view and Clay's built-in transitions. ClayWind has its own transition
   engine.
