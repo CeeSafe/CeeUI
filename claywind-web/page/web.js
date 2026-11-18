@@ -20,7 +20,6 @@ const KEYS = ['Escape', 'Enter', 'Tab', 'Backspace', 'Delete', 'ArrowLeft', 'Arr
 const canvas = document.getElementById('frame');
 const note = document.getElementById('note');
 const access = document.getElementById('access');
-const text = document.getElementById('text');
 const context = canvas.getContext('2d');
 
 function say(text) { note.textContent = text; }
@@ -65,23 +64,24 @@ function touch(e, phase) {
 }
 canvas.addEventListener('pointermove', (e) => { if (touch(e, 1)) queue(MOVE, ...at(e)); });
 canvas.addEventListener('pointerdown', (e) => {
-  if (!textWanted) canvas.focus();   // while a field has the keyboard, the text input keeps the focus
+  if (!access.contains(document.activeElement)) access.focus({ preventScroll: true });   // the keyboard is the app's
   try { canvas.setPointerCapture(e.pointerId); } catch (error) { /* not a pointer the browser knows: no capture */ }
   if (touch(e, 0)) queue(BUTTON, e.button, 1, ...at(e));
 });
 canvas.addEventListener('pointerup', (e) => { if (touch(e, 2)) queue(BUTTON, e.button, 0, ...at(e)); });
 canvas.addEventListener('pointercancel', (e) => { if (touch(e, 3)) queue(BUTTON, 0, 0, ...at(e)); });
-// A press on the canvas would take the focus from the text input, and a phone's keyboard with it.
-canvas.addEventListener('mousedown', (e) => { if (textWanted) e.preventDefault(); });
+// A press on the canvas would take the focus from the app's elements, and from a field's input a phone's keyboard.
+canvas.addEventListener('mousedown', (e) => e.preventDefault());
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); queue(WHEEL, -e.deltaX / 40, -e.deltaY / 40); }, { passive: false });
-// The keyboard is the app's while the canvas or one of its elements for a screen reader has the focus.
+// The keyboard is the app's while its elements for a screen reader, or their container, have the focus: the canvas
+// itself never has it, being nothing a reader could say.
 addEventListener('blur', () => queue(FOCUS, 0));
 addEventListener('focus', () => queue(FOCUS, 1));
 
 function key(e, down) {
   // A screen reader steps a slider with the arrow keys on its element: the app is asked for the step itself.
-  const slider = e.target !== canvas && e.target.getAttribute('role') === 'slider';
+  const slider = e.target.getAttribute('role') === 'slider';
   if (slider && ['ArrowUp', 'ArrowRight', 'ArrowDown', 'ArrowLeft'].includes(e.code)) {
     if (down) queue(ACCESS, Number(e.target.dataset.id), e.code === 'ArrowUp' || e.code === 'ArrowRight' ? 2 : 3);
     e.preventDefault();
@@ -90,7 +90,7 @@ function key(e, down) {
   // Paste: the text comes with the browser's paste event, which queues the key itself (below).
   // Copy and Cut likewise: the browser's event asks the program for the text.
   if (down && ['KeyV', 'KeyC', 'KeyX'].includes(e.code) && (apple ? e.metaKey : e.ctrlKey) && !e.altKey) return;
-  // A key the input method takes, a dead key, or a phone's keyboard: its text comes from the text input (below).
+  // A key the input method takes, a dead key, or a phone's keyboard: its text comes from the field's input (below).
   if (e.isComposing || e.keyCode === 229 || e.key === 'Dead' || e.key === 'Unidentified') return;
   const index = KEYS.indexOf(e.code);
   const printable = e.key.length === 1 || [...e.key].length === 1;
@@ -100,13 +100,11 @@ function key(e, down) {
   if (down && printable && !e.ctrlKey && !e.metaKey) queue(TEXT, character);
   // The page keeps its own shortcuts (reload, the developer tools); everything else is the app's.
   if (index >= 0 && !e.metaKey && !(e.code.startsWith('F') && e.code.length > 1)) e.preventDefault();
-  // A key typed here is not typed into the text input as well.
+  // A key typed here is not typed into a field's input as well.
   if (printable && !e.ctrlKey && !e.metaKey) e.preventDefault();
 }
-for (const target of [canvas, access, text]) {
-  target.addEventListener('keydown', (e) => key(e, true));
-  target.addEventListener('keyup', (e) => key(e, false));
-}
+access.addEventListener('keydown', (e) => key(e, true));
+access.addEventListener('keyup', (e) => key(e, false));
 
 // The text of the program's copy number `sequence`.
 let taken = 0;
@@ -156,18 +154,46 @@ function resize() {
 }
 addEventListener('resize', resize);   // a change of zoom, or of the screen's pixel ratio, is a resize too
 
-// Text input. While one of the app's text fields has the focus, the page's own text input has the page's, unseen at
-// the field's caret: a phone shows its keyboard for it, and an input method composes in it, its candidates beside the
-// caret. A hardware key is typed by `key` above and never reaches the input; what does reach it (a phone's keys, an
-// input method's or a dead key's result) goes to the app as typed text, and what is being composed as the Ui's
-// composition. The input holds one space, so that a phone's backspace has something to delete.
+// Text input. Each of the app's text fields is a text input of the page among the app's elements (below), unseen
+// where the field is drawn, holding the field's text, caret and selection. While a field has the app's focus, its
+// input has the page's: a phone shows its keyboard for it, an input method composes in it, and a screen reader reads
+// the field there. A hardware key is typed by `key` above and never reaches the input; what does reach it (a phone's
+// keys, an input method's or a dead key's result) goes to the app as typed text, and what is being composed as the
+// Ui's composition.
 const INPUT_MODES = ['text', 'numeric', 'decimal', 'email', 'url', 'text'];
 const ENTER_HINTS = ['done', 'go', 'next', 'search', 'send', 'enter'];
-let textWanted = false;
+let textWanted = false, composingNow = false;
+let textState = { kind: 0, returnKey: 5 };   // the focused field's kind and Return key, as the app last said
+let fieldInput = null;                       // the focused field's input
 
-function rest() {
-  text.value = ' ';
-  text.setSelectionRange(1, 1);
+// A place in UTF-8 bytes as one in the string's UTF-16 units.
+function unitsAt(string, bytes) {
+  let seen = 0, units = 0;
+  for (const character of string) {
+    if (seen >= bytes) break;
+    const code = character.codePointAt(0);
+    seen += code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+    units += character.length;
+  }
+  return units;
+}
+
+// A field's input as the field is (`node`, from the app's list); not while an input method composes in it, which a
+// change would end.
+function rest(input, node) {
+  if (composingNow && input === document.activeElement) return;
+  const type = (node.flags & SECURE) !== 0 ? 'password' : 'text';
+  if (input.type !== type) input.type = type;
+  if (input.value !== node.value) input.value = node.value;
+  const caret = unitsAt(node.value, node.caret), anchor = unitsAt(node.value, node.anchor);
+  const start = Math.min(caret, anchor), end = Math.max(caret, anchor);
+  if (input.selectionStart !== start || input.selectionEnd !== end) input.setSelectionRange(start, end, caret < anchor ? 'backward' : 'forward');
+}
+
+function hint() {
+  if (fieldInput === null) return;
+  fieldInput.inputMode = INPUT_MODES[textState.kind] || 'text';
+  fieldInput.enterKeyHint = ENTER_HINTS[textState.returnKey] || 'enter';
 }
 
 function compose(string) {
@@ -182,40 +208,37 @@ function compose(string) {
 
 function typed(string) { for (const character of string) queue(TEXT, character.codePointAt(0)); }
 function press(code) { const index = KEYS.indexOf(code); queue(KEY, index, 1, 0, 0); queue(KEY, index, 0, 0, 0); }
+const isField = (e) => e.target.tagName === 'INPUT';
 
-text.addEventListener('compositionstart', () => compose(''));
-text.addEventListener('compositionupdate', (e) => compose(e.data));
-text.addEventListener('compositionend', (e) => { compose(''); typed(e.data); rest(); });
-text.addEventListener('beforeinput', (e) => {
-  if (e.isComposing || e.inputType === 'insertCompositionText' || e.inputType === 'insertFromComposition') return;
+access.addEventListener('compositionstart', (e) => { if (isField(e)) { composingNow = true; compose(''); } });
+access.addEventListener('compositionupdate', (e) => { if (isField(e)) compose(e.data); });
+access.addEventListener('compositionend', (e) => {
+  if (!isField(e)) return;
+  composingNow = false;
+  compose('');
+  typed(e.data);
+  // The input goes back to the field's text as the app has it; the app's next list has what was just typed.
+  e.target.value = e.target.dataset.value || '';
+});
+access.addEventListener('beforeinput', (e) => {
+  if (!isField(e) || e.isComposing || e.inputType === 'insertCompositionText' || e.inputType === 'insertFromComposition') return;
   e.preventDefault();
   if (e.inputType === 'insertText' || e.inputType === 'insertReplacementText') typed(e.data || '');
   else if (e.inputType === 'deleteContentBackward' || e.inputType === 'deleteWordBackward') press('Backspace');
   else if (e.inputType === 'deleteContentForward') press('Delete');
   else if (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph') press('Enter');
 });
-text.addEventListener('input', (e) => { if (!e.isComposing) rest(); });
-// The focus taken from the input while a field wants it (a tap outside it) comes back.
-text.addEventListener('blur', () => setTimeout(() => {
-  if (textWanted && document.hasFocus() && document.activeElement !== text) text.focus({ preventScroll: true });
-}, 0));
+// The focus taken from a field's input while the field wants it (a tap on the canvas) comes back.
+access.addEventListener('focusout', (e) => { if (isField(e)) setTimeout(() => {
+  if (textWanted && fieldInput !== null && document.hasFocus() && (document.activeElement === access || document.activeElement === document.body)) fieldInput.focus({ preventScroll: true });
+}, 0); });
 
-// What the app says of its focused text field: whether there is one, its kind, its Return key and its caret's box.
+// What the app says of its focused text field: whether there is one, its kind and its Return key.
 function textInput(state) {
   textWanted = state.on;
-  if (!state.on) {
-    if (document.activeElement === text) { compose(''); canvas.focus({ preventScroll: true }); }
-    return;
-  }
-  text.style.left = Math.max(0, Math.min(state.x, innerWidth - 2)) + 'px';
-  text.style.top = Math.max(0, Math.min(state.y, innerHeight - 2)) + 'px';
-  text.style.height = Math.max(1, state.h) + 'px';
-  text.inputMode = INPUT_MODES[state.kind] || 'text';
-  text.enterKeyHint = ENTER_HINTS[state.returnKey] || 'enter';
-  if (document.activeElement !== text && (document.activeElement === canvas || access.contains(document.activeElement))) {
-    rest();
-    text.focus({ preventScroll: true });
-  }
+  textState = state;
+  if (!state.on && composingNow) { composingNow = false; compose(''); }
+  hint();
 }
 
 // Accessibility. The canvas is pixels, so the app's elements (ClayWind's access list: a role, a name, a state and a
@@ -229,17 +252,23 @@ let focusing = null;          // the element the page is giving the focus becaus
 
 function mirror(nodes) {
   const live = new Set();
-  let previous = null, focused = null;
+  let previous = null, focused = null, focusedNode = null;
   for (const node of nodes) {
     if (live.has(node.id)) continue;   // the page takes each id once
     live.add(node.id);
     let element = mirrored.get(node.id);
     if (element === undefined || Number(element.dataset.role) !== node.role) {
       if (element !== undefined) element.remove();
-      element = document.createElement('div');
+      // A text field is a text input of the page; everything else an element with its role.
+      element = document.createElement(node.role === TEXTBOX ? 'input' : 'div');
       element.dataset.id = node.id;
       element.dataset.role = node.role;
-      element.setAttribute('role', ROLES[node.role] || 'paragraph');
+      if (node.role === TEXTBOX) {
+        for (const name of ['autocomplete', 'autocapitalize', 'autocorrect']) element.setAttribute(name, 'off');
+        element.spellcheck = false;
+      } else {
+        element.setAttribute('role', ROLES[node.role] || 'paragraph');
+      }
       if (node.role !== TEXT_ROLE) element.tabIndex = -1;   // a reader may focus it; Tab stays the app's
       mirrored.set(node.id, element);
     }
@@ -261,8 +290,8 @@ function mirror(nodes) {
     if (node.role === DROPDOWN) { set('aria-haspopup', 'listbox'); set('aria-expanded', has(EXPANDED) ? 'true' : 'false'); }
     if (node.role === DROPDOWN || node.role === LIST_ITEM) set('aria-description', node.value === '' ? null : node.value);
     if (node.role === TEXTBOX) {
-      const shown = has(SECURE) ? '•'.repeat([...node.value].length) : node.value;
-      if (element.textContent !== shown) element.textContent = shown;
+      element.dataset.value = node.value;
+      rest(element, node);
     }
     if (node.role === SLIDER) {
       // With no text of its own, a slider is read as a percentage of its range.
@@ -276,16 +305,17 @@ function mirror(nodes) {
     const before = previous === null ? access.firstChild : previous.nextSibling;
     if (before !== element) access.insertBefore(element, before);
     previous = element;
-    if (has(FOCUSED)) focused = element;
+    if (has(FOCUSED)) { focused = element; focusedNode = node; }
   }
   for (const [id, element] of mirrored) {
     if (!live.has(id)) { element.remove(); mirrored.delete(id); }
   }
-  // The app's focus is the page's, so a reader says where it went; with none, the canvas keeps the keyboard.
-  // A text field's focus is the text input's, named as the field is.
-  if (textWanted && focused !== null) text.setAttribute('aria-label', focused.getAttribute('aria-label') || '');
-  const wanted = textWanted ? text : focused === null ? canvas : focused;
-  const inside = document.activeElement === canvas || document.activeElement === text || access.contains(document.activeElement);
+  // The app's focus is the page's, so a reader says where it went; with none, the container keeps the keyboard.
+  // The focused field's input takes the keyboard's hints.
+  fieldInput = focusedNode !== null && focusedNode.role === TEXTBOX ? focused : null;
+  hint();
+  const wanted = focused === null ? access : focused;
+  const inside = document.activeElement === document.body || access.contains(document.activeElement);
   if (inside && document.activeElement !== wanted) {
     focusing = wanted;
     wanted.focus({ preventScroll: true });
@@ -347,7 +377,7 @@ const fonts = await Promise.all(app.fonts.map(async (name) => {
 const worker = new Worker('worker.js', { type: 'module' });
 worker.onerror = (e) => say('The worker failed: ' + e.message);
 worker.onmessage = (e) => {
-  if (e.data === 'running') { say(''); access.setAttribute('aria-label', document.title); canvas.focus(); }
+  if (e.data === 'running') { say(''); access.setAttribute('aria-label', document.title); access.focus({ preventScroll: true }); }
   else if (e.data.access !== undefined) mirror(e.data.access);
   else if (e.data.input !== undefined) textInput(e.data.input);
   // A copy the page did not ask for (a menu's, a button's): the browser may refuse it without a recent key or click.

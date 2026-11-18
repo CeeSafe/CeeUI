@@ -303,11 +303,12 @@ sleeping while nothing changes.
   `wasm-ld`, and the result is served by its own `serve.py`, or any server that sends the two cross-origin isolation
   headers. It is 64-bit WebAssembly, which Chrome and Firefox run and Safari does not yet. For a screen reader the
   page keeps the app's elements (role, name, state, place) as unseen elements of its own over the canvas; a reader's
-  press, focus and slider step go to the app. While a text field has the focus, the page's own unseen text input
-  has the page's, at the field's caret: a phone shows its keyboard for it (of the field's kind, with its Return
-  key), and an input method composes in it. Fallback fonts (`claywind-pack web --fallback FILE...`) are fetched only when
-  text has a character the app's fonts lack. Not there: colour emoji, the system's own fonts,
-  a text field's caret for a reader, file dialogs, drag and drop from outside, a second window.
+  press, focus and slider step go to the app, and the app's focus is the page's. A text field's element is a text
+  input holding the field's text, caret and selection: a reader reads the field there, by character as the caret
+  moves; a phone shows its keyboard for it (of the field's kind, with its Return key), and an input method composes
+  in it. Fallback fonts (`claywind-pack web --fallback FILE...`) are fetched only when text has a character the
+  app's fonts lack. Not there: colour emoji, the system's own fonts, lists and menus as containers for a reader,
+  file dialogs, drag and drop from outside, a second window.
 - **Linux:** the desktop host needs X11; Wayland is not supported yet.
 - **Not ported from the C version:** the debug view and Clay's built-in transitions. ClayWind has its own transition
   engine.
