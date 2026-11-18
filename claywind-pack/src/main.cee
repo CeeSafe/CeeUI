@@ -8,6 +8,10 @@
 //   ios              out/pack/ios/NAME.app, signed for a device with a development identity and a provisioning
 //                    profile already on this Mac (Xcode makes them), for `xcrun devicectl device install app`
 //   android          out/pack/NAME.apk: a NativeActivity app, signed with the debug key, for `adb install`
+//   web              out/pack/web: a page and a WebAssembly module, for a package on the web host (claywind-web);
+//                    `--font FILE`, once for each font the app loads, in its order. Serve it with the serve.py in
+//                    it, or with any server that sends the same two headers. Needs a clang with the wasm64 target
+//                    (CLANG, else Homebrew's llvm, else `clang`) and wasm-ld (WASM_LD).
 //
 // `--network WHY` is for an app that uses the network: Android's INTERNET permission, and on iOS the sentence shown
 // when the app first reaches a device on the local network.
@@ -30,6 +34,7 @@ struct Options {
     storePass: String;
     network: String; // --network, why the app uses the network: Android's INTERNET permission and iOS's local
     // network description; empty for an app that uses none
+    fonts: String; // --font, each on a line: the web target's fonts, in the app's order
 }
 
 fn fail(what: StringView) -> i32 {
@@ -687,10 +692,142 @@ fn packAndroid(o: borrow Options) -> i32 {
     return 0;
 }
 
+/// The directory of the web host (claywind-web) a package depends on: the path of its `claywind_web` dependency in
+/// the ceesafe.toml's text, or empty.
+fn webHostPath(toml: StringView) -> String {
+    var lines = toml.split("\n");
+    loop {
+        let line = match (lines.next()) {
+            Some(l) => l.trim(),
+            null => { break; }
+        };
+        match (line.splitOnce("=")) {
+            Some(halves) => {
+                if (halves.left.trim() == "claywind_web") {
+                    match (halves.right.indexOf("path")) {
+                        Some(at) => {
+                            let rest = halves.right[at..];
+                            match (rest.indexOf("\"")) {
+                                Some(open) => {
+                                    let value = rest[open + 1..];
+                                    match (value.indexOf("\"")) {
+                                        Some(end) => { return text(value[0..end]); }
+                                        null => {}
+                                    }
+                                }
+                                null => {}
+                            }
+                        }
+                        null => {}
+                    }
+                }
+            }
+            null => {}
+        }
+    }
+    return String.create();
+}
+
+/// `n` in decimal.
+fn decimal(n: usize) -> String {
+    var s = String.create();
+    if (n >= 10) {
+        s.append(decimal(n / 10).view())!;
+    }
+    let digits = "0123456789";
+    s.append(digits[n % 10..n % 10 + 1])!;
+    return s;
+}
+
+/// The web target's compiling and linking, for `sh -c`. What the program imports (web_wait and the rest) is the
+/// page's worker's: left undefined, imported.
+const WEB_COMPILE: StringView = "set -e\n" +
+    "CLANG=${CLANG:-$( [ -x /opt/homebrew/opt/llvm/bin/clang ] && echo /opt/homebrew/opt/llvm/bin/clang || echo clang )}\n" +
+    "objects=\"\"\n" +
+    "for source in $(find out/pack/web-c -name '*.c'); do\n" +
+    "    \"$CLANG\" --target=wasm64 -O2 -ffreestanding -nostdlib -mbulk-memory -Iout/pack/web-c -c \"$source\" -o \"${source%.c}.o\"\n" +
+    "    objects=\"$objects ${source%.c}.o\"\n" +
+    "done\n" +
+    "\"${WASM_LD:-wasm-ld}\" -m wasm64 --no-entry --import-undefined --export=run --export=web_take -o out/pack/web/web.wasm $objects\n";
+
+/// The web target: the package's C from ceesafec, compiled and linked for 64-bit WebAssembly by clang and wasm-ld,
+/// beside the web host's page, the app's fonts and app.json, which lists them.
+fn packWeb(o: borrow Options, toml: StringView) -> i32 {
+    let host = webHostPath(toml);
+    if (host.view().length == 0) {
+        return fail("the web target needs a package that depends on claywind_web by path");
+    }
+    let out = "out/pack/web";
+    let c = "out/pack/web-c";
+    // The directory itself stays, so a serve.py running in it keeps serving.
+    if (!run("rm", ["-rf", c, "out/pack/web/fonts"]) || !run("mkdir", ["-p", "out/pack/web/fonts"])) {
+        return fail("cannot make out/pack/web");
+    }
+    if (!run("ceesafec", ["build", "--emit", "c", "-o", c])) {
+        return fail("the package was not built");
+    }
+    if (!run("sh", ["-c", WEB_COMPILE])) {
+        return fail("clang or wasm-ld failed: the web target needs a clang with the wasm64 target, and wasm-ld");
+    }
+    let page = cat([host.view(), "/page/"]);
+    let html = readText(cat([page.view(), "index.html"]).view());
+    let title = "<title>ClayWind</title>";
+    match (html.view().indexOf(title)) {
+        Some(at) => {
+            let named = cat([
+                html.view()[0..at],
+                "<title>",
+                xml(o.name.view()).view(),
+                "</title>",
+                html.view()[at + title.length..],
+            ]);
+            if (!writeText("out/pack/web/index.html", named.view())) {
+                return fail("cannot write out/pack/web/index.html");
+            }
+        }
+        null => { return fail2("no page in ", page.view()); }
+    }
+    for (file in ["web.js", "worker.js", "serve.py"]) {
+        if (!run("cp", [cat([page.view(), file]).view(), out])) {
+            return fail2("cannot copy ", file);
+        }
+    }
+    // The fonts under plain names, and app.json with the names in the app's order.
+    var json = text("{\"fonts\": [");
+    var fonts = o.fonts.view().split("\n");
+    var count: usize = 0;
+    loop {
+        let font = match (fonts.next()) {
+            Some(f) => f,
+            null => { break; }
+        };
+        if (font.length == 0) {
+            continue;
+        }
+        let name = cat(["font-", decimal(count).view()]);
+        if (!run("cp", [font, cat(["out/pack/web/fonts/", name.view()]).view()])) {
+            return fail2("cannot copy the font ", font);
+        }
+        if (count > 0) {
+            json.append(", ")!;
+        }
+        json.append("\"")!;
+        json.append(name.view())!;
+        json.append("\"")!;
+        count += 1;
+    }
+    json.append("]}\n")!;
+    if (!writeText("out/pack/web/app.json", json.view())) {
+        return fail("cannot write out/pack/web/app.json");
+    }
+    Console.writeLine("packed out/pack/web: python3 out/pack/web/serve.py, then http://localhost:8017/");
+    return 0;
+}
+
 fn usage() -> i32 {
-    Console.writeErrorLine("usage: claywind_pack <macos|ios|ios-simulator|android> [--name NAME] [--id ID]");
+    Console.writeErrorLine("usage: claywind_pack <macos|ios|ios-simulator|android|web> [--name NAME] [--id ID]");
     Console.writeErrorLine("           [--version V] [--abi arm64-v8a,x86_64] [--profile FILE] [--identity NAME]");
-    Console.writeErrorLine("           [--keystore FILE] [--keystore-pass PASSWORD] [--network WHY]");
+    Console.writeErrorLine("           [--keystore FILE] [--keystore-pass PASSWORD] [--network WHY] [--font FILE]...");
     Console.writeErrorLine("run in the app's package directory; the result is under out/pack");
     return 2;
 }
@@ -717,6 +854,7 @@ fn main() -> i32 {
         keystore: String.create(),
         storePass: text("android"),
         network: String.create(),
+        fonts: String.create(),
     };
     var i: usize = 2;
     while (i < Process.argumentCount()) {
@@ -743,6 +881,9 @@ fn main() -> i32 {
             o.storePass = text(value);
         } else if (flag == "--network") {
             o.network = text(value);
+        } else if (flag == "--font") {
+            o.fonts.append(value)!;
+            o.fonts.append("\n")!;
         } else {
             return usage();
         }
@@ -759,6 +900,9 @@ fn main() -> i32 {
     }
     if (o.target.view() == "android") {
         return packAndroid(o);
+    }
+    if (o.target.view() == "web") {
+        return packWeb(o, toml.view());
     }
     return usage();
 }

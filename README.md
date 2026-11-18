@@ -295,10 +295,14 @@ sleeping while nothing changes.
   surface is the app's). A control of your own is one line after its `open`:
   `ui.access(id, AccessRole.Button, label)`; a field with no label of its own is named after it:
   `ui.accessName("server", "Server address")`.
-- **The web host** (`claywind-hosts/web`, a first step): the demo as a WebAssembly module, drawn by the software
-  renderer onto a canvas, with the pointer and the keyboard. `sh build.sh` there needs a clang with the `wasm64`
-  target and `wasm-ld`, then `python3 out/web/serve.py`. It is 64-bit WebAssembly, which Chrome and Firefox run and
-  Safari does not yet; it redraws the whole frame each time; no clipboard, input method, touch or accessibility.
+- **The web host** (`claywind-web`, with the demo on it in `claywind-hosts/web`): a ClayWind app as a WebAssembly
+  module in a browser, drawn by the software renderer onto a canvas at the screen's pixel ratio. It redraws and
+  shows only what changed and sleeps while nothing does; it has the pointer, the keyboard, touches, the pointer's
+  shape, and copy, cut and paste with the system's clipboard. `claywind-pack web --font FILE...` packs an app
+  (`sh build.sh` in `claywind-hosts/web` does it for the demo): it needs a clang with the `wasm64` target and
+  `wasm-ld`, and the result is served by its own `serve.py`, or any server that sends the two cross-origin isolation
+  headers. It is 64-bit WebAssembly, which Chrome and Firefox run and Safari does not yet. Not there: input methods
+  and a phone's keyboard, accessibility, file dialogs, drag and drop from outside, a second window.
 - **Linux:** the desktop host needs X11; Wayland is not supported yet.
 - **Not ported from the C version:** the debug view and Clay's built-in transitions. ClayWind has its own transition
   engine.

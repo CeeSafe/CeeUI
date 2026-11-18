@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// The web host's platform: what the page tells of the pointer, the keys and the canvas's size, as the Ui's input.
-// The page queues events; the host takes them before each frame (main.cee) as a kind and four numbers.
+// The web host's platform: what the page tells of the pointer, the keys, the fingers and the canvas's size, as the
+// Ui's input. The page queues events; the host takes them before each frame (host.cee) as a kind and four numbers.
 
 import claywind;
 
@@ -10,8 +10,9 @@ const EVENT_BUTTON: i32 = 2; // button (0 primary, 1 middle, 2 secondary), down,
 const EVENT_WHEEL: i32 = 3;  // dx, dy in lines; positive dy scrolls up
 const EVENT_KEY: i32 = 4;    // the key's index or -1, down + 2 * repeat, modifiers (1 shift, 2 control, 4 alt, 8 command), its character or 0
 const EVENT_TEXT: i32 = 5;   // a typed Unicode scalar
-const EVENT_RESIZE: i32 = 6; // width, height in layout points
+const EVENT_RESIZE: i32 = 6; // width, height in layout points, the device pixels to a point
 const EVENT_FOCUS: i32 = 7;  // focused
+const EVENT_TOUCH: i32 = 8;  // the finger's id * 4 + its phase (0 began, 1 moved, 2 ended, 3 cancelled), x, y, seconds
 
 /// Wheel lines to ClayWind's wheel units, as the desktop host has it.
 const WHEEL_UNITS: f32 = 2.5;
@@ -31,10 +32,18 @@ public struct WebPlatform {
     dt: f32;
     clock: f64;
     public cursor: Cursor;
-    /// Whether the canvas's size changed since the host last looked.
-    public resized: bool;
+    /// The device pixels to a layout point, as the page last said.
+    public ratio: f32;
+    /// Whether the page is on an Apple system, where shortcuts are Command's (Ui.setSecondaryIsCommand).
+    public apple: bool;
+    shownCursor: u32;
+    /// The page's touches this frame, for the Ui's gestures; past 64 a frame, later moves are left out, never a
+    /// finger's start or end (as the desktop host's).
+    touches: [Touch; 64];
+    touchCount: usize;
+    touchRead: usize;
 
-    public fn create(size: Dims) -> WebPlatform => WebPlatform {
+    public fn create(size: Dims, ratio: f32) -> WebPlatform => WebPlatform {
         size: size,
         pointerState: Pointer.at(Vec2 { x: -100.0, y: -100.0 }),
         down: 0,
@@ -49,7 +58,12 @@ public struct WebPlatform {
         dt: 0.0,
         clock: 0.0,
         cursor: Cursor.Default,
-        resized: false,
+        ratio: ratio,
+        apple: false,
+        shownCursor: 0,
+        touches: [Touch { id: 0, phase: TouchPhase.Began, position: Vec2.zero(), time: 0.0 }; 64],
+        touchCount: 0,
+        touchRead: 0,
     };
 
     public fn setFrameTime(borrow mut this, seconds: f32) {
@@ -69,6 +83,8 @@ public struct WebPlatform {
         this.typedRead = 0;
         this.strokeCount = 0;
         this.strokeRead = 0;
+        this.touchCount = 0;
+        this.touchRead = 0;
     }
 
     /// Folds one of the page's events into this frame's state.
@@ -104,7 +120,9 @@ public struct WebPlatform {
         } else if (kind == EVENT_RESIZE) {
             if (v[0] >= 1.0 && v[1] >= 1.0) {
                 this.size = Dims { w: round<f32>(v[0]), h: round<f32>(v[1]) };
-                this.resized = true;
+                if (v[2] > 0.0) {
+                    this.ratio = round<f32>(v[2]);
+                }
             }
         } else if (kind == EVENT_FOCUS) {
             if (v[0] == 0.0) {
@@ -113,6 +131,24 @@ public struct WebPlatform {
                 this.pointerState.down = false;
                 this.pointerState.secondaryDown = false;
             }
+        } else if (kind == EVENT_TOUCH) {
+            let packed = truncate<u32>(truncate<i64>(v[0]));
+            let phase = match (packed & 3) {
+                0 => TouchPhase.Began,
+                1 => TouchPhase.Moved,
+                2 => TouchPhase.Ended,
+                _ => TouchPhase.Cancelled,
+            };
+            if (this.touchCount == 64 || ((packed & 3) == 1 && this.touchCount >= 56)) {
+                return; // the last eight places are kept for starts and ends
+            }
+            this.touches[this.touchCount] = Touch {
+                id: packed >> 2,
+                phase: phase,
+                position: Vec2 { x: round<f32>(v[1]), y: round<f32>(v[2]) },
+                time: v[3],
+            };
+            this.touchCount += 1;
         }
     }
 
@@ -187,6 +223,14 @@ impl Platform for WebPlatform {
         let c = this.typed[this.typedRead];
         this.typedRead += 1;
         return c;
+    }
+    fn nextTouch(borrow mut this) -> Touch? {
+        if (this.touchRead >= this.touchCount) {
+            return null;
+        }
+        let t = this.touches[this.touchRead];
+        this.touchRead += 1;
+        return t;
     }
     fn setCursor(borrow mut this, cursor: Cursor) {
         this.cursor = cursor;

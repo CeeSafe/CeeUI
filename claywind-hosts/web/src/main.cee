@@ -1,110 +1,57 @@
 // SPDX-License-Identifier: MIT
-// The web host (roadmap P5): the ClayWind demo as a WebAssembly module. It is a freestanding package entered
-// through its exports; host.c is its environment (memory, the C functions a compiler asks for, the panic hook).
-//
-// `run` is the program: it loops for as long as the page lives, a frame for each of the browser's. It runs in a
-// worker, where waiting is allowed: `web_wait` returns when the page's next frame is due (web.js).
+// The demo in a browser (roadmap P5): a WebAssembly module on the web host (claywind-web), packed by
+// `claywind-pack web` (build.sh). `run` is the program: it loops for as long as the page lives.
 
 import claywind;
 import claywind_demo;
+import claywind_web;
 
-/// The largest canvas, in pixels: the renderer's buffers are sized for it once.
-const MAX_WIDTH: usize = 1600;
-const MAX_HEIGHT: usize = 1000;
-
-extern "C" {
-    /// `size` bytes of the module's memory, which stay the caller's; null when there are not that many left.
-    @effects()
-    fn web_take(size: usize) -> *mut u8;
-    /// Waits for the page's next frame; the seconds since the last one.
-    fn web_wait() -> f64;
-    /// The next event the page queued, as its kind (platform.cee) with its four numbers in `values`, or 0.
-    fn web_event(values: *mut f64) -> i32;
-    /// Shows `width` by `height` pixels, each R, G, B, A.
-    fn web_present(pixels: *u32, width: u32, height: u32);
-    /// The pointer's shape: 0 the arrow, 1 a hand, 2 a text beam.
-    fn web_cursor(kind: u32);
-}
-
-fn clampSize(v: f32, most: usize) -> usize {
-    let n = truncate<usize>(truncate<i64>(v as f64));
-    return if (n < 1) 1 else if (n > most) most else n;
-}
-
-/// Runs the demo until the page goes: 0 when memory or a font is missing, and otherwise it does not return.
-/// Safety: each font pointer names that many readable bytes of the module's memory, which the page wrote there;
-/// web_take gives memory nothing else uses; web_event writes four numbers.
+/// Runs the demo until the page goes: 0 when memory or a font is missing, and otherwise it does not return. The
+/// page's fonts are a regular, a bold and a monospaced face, in that order.
 @export("run")
-unsafe fn run(
-    regular: *u8,
-    regularLength: usize,
-    bold: *u8,
-    boldLength: usize,
-    mono: *u8,
-    monoLength: usize,
-    width: u32,
-    height: u32,
-) -> i32 {
-    let uiBytes = web_take(8388608);
-    let rasterBytes = web_take(134217728);
-    if (uiBytes as usize == 0 || rasterBytes as usize == 0) {
+fn run() -> i32 {
+    var uiBlock = WebBlock.take(8388608);
+    var rasterBlock = WebBlock.take(WEB_RASTER_BYTES);
+    var damageBlock = WebBlock.take(4194304);
+    let uiStorage = uiBlock.bytes();
+    let rasterStorage = rasterBlock.bytes();
+    let damageStorage = damageBlock.bytes();
+    if (uiStorage.length == 0 || rasterStorage.length == 0 || damageStorage.length == 0) {
         return 0;
     }
-    let uiStorage = SliceMut.fromRaw(uiBytes, 8388608);
-    let rasterStorage = SliceMut.fromRaw(rasterBytes, 134217728);
     let uiMemory = FixedBufferAllocator.over(mut uiStorage);
     let rasterMemory = FixedBufferAllocator.over(mut rasterStorage);
+    let damageMemory = FixedBufferAllocator.over(mut damageStorage);
     var ui = match (Ui.create(uiMemory, UiCapacity.of(2048))) {
         Ok(u) => u,
         Err(_) => { return 0; }
     };
-    var raster = match (Raster.create(rasterMemory, RasterCapacity.of(MAX_WIDTH, MAX_HEIGHT))) {
+    var raster = match (Raster.create(rasterMemory, webRasterCapacity())) {
         Ok(r) => r,
         Err(_) => { return 0; }
     };
-    if (!raster.loadFont(FONT_18, Slice.fromRaw(regular, regularLength)) ||
-        !raster.loadFont(FONT_BOLD, Slice.fromRaw(bold, boldLength)) ||
-        !raster.loadFont(FONT_MONO, Slice.fromRaw(mono, monoLength))) {
+    var damage = match (Damage.create(damageMemory, 16384)) {
+        Ok(d) => d,
+        Err(_) => { return 0; }
+    };
+    let fonts = WebFonts.open();
+    if (!raster.loadFont(FONT_18, fonts.font(0)) || !raster.loadFont(FONT_BOLD, fonts.font(1)) ||
+        !raster.loadFont(FONT_MONO, fonts.font(2))) {
         return 0;
     }
-    var platform = WebPlatform.create(Dims { w: round<f32>(width), h: round<f32>(height) });
-    platform.resized = true;
+    var platform = WebPlatform.open();
     var app = DemoApp.create();
     ui.setDarkMode(true);
-    var shown = Cursor.Default;
+    ui.setSecondaryIsCommand(platform.apple);
     loop {
-        platform.setFrameTime(round<f32>(web_wait()));
-        var values = [0.0f64; 4];
-        loop {
-            let kind = web_event(borrow mut values[0] as *mut f64);
-            if (kind == 0) {
-                break;
-            }
-            platform.apply(kind, values);
-        }
-        if (platform.resized) {
-            platform.resized = false;
-            let size = platform.screenSize();
-            let _ = raster.resize(clampSize(size.w, MAX_WIDTH), clampSize(size.h, MAX_HEIGHT));
-        }
+        platform.beginFrame();
         ui.begin(mut platform);
+        platform.editInto(mut ui);
         demoFrame(mut ui, mut app, raster);
         match (ui.endFrame(mut platform, raster)) {
-            Ok() => {
-                raster.begin(Color.hex(pageBg(ui)));
-                ui.renderInto(mut raster);
-                raster.finish();
-                let pixels = raster.pixels();
-                web_present(pixels.ptr, truncate<u32>(raster.frameWidth()), truncate<u32>(raster.frameHeight()));
-            }
+            Ok() => { platform.show(ui, mut raster, mut damage, Color.hex(pageBg(ui))); }
             Err(_) => {} // a frame that does not fit the Ui's capacity is not shown
         }
-        match (platform.cursor) {
-            Cursor.Default => { if (shown != Cursor.Default) { web_cursor(0); } }
-            Cursor.Pointer => { if (shown != Cursor.Pointer) { web_cursor(1); } }
-            Cursor.Text => { if (shown != Cursor.Text) { web_cursor(2); } }
-        }
-        shown = platform.cursor;
-        platform.endFrame();
+        platform.finishFrame(ui);
     }
 }

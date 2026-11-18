@@ -3,8 +3,9 @@ name = "web"
 version = "0.1.0"
 kind = "library"
 profile = "freestanding"
-c = ["src/host.c"]
+ceesafec = ">=0.66.0"
 
 [dependencies]
 claywind = { path = "../../claywind" }
 claywind_demo = { path = "../../claywind-demo" }
+claywind_web = { path = "../../claywind-web" }

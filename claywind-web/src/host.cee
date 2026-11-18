@@ -1,0 +1,224 @@
+// SPDX-License-Identifier: MIT
+// The web host (roadmap P5): a ClayWind app as a WebAssembly module in a browser, drawn by the software renderer
+// onto a canvas. The app is a freestanding package that exports `run`, a loop of frames:
+//
+//   @export("run")
+//   fn run() -> i32 {
+//       var uiBlock = WebBlock.take(8388608);    ... a Ui, a Raster (webRasterCapacity), a Damage over such blocks
+//       let fonts = WebFonts.open();
+//       raster.loadFont(1, fonts.font(0));       ... the fonts the page was given, by their order
+//       var platform = WebPlatform.open();
+//       ui.setSecondaryIsCommand(platform.apple);
+//       loop {
+//           platform.beginFrame();
+//           ui.begin(mut platform);
+//           platform.editInto(mut ui);
+//           ... the app's frame ...
+//           if (ui.endFrame(mut platform, raster).isOk()) { platform.show(ui, mut raster, mut damage, clear); }
+//           platform.finishFrame(ui);
+//       }
+//   }
+//
+// `run` runs in a worker of the page (page/worker.js), where waiting is allowed: `beginFrame` returns when the
+// browser's next frame is due, and `finishFrame` sleeps while nothing changes. claywind-pack's `web` target builds
+// the module and puts the page beside it.
+
+import claywind;
+
+/// The largest frame, in pixels (the desktop host's): a canvas larger than this at its pixel ratio is drawn at a
+/// lower one. page/web.js has the same numbers.
+public const WEB_MAX_PIXELS_WIDTH: usize = 2880;
+public const WEB_MAX_PIXELS_HEIGHT: usize = 1800;
+
+/// The memory a Raster of webRasterCapacity needs.
+public const WEB_RASTER_BYTES: usize = 201326592;
+
+extern "C" {
+    /// `size` bytes of the module's memory (host.c), which stay the caller's; null when there are not that many left.
+    @effects()
+    fn web_take(size: usize) -> *mut u8;
+    /// The canvas as the page starts: its width and height in points, the device pixels to a point, and 1 on an
+    /// Apple system.
+    fn web_start(values: *mut f64);
+    /// The page's font `index`, in the module's memory, and its length; null past the last.
+    fn web_font(index: u32, length: *mut usize) -> *u8;
+    /// Waits for the page's next frame; the seconds since the last wait returned.
+    fn web_wait() -> f64;
+    /// Sleeps until the page queues an event or `seconds` pass; a negative number is no limit.
+    fn web_idle(seconds: f64);
+    /// The next event the page queued, as its kind (platform.cee) with its four numbers in `values`, or 0.
+    fn web_event(values: *mut f64) -> i32;
+    /// A box of the frame that changed, in pixels: before `web_present`, once for each.
+    fn web_box(x: u32, y: u32, width: u32, height: u32);
+    /// Shows the boxes given of the frame, `width` by `height` pixels, each R, G, B, A.
+    fn web_present(pixels: *u32, width: u32, height: u32);
+    /// The pointer's shape: 0 the arrow, 1 a hand, 2 a text beam.
+    fn web_cursor(kind: u32);
+    /// The text the page last pasted, in the module's memory, and its length.
+    fn web_pasted(length: *mut usize) -> *u8;
+    /// Puts `length` bytes of UTF-8 on the clipboard.
+    fn web_copy(text: *u8, length: usize);
+}
+
+/// A block of the module's memory, for a FixedBufferAllocator. The module's memory is fixed when it is built
+/// (host.c's WEB_MEMORY), and nothing is given back: an app takes its blocks once, as it starts.
+public struct WebBlock {
+    start: *mut u8;
+    size: usize;
+
+    /// `size` bytes; a block of none when there are not that many left.
+    /// Safety: web_take gives `size` bytes nothing else uses, or null.
+    public fn take(size: usize) -> WebBlock {
+        unsafe {
+            let start = web_take(size);
+            return WebBlock { start: start, size: if (start as usize == 0) 0 else size };
+        }
+    }
+
+    /// The block's bytes; empty when it could not be taken.
+    /// Safety: `start` names `size` bytes that are this block's alone.
+    public fn bytes(borrow mut this) -> SliceMut<u8> {
+        unsafe {
+            return SliceMut.fromRaw(this.start, this.size);
+        }
+    }
+}
+
+/// The page's fonts (the files claywind-pack was given, in their order).
+public struct WebFonts {
+    unused: u8;
+
+    public fn open() -> WebFonts => WebFonts { unused: 0 };
+
+    /// Font `index`: a file's bytes for Raster.loadFont, empty past the last.
+    /// Safety: web_font gives a pointer to `length` bytes the page wrote, which stay, or null.
+    public fn font(borrow this, index: u32) -> Slice<u8> {
+        unsafe {
+            var length: usize = 0;
+            let bytes = web_font(index, borrow mut length as *mut usize);
+            return Slice.fromRaw(bytes, if (bytes as usize == 0) 0 else length);
+        }
+    }
+}
+
+/// A Raster's capacity for the web host: frames up to WEB_MAX_PIXELS.
+public fn webRasterCapacity() -> RasterCapacity => RasterCapacity.of(WEB_MAX_PIXELS_WIDTH, WEB_MAX_PIXELS_HEIGHT);
+
+/// The ratio to draw at: the page's, lowered until `size` points fit the largest frame (as the desktop host's).
+fn ratioFor(size: Dims, wanted: f32) -> f32 {
+    let w = if (size.w < 1.0) 1.0 else size.w;
+    let h = if (size.h < 1.0) 1.0 else size.h;
+    let ratio = if (wanted >= 1.0) wanted else 1.0;
+    return ratio.min(round<f32>(WEB_MAX_PIXELS_WIDTH) / w).min(round<f32>(WEB_MAX_PIXELS_HEIGHT) / h);
+}
+
+fn pixels(points: f32, ratio: f32, most: usize) -> usize {
+    let n = saturatingTruncate<usize>(Math.round(points * ratio));
+    return n.max(1).min(most);
+}
+
+impl WebPlatform {
+    /// The platform of the page's canvas as it is now.
+    /// Safety: web_start writes four numbers.
+    public fn open() -> WebPlatform {
+        var values = [0.0f64; 4];
+        unsafe {
+            web_start(borrow mut values[0] as *mut f64);
+        }
+        var platform = WebPlatform.create(
+            Dims { w: round<f32>(values[0]), h: round<f32>(values[1]) },
+            round<f32>(values[2]),
+        );
+        platform.apple = values[3] != 0.0;
+        return platform;
+    }
+
+    /// Before `ui.begin`: waits for the browser's next frame, and takes what the page queued since the last.
+    /// Safety: web_event writes four numbers.
+    public fn beginFrame(borrow mut this) {
+        unsafe {
+            this.setFrameTime(round<f32>(web_wait()));
+            var values = [0.0f64; 4];
+            loop {
+                let kind = web_event(borrow mut values[0] as *mut f64);
+                if (kind == 0) {
+                    break;
+                }
+                this.apply(kind, values);
+            }
+        }
+    }
+
+    /// After `ui.begin` (whose key bindings made this frame's shortcuts edit commands): the text for a Paste.
+    /// Safety: web_pasted gives a pointer to `length` bytes that stay until the next call, or null.
+    public fn editInto(borrow this, ui: borrow mut Ui) {
+        if (ui.commanded(EditCommand.Paste)) {
+            unsafe {
+                var length: usize = 0;
+                let bytes = web_pasted(borrow mut length as *mut usize);
+                if (bytes as usize != 0) {
+                    ui.paste(Slice.fromRaw(bytes, length));
+                }
+            }
+        }
+    }
+
+    /// After a frame that fit (`ui.endFrame`): draws what changed of it into `raster` over `clear`, and shows just
+    /// that; a frame like the last shows nothing.
+    /// Safety: web_present reads the frame's pixels during the call.
+    public fn show(borrow mut this, ui: borrow Ui, raster: borrow mut Raster, damage: borrow mut Damage, clear: Color) {
+        let scale = ratioFor(this.size, this.ratio);
+        let w = pixels(this.size.w, scale, WEB_MAX_PIXELS_WIDTH);
+        let h = pixels(this.size.h, scale, WEB_MAX_PIXELS_HEIGHT);
+        let boxes = damage.plan(ui, clear, w, h, scale);
+        if (boxes == 0) {
+            return;
+        }
+        raster.setPixelRatio(scale);
+        let _ = raster.resize(w, h);
+        damage.draw(mut raster, ui, clear);
+        unsafe {
+            for (k in 0..boxes) {
+                let r = damage.redrawn(k);
+                web_box(
+                    saturatingTruncate<u32>(r.x),
+                    saturatingTruncate<u32>(r.y),
+                    saturatingTruncate<u32>(r.w),
+                    saturatingTruncate<u32>(r.h),
+                );
+            }
+            let frame = raster.pixels();
+            web_present(frame.ptr, truncate<u32>(raster.frameWidth()), truncate<u32>(raster.frameHeight()));
+        }
+    }
+
+    /// After the frame: what it copied onto the clipboard, the pointer's shape, and then a sleep while nothing
+    /// changes: until an event, a caret's blink or a frame the Ui asked for later.
+    /// Safety: web_copy reads the bytes during the call.
+    public fn finishFrame(borrow mut this, ui: borrow Ui) {
+        unsafe {
+            match (ui.copiedText()) {
+                Some(bytes) => { web_copy(bytes.ptr, bytes.length); }
+                null => {}
+            }
+            let kind = match (this.cursor) {
+                Cursor.Default => 0u32,
+                Cursor.Pointer => 1u32,
+                Cursor.Text => 2u32,
+            };
+            if (kind != this.shownCursor) {
+                web_cursor(kind);
+                this.shownCursor = kind;
+            }
+            this.endFrame();
+            match (ui.frameDelay()) {
+                Some(seconds) => {
+                    if (seconds > 0.0) {
+                        web_idle(seconds);
+                    }
+                }
+                null => { web_idle(-1.0); }
+            }
+        }
+    }
+}

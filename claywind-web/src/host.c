@@ -7,7 +7,7 @@
 
 #include "ceesafe/rt.h"
 
-#define WEB_MEMORY ((size_t)160 << 20)
+#define WEB_MEMORY ((size_t)248 << 20)
 static unsigned char web_memory[WEB_MEMORY];
 static size_t web_used;
 
