@@ -352,6 +352,37 @@ public struct Raster<region r> {
         }
     }
 
+    /// Forgets image `handle` and gives its memory back: the images after it move down (as clearColorGlyphs moves
+    /// them), so a program that shows a changing picture (a report's pages) can replace it as often as it likes.
+    /// False when there is no such image.
+    public fn removeImage(borrow mut this, handle: u32) -> bool {
+        let gone = match (this.imageIndex(handle)) {
+            Some(k) => k,
+            null => { return false; }
+        };
+        var kept: usize = 0;
+        var top: usize = 0;
+        for (k in 0..this.images.length()) {
+            if (k == gone) {
+                continue;
+            }
+            var rec = this.images.get(k);
+            let n = rec.w * rec.h;
+            if (rec.offset != top) {
+                for (p in 0..n) {
+                    this.imagePool[top + p] = this.imagePool[rec.offset + p];
+                }
+                rec.offset = top;
+            }
+            this.images.set(kept, rec);
+            kept += 1;
+            top += n;
+        }
+        this.images.truncate(kept);
+        this.imageTop = top;
+        return true;
+    }
+
     public fn setImagePixel(borrow mut this, handle: u32, x: usize, y: usize, rgba: u32) {
         match (this.imageIndex(handle)) {
             Some(k) => {

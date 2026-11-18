@@ -199,3 +199,30 @@ fn loadedImagesDrawThroughTheRaster() -> Result<void, TestFailure> {
     Check.equalU64(63, px.g as u64)?;
     return Check.equalU64(72, px.b as u64);
 }
+
+@test
+fn aRemovedImageGivesItsMemoryBack() -> Result<void, TestFailure> {
+    var storage = heap(4194304);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(4, 4);
+    c.imagePixels = 300;
+    c.fontBytes = 16;
+    var ras = Raster.create(memory, c)!;
+    // Three images fill the pool; the middle one goes, and the last keeps its pixels as it moves down.
+    Check.isTrue(ras.addImage(1, 10, 10), "image 1 fits")?;
+    Check.isTrue(ras.addImage(2, 10, 10), "image 2 fits")?;
+    Check.isTrue(ras.addImage(3, 10, 10), "image 3 fits")?;
+    Check.isTrue(!ras.addImage(4, 1, 1), "the pool is full")?;
+    ras.setImagePixel(3, 9, 9, 0xFF123456);
+    Check.isTrue(ras.removeImage(2), "image 2 goes")?;
+    Check.isTrue(!ras.removeImage(2), "and is gone")?;
+    let last = ras.imagePixels(3)!;
+    Check.equalU64(0xFF123456, last[99] as u64)?;
+    Check.isTrue(ras.imageSize(2) == null, "image 2 has no size")?;
+    // Its room is free again, as often as an image is replaced.
+    for (k in 0..50u32) {
+        Check.isTrue(ras.addImage(10 + k, 10, 10), "a new image fits")?;
+        Check.isTrue(ras.removeImage(10 + k), "and goes")?;
+    }
+    return Ok();
+}
