@@ -296,13 +296,32 @@ fn infoPlist(o: borrow Options, phone: bool) -> String {
     return p;
 }
 
-/// Builds the package here with `arguments` after `build --windowed`; whether it built.
-fn build(arguments: Slice<StringView>) -> bool {
+/// Where the static OpenSSL for `system` ("android-arm64", "ios-arm64", "ios-sim-arm64") is, when
+/// tools/openssl-mobile.sh of CeeSafe.Web has built it in its usual place; empty otherwise.
+fn mobileOpenssl(system: StringView) -> String {
+    let dir = cat([Environment.variable("HOME") ?? "", "/.cache/ceesafe/openssl-mobile/", system]);
+    return if (File.kind(
+        cat([dir.view(), "/lib/libssl.a"]).view(),
+    ) is Ok(Some(PathKind.File))) dir else String.create();
+}
+
+/// Builds the package here with `arguments` after `build --windowed`, for `target` (a manifest's [target.NAME],
+/// CeeSafe ADR 0171; empty for this machine) and with `variable` ("NAME=value", or empty) in ceesafec's environment:
+/// what a dependency's target table names its libraries by. Whether it built.
+fn build(arguments: Slice<StringView>, target: StringView, variable: StringView) -> bool {
     var args = Vector<StringView>.create();
+    if (variable.length > 0) {
+        args.push(variable)!;
+        args.push("ceesafec")!;
+    }
     args.push("build")!;
     args.push("--windowed")!;
+    if (target.length > 0) {
+        args.push("--target")!;
+        args.push(target)!;
+    }
     args.extend(arguments)!;
-    return match (Process.run("ceesafec", args)) {
+    return match (Process.run(if (variable.length > 0) "env" else "ceesafec", args)) {
         Ok(status) => status == 0,
         Err(_) => {
             Console.writeErrorLine("claywind-pack: cannot run ceesafec (is it on PATH?)");
@@ -312,7 +331,14 @@ fn build(arguments: Slice<StringView>) -> bool {
 }
 
 /// The .app at `app` for a Mac or a phone: the directory, the executable built into it, and its Info.plist.
-fn bundle(o: borrow Options, app: StringView, phone: bool, flags: Slice<StringView>) -> bool {
+fn bundle(
+    o: borrow Options,
+    app: StringView,
+    phone: bool,
+    flags: Slice<StringView>,
+    target: StringView,
+    variable: StringView,
+) -> bool {
     let inner = if (phone) text(app) else cat([app, "/Contents/MacOS"]);
     if (!freshDirectory(inner.view())) {
         return false;
@@ -322,7 +348,7 @@ fn bundle(o: borrow Options, app: StringView, phone: bool, flags: Slice<StringVi
     args.extend(flags)!;
     args.push("-o")!;
     args.push(exe.view())!;
-    if (!build(args.view())) {
+    if (!build(args.view(), target, variable)) {
         return false;
     }
     let plist = if (phone) cat([app, "/Info.plist"]) else cat([app, "/Contents/Info.plist"]);
@@ -332,7 +358,7 @@ fn bundle(o: borrow Options, app: StringView, phone: bool, flags: Slice<StringVi
 fn packMac(o: borrow Options) -> i32 {
     let app = cat(["out/pack/", o.name.view(), ".app"]);
     let none = Vector<StringView>.create();
-    if (!bundle(o, app.view(), false, none.view())) {
+    if (!bundle(o, app.view(), false, none.view(), "", "")) {
         return fail("the app was not built");
     }
     if (!run("codesign", ["-s", "-", "-f", app.view()])) {
@@ -369,7 +395,15 @@ fn packIos(o: borrow Options, simulator: bool) -> i32 {
         "--cflag",
         "-Wl,-stack_size,0x1000000",
     ];
-    if (!bundle(o, app.view(), true, flags[..])) {
+    // A dependency that links OpenSSL (CeeSafe.Web's web_tls) is told where the phone's is, unless the caller said.
+    var variable = String.create();
+    if (Environment.variable("OPENSSL_IOS_DIR") == null) {
+        let found = mobileOpenssl(if (simulator) "ios-sim-arm64" else "ios-arm64");
+        if (found.view().length > 0) {
+            variable = cat(["OPENSSL_IOS_DIR=", found.view()]);
+        }
+    }
+    if (!bundle(o, app.view(), true, flags[..], "ios", variable.view())) {
         return fail("the app was not built");
     }
     if (simulator) {
@@ -660,7 +694,15 @@ fn packAndroid(o: borrow Options) -> i32 {
             "-o",
             so.view(),
         ];
-        if (!build(flags[..])) {
+        var variable = String.create();
+        if (Environment.variable("OPENSSL_ANDROID_DIR") == null) {
+            let system = if (abi == "arm64-v8a") text("android-arm64") else cat(["android-", abi]);
+            let found = mobileOpenssl(system.view());
+            if (found.view().length > 0) {
+                variable = cat(["OPENSSL_ANDROID_DIR=", found.view()]);
+            }
+        }
+        if (!build(flags[..], "android", variable.view())) {
             return fail2("the app was not built for ", abi);
         }
     }
