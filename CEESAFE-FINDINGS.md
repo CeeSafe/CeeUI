@@ -417,3 +417,21 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   calm machine; a run under sixteen busy loops was stopped unfinished (the machine's load passed 200).
 - **O12 (ClayWind's own). The GPU host had its own list of fonts**, without a phone's, so it ended before Metal
   started; the Simulator hid it by reading the Mac's fonts. It uses claywind-desktop's `loadSystemFonts` now.
+
+## P. Found while porting IPos's invoices (2026-11-18, ceesafec 0.70.0 to 0.72.0)
+
+- **P1 (fixed in ceesafec 0.72.0). An open dropdown lost the point to the row it covered, for a screen reader.** The
+  runtime took the latest element in the window's list for the one on top, but the list is the reading order, and a
+  dropdown is read before the page its open list covers. On IPos's Invoices List, System Events' `click at` on "Sales
+  Return" pressed the invoice row beneath (`accessibilityHitTest:` answered the row), as VoiceOver's pointer would.
+  The mouse was right: ClayWind's own hit test stops at the floating layer. ADR 0164 §10 (the owner chose "Add a layer
+  to nodes"): `WindowAccessNode.layer`, the highest layer's element at a point, then the latest; macOS, Windows and
+  Android (iOS chooses for itself). ClayWind gives each node its floating root's place (`LayoutTree.openLayer`).
+- **P2 (fixed in ceesafec 0.72.0). A window resized by another program kept its old frame until the next input.** The
+  resize came inside AppKit's wait with no event behind it; `windowDidResize:` queued Resized and the wait went on, so
+  IPos, resized to a phone's width by System Events, drew its wide layout squeezed until a click. The delegate's resize
+  and focus methods post the wake event now. `window_check` resizes from a run loop timer during a wait.
+- **P3 (O6 again).** 0.72.0's two macOS builds were "not acquired by Runner of type hosted even after multiple
+  attempts"; a rerun of the failed jobs published the release.
+- **P4 (open, not reproduced).** On 0.72.0's release commit, the contract suite's `run tsan` failed one of its 58
+  async programs once; the step alone, three times after, passed 58 of 58. The log does not name the program.
