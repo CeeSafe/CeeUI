@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """End-to-end check of the browser host without a browser: fetches the page, opens the WebSocket (checking the
-RFC 6455 accept key), assembles the frame rectangles into a full 1024x640 frame, sends input, and checks the frame
+RFC 6455 accept key, and that a page from another origin is refused), assembles the frame rectangles into a full 1024x640 frame, sends input, and checks the frame
 reacts. Writes the assembled frames as PNGs when Pillow is there.
 
 Usage: test_client.py [PORT] [OUT_DIR]   (the host must be running: ./out/browser PORT)
@@ -10,6 +10,22 @@ import base64, hashlib, os, socket, struct, sys, time
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
 OUT = sys.argv[2] if len(sys.argv) > 2 else "."
 W, H = 1024, 640
+
+
+def ws_status(origin):
+    """The status line the host answers a WebSocket request from `origin` with (the connection then closed)."""
+    s = socket.create_connection(("127.0.0.1", PORT))
+    key = base64.b64encode(os.urandom(16)).decode()
+    s.sendall((f"GET /ws HTTP/1.1\r\nHost: 127.0.0.1:{PORT}\r\nOrigin: {origin}\r\nUpgrade: websocket\r\n"
+               f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+    head = b""
+    while b"\r\n" not in head:
+        chunk = s.recv(1)
+        if not chunk:
+            break
+        head += chunk
+    s.close()
+    return head.split(b"\r\n")[0].decode()
 
 
 def http_get(path):
@@ -102,6 +118,13 @@ def main():
     head, body = http_get("/")
     assert head.startswith("HTTP/1.1 200") and b"<canvas" in body, head
     assert http_get("/nope")[0].startswith("HTTP/1.1 404")
+    # Only the host's own page may open the WebSocket: another site's page is refused (a program sends no Origin).
+    for origin in ("http://evil.example", f"http://evil.example:{PORT}", f"http://127.0.0.1:{PORT + 1}", "null"):
+        status = ws_status(origin)
+        assert status.startswith("HTTP/1.1 403"), (origin, status)
+    for origin in (f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"):
+        status = ws_status(origin)
+        assert status.startswith("HTTP/1.1 101"), (origin, status)
     ws = Ws()
     first = ws.pump(0.6)
     assert first >= 1, "no frame arrived"

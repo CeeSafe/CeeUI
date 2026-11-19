@@ -107,6 +107,38 @@ fn header<region r>(head: Slice<r, u8>, name: StringView) -> Slice<r, u8> {
     return head[0..0];
 }
 
+/// Whether a WebSocket request's `Origin` (empty when it sent none) lets it in: a browser always sends one, and only
+/// this host's own page, at http://127.0.0.1:PORT/ or http://localhost:PORT/, may drive the UI. Another site's page
+/// (a page the user opened elsewhere, or one whose name was rebound to 127.0.0.1) is refused. A request with no
+/// Origin is a program on this machine, as test_client.py is, which could reach the port anyway.
+fn originAllowed(origin: Slice<u8>, port: u16) -> bool {
+    if (origin.length == 0) {
+        return true;
+    }
+    for (name in ["127.0.0.1", "localhost"]) {
+        var mine = [0u8; 48];
+        var w = TextWriter.create(mut mine[..]);
+        w.text("http://");
+        w.text(name);
+        w.byte(':');
+        w.signed(port as i64);
+        let want = w.written();
+        if (want.length == origin.length) {
+            var same = true;
+            for (i in 0..want.length) {
+                if (want[i] != origin[i]) {
+                    same = false;
+                    break;
+                }
+            }
+            if (same) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 fn startsWith(s: Slice<u8>, prefix: StringView) -> bool {
     let p = prefix.bytes();
     if (s.length < p.length) {
@@ -326,6 +358,7 @@ async fn connection(
     stream: borrow mut AsyncTcpStream,
     host: borrow mut Host,
     page: Slice<u8>,
+    port: u16,
 ) -> Result<void, AsyncError> {
     var buffer = [0u8; 8192];
     let length = await readHead(mut stream, mut buffer[..])?;
@@ -337,6 +370,10 @@ async fn connection(
         let key = header(head, "Sec-WebSocket-Key");
         if (key.length == 0 || key.length > 64) {
             return await respond(mut stream, "400 Bad Request", "text/plain", "not a WebSocket request".bytes());
+        }
+        if (!originAllowed(header(head, "Origin"), port)) {
+            await AsyncConsole.writeLine("browser: refused a page from another origin")?;
+            return await respond(mut stream, "403 Forbidden", "text/plain", "not this host's page".bytes());
         }
         var reply = [0u8; 256];
         var w = TextWriter.create(mut reply[..]);
@@ -377,7 +414,7 @@ async fn serve(port: u16, host: borrow mut Host, page: Slice<u8>) -> Result<void
     }
     loop {
         var stream = await listener.accept()?;
-        match (await connection(mut stream, mut host, page)) {
+        match (await connection(mut stream, mut host, page, port)) {
             Ok() => {}
             Err(AsyncError.Cancelled) => { return Err(AsyncError.Cancelled); }
             Err(_) => {} // a page that went away mid-write: wait for the next
