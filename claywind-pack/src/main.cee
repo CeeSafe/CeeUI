@@ -16,6 +16,8 @@
 //
 // `--network WHY` is for an app that uses the network: Android's INTERNET permission, and on iOS the sentence shown
 // when the app first reaches a device on the local network.
+// `--bluetooth WHY` is for an app that prints to Bluetooth printers (CeeSafe ADR 0177): Android's Bluetooth
+// permissions, and on iOS and macOS the sentence shown when the app first uses Bluetooth.
 //
 // It runs ceesafec for the target, writes the Info.plist or AndroidManifest.xml, and runs the system's own tools
 // (xcrun, codesign, security; the NDK's clang, aapt2, zipalign, apksigner). It needs a Mac for the Apple targets, and
@@ -35,6 +37,8 @@ struct Options {
     storePass: String;
     network: String; // --network, why the app uses the network: Android's INTERNET permission and iOS's local
     // network description; empty for an app that uses none
+    bluetooth: String; // --bluetooth, why the app uses Bluetooth (CeeSafe ADR 0177 §2.2): Android's permissions and
+    // Apple's NSBluetoothAlwaysUsageDescription; empty for an app that uses none
     fonts: String;     // --font, each on a line: the web target's fonts, in the app's order
     fallbacks: String; // --fallback, each on a line: the web target's fallback fonts, in the order they are tried
 }
@@ -271,6 +275,12 @@ fn infoPlist(o: borrow Options, phone: bool) -> String {
         p.append("</string>\n")!;
     }
     p.append("\t<key>CFBundleVersion</key><string>1</string>\n")!;
+    if (o.bluetooth.view().length > 0) {
+        // What iOS and macOS show when the app first uses Bluetooth; without it the system ends the app there.
+        p.append("\t<key>NSBluetoothAlwaysUsageDescription</key><string>")!;
+        p.append(xml(o.bluetooth.view()).view())!;
+        p.append("</string>\n")!;
+    }
     if (phone) {
         p.append("\t<key>LSRequiresIPhoneOS</key><true/>\n")!;
         p.append("\t<key>MinimumOSVersion</key><string>17.0</string>\n")!;
@@ -608,6 +618,19 @@ fn androidManifest(o: borrow Options) -> String {
     if (o.network.view().length > 0) {
         m.append("  <uses-permission android:name=\"android.permission.INTERNET\"/>\n")!;
     }
+    if (o.bluetooth.view().length > 0) {
+        // Android 12 and later ask for these two at run time (CeeSafe ADR 0177 §2.2), the scan never for a location;
+        // Android 9 to 11 grant the first two at install and ask for the location, which a scan needs there.
+        m.append("  <uses-permission android:name=\"android.permission.BLUETOOTH_CONNECT\"/>\n")!;
+        m.append("  <uses-permission android:name=\"android.permission.BLUETOOTH_SCAN\"")!;
+        m.append(" android:usesPermissionFlags=\"neverForLocation\"/>\n")!;
+        m.append("  <uses-permission android:name=\"android.permission.BLUETOOTH\" android:maxSdkVersion=\"30\"/>\n")!;
+        m.append(
+            "  <uses-permission android:name=\"android.permission.BLUETOOTH_ADMIN\" android:maxSdkVersion=\"30\"/>\n",
+        )!;
+        m.append("  <uses-permission android:name=\"android.permission.ACCESS_FINE_LOCATION\"")!;
+        m.append(" android:maxSdkVersion=\"30\"/>\n")!;
+    }
     m.append("  <application android:label=\"")!;
     m.append(xml(o.name.view()).view())!;
     m.append("\" android:hasCode=\"false\" android:extractNativeLibs=\"true\">\n")!;
@@ -891,8 +914,9 @@ fn usage() -> i32 {
     Console.writeErrorLine("usage: claywind_pack <macos|ios|ios-simulator|android|web> [--name NAME] [--id ID]");
     Console.writeErrorLine("           [--version V] [--abi arm64-v8a,x86_64] [--profile FILE] [--identity NAME]");
     Console.writeErrorLine(
-        "           [--keystore FILE] [--keystore-pass PASSWORD] [--network WHY] [--font FILE]... [--fallback FILE]...",
+        "           [--keystore FILE] [--keystore-pass PASSWORD] [--network WHY] [--bluetooth WHY]",
     );
+    Console.writeErrorLine("           [--font FILE]... [--fallback FILE]...");
     Console.writeErrorLine("run in the app's package directory; the result is under out/pack");
     return 2;
 }
@@ -919,6 +943,7 @@ fn main() -> i32 {
         keystore: String.create(),
         storePass: text("android"),
         network: String.create(),
+        bluetooth: String.create(),
         fonts: String.create(),
         fallbacks: String.create(),
     };
@@ -947,6 +972,8 @@ fn main() -> i32 {
             o.storePass = text(value);
         } else if (flag == "--network") {
             o.network = text(value);
+        } else if (flag == "--bluetooth") {
+            o.bluetooth = text(value);
         } else if (flag == "--fallback") {
             o.fallbacks.append(value)!;
             o.fallbacks.append("\n")!;
