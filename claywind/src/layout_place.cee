@@ -40,6 +40,17 @@ fn isOffscreen(l: borrow LayoutTree, b: Rect) -> bool {
 
 fn emit(l: borrow mut LayoutTree, command: Command) -> bool => l.commands.push(command);
 
+/// Whether the paragraph holding the line at byte `lineStart` of the frame's text is right to left: the element's
+/// text is bytes [`textStart`, `textEnd`), and the text from the paragraph's start (after the last line break before
+/// the line) decides.
+fn paragraphRtl(l: borrow LayoutTree, textStart: usize, textEnd: usize, lineStart: usize) -> bool {
+    var start = lineStart;
+    while (start > textStart && l.bytes.items[start - 1] != '\n') {
+        start -= 1;
+    }
+    return bidiParagraphRtl(l.bytes.items[start..textEnd.min(l.bytes.length())]);
+}
+
 /// Where a floating root attaches (the attach-point arithmetic of Clay__CalculateFinalLayout).
 fn floatingPosition(l: borrow LayoutTree, root: TreeRoot) -> Vec2 {
     let node = l.nodes.items[root.index];
@@ -138,6 +149,12 @@ fn placeText(l: borrow mut LayoutTree, index: usize, area: Rect) -> bool {
             continue;
         }
         let offset = match (config.align) {
+            TextAlign.Start => if (paragraphRtl(
+                l,
+                node.textStart,
+                node.textStart + node.textLength,
+                line.start,
+            )) area.w - line.width else 0.0,
             TextAlign.Left => 0.0,
             TextAlign.Center => (area.w - line.width) / 2.0,
             TextAlign.Right => area.w - line.width,

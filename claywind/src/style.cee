@@ -1293,7 +1293,7 @@ public struct Text {
         px: 0.0,
         spacing: 0.0,
         lineHeight: 0.0,
-        alignment: TextAlign.Left,
+        alignment: TextAlign.Start,
         wrapping: TextWrap.Words,
         lines: 0,
         isBold: false,

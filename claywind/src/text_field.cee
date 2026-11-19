@@ -174,6 +174,16 @@ fn visualStep<M: TextMetrics>(metrics: borrow M, text: Slice<u8>, masked: bool, 
     }
 }
 
+/// How far right of the field's text area its text starts: 0 for left-to-right text; for a right-to-left paragraph
+/// (UAX #9 P2), the room left over, so its text sits at the right as it reads. `inner` is the text area's width
+/// (last frame's box; 0 before the field was laid out).
+fn fieldShift<M: TextMetrics>(metrics: borrow M, text: Slice<u8>, masked: bool, inner: f32) -> f32 {
+    if (masked || inner <= 0.0 || !bidiParagraphRtl(text)) {
+        return 0.0;
+    }
+    return (inner - metrics.measure(text, TextConfig.of(FIELD_TEXT)).w).max(0.0);
+}
+
 /// Where bytes [`from`, `to`) of `text` are drawn, as the field shows it (TextMetrics.spans; among the dots when
 /// masked); how many spans went into `out`.
 fn fieldSpans<M: TextMetrics>(
@@ -246,7 +256,8 @@ impl Controls {
             ui.capture(h);
             match (box) {
                 Some(b) => {
-                    edit.caret = fieldOffsetAt(metrics, buf[0..len], masked, p.position.x - b.x - padX);
+                    let shift = fieldShift(metrics, buf[0..len], masked, b.w - 2.0 * padX);
+                    edit.caret = fieldOffsetAt(metrics, buf[0..len], masked, p.position.x - b.x - padX - shift);
                     if (!ui.shiftDown()) {
                         edit.anchor = edit.caret;
                     }
@@ -269,7 +280,10 @@ impl Controls {
             ui.leaveFocus(h);
         } else if (ui.captured() == h && p.down && ui.pressCount() < 2) {
             match (box) {
-                Some(b) => { edit.caret = fieldOffsetAt(metrics, buf[0..len], masked, p.position.x - b.x - padX); }
+                Some(b) => {
+                    let shift = fieldShift(metrics, buf[0..len], masked, b.w - 2.0 * padX);
+                    edit.caret = fieldOffsetAt(metrics, buf[0..len], masked, p.position.x - b.x - padX - shift);
+                }
                 null => {}
             }
         }
@@ -373,6 +387,12 @@ impl Controls {
             ui.accessCaret(node, edit.caret, edit.anchor);
         }
         let config = TextConfig.of(FIELD_TEXT);
+        // A right-to-left paragraph sits at the right: everything drawn at a caret or a span moves with it.
+        let shift = match (box) {
+            Some(b) => fieldShift(metrics, buf[0..len], masked, b.w - 2.0 * padX),
+            null => 0.0,
+        };
+        let textX = padX + shift;
         // The selection, behind the text: where its characters are drawn, so a selection across right-to-left and
         // left-to-right text is several boxes.
         if (focused && edit.selects()) {
@@ -381,7 +401,7 @@ impl Controls {
             for (k in 0..count) {
                 let s = spans[k];
                 ui.open(
-                    Style.box().absolute().passthrough().left(padX + s.left).top(padY).w(
+                    Style.box().absolute().passthrough().left(textX + s.left).top(padY).w(
                         Size.fixed(s.right - s.left),
                     ).h(Size.fixed(FIELD_TEXT))
                         .bg(0x3B82F666), // BLUE_500 at 40 %: the selected text shows through
@@ -392,7 +412,7 @@ impl Controls {
         // The text, with the composition (underlined) at the caret while the input method composes.
         let composing = focused && !masked && ui.composition().length > 0;
         var caretX = fieldCaretX(metrics, buf[0..len], masked, edit.caret);
-        ui.open(Style.row().alignXY(AxisAlign.Start, AxisAlign.Center));
+        ui.open(Style.row().ml(shift).alignXY(AxisAlign.Start, AxisAlign.Center));
         if (composing) {
             // One line: the text with the composition spliced in at the caret, the composition underlined, and
             // the caret where the input method has it, all placed by the glyphs as drawn.
@@ -414,7 +434,7 @@ impl Controls {
             ui.labelBytes(line[0..all], Text.of().color(SLATE_100));
             let u0 = metrics.caretX(line[0..all], config, before);
             let u1 = metrics.caretX(line[0..all], config, before + n);
-            ui.open(Style.box().absolute().passthrough().left(padX + u0.min(u1)).top(padY + FIELD_TEXT)
+            ui.open(Style.box().absolute().passthrough().left(textX + u0.min(u1)).top(padY + FIELD_TEXT)
                 .w(Size.fixed((u1 - u0).abs())).h(Size.fixed(1.0)).bg(SLATE_100));
             ui.close();
             caretX = metrics.caretX(line[0..all], config, before + ui.compositionCaret().min(n));
@@ -426,12 +446,12 @@ impl Controls {
         ui.close();
         if (focused) {
             if ((truncate<u64>((ui.time() * 2.0).floor()) & 1) == 0 || composing) {
-                ui.open(Style.box().absolute().passthrough().left(padX + caretX).top(padY).w(Size.fixed(2.0))
+                ui.open(Style.box().absolute().passthrough().left(textX + caretX).top(padY).w(Size.fixed(2.0))
                     .h(Size.fixed(FIELD_TEXT)).bg(SLATE_200));
                 ui.close();
             }
             match (box) {
-                Some(b) => { ui.reportCaret(Rect { x: b.x + padX + caretX, y: b.y + padY, w: 2.0, h: FIELD_TEXT }); }
+                Some(b) => { ui.reportCaret(Rect { x: b.x + textX + caretX, y: b.y + padY, w: 2.0, h: FIELD_TEXT }); }
                 null => {}
             }
         }

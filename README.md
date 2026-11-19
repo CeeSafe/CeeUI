@@ -59,7 +59,8 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   inside a left-to-right line and as a line of its own, brackets mirrored, and Arabic joins. It passes Unicode 16's BidiTest.txt and
   BidiCharacterTest.txt in full. A text field's arrows move the caret as the text is drawn (in right-to-left text,
   Right goes towards its start), and a selection is highlighted where its characters are, so one across both
-  directions is several boxes (`TextMetrics.spans`). Not yet: right-aligned right-to-left paragraphs.
+  directions is several boxes (`TextMetrics.spans`). A paragraph whose first strong character is right to left sits at
+  the right (`TextAlign.Start`, the default), in a text field too.
 - **Text editing:** `Controls.textField` keeps a caret and a selection (`TextEdit`): the pointer places the caret and
   a drag selects, the arrows, Home and End move it (Shift extends), Backspace and Delete remove a selection or a
   grapheme cluster, typing and Paste replace the selection, Copy, Cut and Select All act on it, and an input

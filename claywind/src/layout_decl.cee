@@ -145,7 +145,11 @@ public enum TextWrap {
     None,
 }
 
+/// How a text's lines sit in its box. Start, the default, is the side its paragraph starts from: the left for a
+/// left-to-right paragraph, the right for one whose first strong character is right to left (UAX #9 P2), so Arabic and
+/// Hebrew lines sit at the right.
 public enum TextAlign {
+    Start,
     Left,
     Center,
     Right,
@@ -411,7 +415,7 @@ public struct TextConfig {
         letterSpacing: 0.0,
         lineHeight: 0.0,
         wrap: TextWrap.Words,
-        align: TextAlign.Left,
+        align: TextAlign.Start,
         lineClamp: 0,
     };
 

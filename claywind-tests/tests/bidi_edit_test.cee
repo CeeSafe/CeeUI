@@ -208,3 +208,81 @@ fn rasterSpansFollowTheShapedGlyphs() -> Result<void, TestFailure> {
     expect("the line's width", spans[0].right, ras.measure(text, config).w)?;
     return Ok();
 }
+
+@test
+fn aParagraphsDirectionIsItsFirstStrongCharacters() -> Result<void, TestFailure> {
+    Check.isTrue(!bidiParagraphRtl("Hello".bytes()), "Latin is left to right")?;
+    Check.isTrue(bidiParagraphRtl("\u{645}\u{631}\u{62D}\u{628}\u{627}".bytes()), "Arabic is right to left")?;
+    Check.isTrue(bidiParagraphRtl("12 \u{5E9}\u{5DC}\u{5D5}\u{5DD}".bytes()), "digits are not strong: Hebrew decides")?;
+    Check.isTrue(!bidiParagraphRtl("\u{2067}\u{628}\u{2069} abc".bytes()), "an isolate's letters do not count")?;
+    Check.isTrue(!bidiParagraphRtl("123 ...".bytes()), "no strong character: left to right")?;
+    return Check.isTrue(!bidiParagraphRtl("12\n\u{628}".bytes()), "only the first paragraph counts");
+}
+
+/// The x of each Text command, in order.
+fn textXs(ui: borrow Ui, out: borrow mut Vector<f32>) {
+    out.clear();
+    for (k in 0..ui.commandCount()) {
+        match (ui.commandAt(k)) {
+            Command.Text(r, _) => { out.push(r.x)!; }
+            _ => {}
+        }
+    }
+}
+
+@test
+fn aRightToLeftParagraphsLinesSitAtTheRight() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(16))!;
+    var platform = platformAt(400.0, 200.0, -1.0, -1.0);
+    var xs = Vector<f32>.create();
+    // A paragraph that wraps in a box 120 wide: its last line is shorter than the first. Right to left, the lines'
+    // right ends meet; left to right (or Left asked for), their left ends.
+    let arabic = "\u{645}\u{631}\u{62D}\u{628}\u{627} \u{645}\u{631}\u{62D}\u{628}\u{627} \u{628}";
+    for (k in 0..3) {
+        ui.begin(mut platform);
+        ui.open(Style.box().w(Size.fixed(120.0)).h(Size.fixed(150.0)));
+        if (k == 0) {
+            ui.label(arabic, Text.of());
+        } else if (k == 1) {
+            ui.label("hello hello b", Text.of());
+        } else {
+            ui.label(arabic, Text.of().align(TextAlign.Left));
+        }
+        ui.close();
+        finish(mut ui, mut platform)?;
+        textXs(ui, mut xs);
+        Check.isTrue(xs.length >= 2, "the paragraph wraps")?;
+        let last = xs[xs.length - 1];
+        if (k == 0) {
+            Check.isTrue(last > xs[0] + 1.0, "the short last line sits at the right")?;
+        } else {
+            expect("the last line starts at the left", last, xs[0])?;
+        }
+    }
+    return Ok();
+}
+
+@test
+fn aRightToLeftFieldShowsItsTextAtTheRight() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(400.0, 120.0, -1.0, -1.0);
+    // Two Arabic letters, four bytes: 40 points in the fake font, at the right of the field's text area. A click a
+    // little right of where they start puts the caret at their start (byte 0); without the shift, that place would
+    // be past the text's end.
+    var field = focusedMixedField(mut ui, mut platform, "\u{628}\u{62A}", 4)?;
+    let box = ui.boxOf("f")!;
+    let padX = space(3.0);
+    let textStart = box.x + box.w - padX - 40.0;
+    platform.pointerState.position = Vec2 { x: textStart + 2.0, y: box.y + box.h / 2.0 };
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    mixedFrame(mut ui, mut platform, mut field)?;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    mixedFrame(mut ui, mut platform, mut field)?;
+    return Check.equalU64(0, field.edit.caret as u64);
+}
