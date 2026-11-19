@@ -1,0 +1,118 @@
+# ClayWind CI (roadmap P0): on macOS, Linux and Windows, every package checked and formatted, the test suite, every
+# host built, the hosts run (the terminal host once, the browser host end to end), and the benchmarks against their
+# budgets (tools/bench.py, bench/budgets.json), whose numbers go to the run's summary and an artifact.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CEESAFE_VERSION: v0.77.1 # the release ClayWind was last tested with and is formatted by
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ci:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-24.04, windows-2025]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ceesafec (macOS, Linux)
+        if: runner.os != 'Windows'
+        run: |
+          curl -fsSL https://ceesafe.github.io/CeeSafe/install.sh | sh
+          echo "$HOME/.ceesafe/bin" >> "$GITHUB_PATH"
+
+      - name: Install ceesafec (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          irm https://ceesafe.github.io/CeeSafe/install.ps1 | iex
+          Add-Content $env:GITHUB_PATH (Join-Path $HOME ".ceesafe\bin")
+
+      - name: Toolchain
+        run: ceesafec --version
+
+      # Vulkan's headers for the GPU host; Liberation fonts, which have Arial's and Courier New's metrics, for the
+      # headless and browser hosts.
+      - name: Libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libvulkan-dev fonts-liberation
+
+      # The GPU host's Vulkan backend includes <vulkan/vulkan.h> from $VULKAN_SDK/Include; the headers alone do.
+      - name: Vulkan headers (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          git clone --depth 1 --branch v1.3.280 https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/vk"
+          echo "VULKAN_SDK=$RUNNER_TEMP/vk" >> "$GITHUB_ENV"
+
+      - name: Check and format
+        run: |
+          set -e
+          for p in claywind claywind-demo claywind-demo-tasks claywind-desktop claywind-dev claywind-fonts \
+                   claywind-tasks claywind-web claywind-pack claywind-tests claywind-hosts/headless \
+                   claywind-hosts/desktop claywind-hosts/gpu claywind-hosts/terminal claywind-hosts/browser \
+                   claywind-hosts/web; do
+            echo "== $p"
+            (cd "$p" && ceesafec check && ceesafec fmt --check)
+          done
+
+      - name: Tests
+        working-directory: claywind-tests
+        run: ceesafec test
+
+      - name: Build the hosts
+        run: |
+          set -e
+          for p in claywind-hosts/headless claywind-hosts/desktop claywind-hosts/gpu claywind-hosts/terminal \
+                   claywind-hosts/browser claywind-pack claywind-dev; do
+            echo "== $p"
+            (cd "$p" && ceesafec build)
+          done
+
+      - name: Terminal host, one frame
+        working-directory: claywind-hosts/terminal
+        run: |
+          CLAYWIND_ONCE=1 ./out/terminal > frame.txt
+          grep -q "ClayWind on CeeSafe" frame.txt
+
+      - name: Browser host, end to end
+        working-directory: claywind-hosts/browser
+        run: |
+          export CLAYWIND_FONT_DIR="$RUNNER_TEMP/fonts"
+          python3 ../../tools/bench.py --fonts "$CLAYWIND_FONT_DIR"
+          ./out/browser 8391 > browser.log 2>&1 &
+          host=$!
+          for _ in $(seq 50); do grep -q "open http" browser.log && break; sleep 0.2; done
+          status=0
+          python3 test_client.py 8391 "$RUNNER_TEMP" || status=$?
+          kill $host || true
+          cat browser.log
+          exit $status
+
+      - name: Benchmarks
+        run: |
+          python3 tools/bench.py --json "bench-${{ matrix.os }}.json" --markdown "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the benchmark numbers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.os }}
+          path: bench-${{ matrix.os }}.json
+          if-no-files-found: ignore
