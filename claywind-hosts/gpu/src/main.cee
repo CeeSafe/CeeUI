@@ -491,13 +491,12 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
             let scene = tab - NAV_COUNT;
             if (scene == 1) {
                 // The images once, so the GPU holds them; then image 2 changes in both renderers, and the frame
-                // compared must show its new pixels (GpuBackend.imageChanged).
+                // compared must show its new pixels (the GPU sees the raster's new version of it, and sends them).
                 gpu.begin(width, height, ratio);
                 drawSynthetic(mut gpu, scene);
                 let ignored = gpu.renderTo(width, height, clear, mut pixels.viewMut());
                 recolor(mut reference);
                 recolor(mut gpu.raster);
-                gpu.imageChanged(2);
             }
             var runs = TextRuns.create();
             drawSynthetic(mut runs, scene);

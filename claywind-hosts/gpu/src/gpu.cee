@@ -183,12 +183,14 @@ struct MaskEntry {
     oy: i32;
 }
 
-/// An image in the image atlas: its place (u, v) and size.
+/// An image in the image atlas: its place (u, v), its size, and the raster's version of the pixels sent there
+/// (Raster.imageVersion): another version is sent again before the image is drawn.
 struct ImageEntry {
     u: u32;
     v: u32;
     w: u32;
     h: u32;
+    version: u64;
 }
 
 /// ClayWind's commands as Metal instances, with the `Raster` that gives text metrics and rasterizes masks.
@@ -1462,10 +1464,34 @@ impl<region r> GpuBackend<r> {
         this.emit(v);
     }
 
-    /// Image `handle`'s place in the image atlas, packing and sending its pixels the first time it is drawn.
+    /// Image `handle`'s place in the image atlas, packing and sending its pixels the first time it is drawn, and
+    /// sending them again when they changed in the raster since (its version): in place when the size is the same,
+    /// else to a new place (the old one is not reused).
     fn imageEntry(borrow mut this, handle: u32) -> ImageEntry? {
+        let version = this.raster.imageVersion(handle);
+        var cached: ImageEntry? = null;
         match (this.images.get(handle)) {
-            Some(e) => { return ImageEntry { u: e.u, v: e.v, w: e.w, h: e.h }; }
+            Some(e) => { cached = ImageEntry { u: e.u, v: e.v, w: e.w, h: e.h, version: e.version }; }
+            null => {}
+        }
+        match (cached) {
+            Some(e) => {
+                if (e.version == version) {
+                    return e;
+                }
+                match (this.raster.imageSize(handle)) {
+                    Some(size) => {
+                        if (size.w == (e.w as usize) && size.h == (e.h as usize)) {
+                            let now = ImageEntry { u: e.u, v: e.v, w: e.w, h: e.h, version: version };
+                            let stored = this.images.put(handle, now)!;
+                            this.sendImage(handle, now);
+                            return now;
+                        }
+                    }
+                    null => {}
+                }
+                let gone = this.images.remove(handle);
+            }
             null => {}
         }
         let size = match (this.raster.imageSize(handle)) {
@@ -1490,6 +1516,7 @@ impl<region r> GpuBackend<r> {
             v: truncate<u32>(this.imageY),
             w: truncate<u32>(size.w),
             h: truncate<u32>(size.h),
+            version: version,
         };
         this.imageX += size.w;
         this.imageH = this.imageH.max(size.h);
@@ -1508,31 +1535,6 @@ impl<region r> GpuBackend<r> {
                         cw_gpu_image(pixels.ptr, e.w, e.w, e.h, e.u, e.v);
                     }
                 }
-            }
-            null => {}
-        }
-    }
-
-    /// Image `handle`'s pixels changed (through `raster.imagePixelsMut` or `setImagePixel`): the GPU's copy is
-    /// replaced. An image of a new size is placed again when next drawn; its old place is not reused.
-    public fn imageChanged(borrow mut this, handle: u32) {
-        var entry: ImageEntry? = null;
-        match (this.images.get(handle)) {
-            Some(e) => { entry = ImageEntry { u: e.u, v: e.v, w: e.w, h: e.h }; }
-            null => {}
-        }
-        match (entry) {
-            Some(e) => {
-                match (this.raster.imageSize(handle)) {
-                    Some(size) => {
-                        if (size.w == (e.w as usize) && size.h == (e.h as usize)) {
-                            this.sendImage(handle, e);
-                            return;
-                        }
-                    }
-                    null => {}
-                }
-                let gone = this.images.remove(handle);
             }
             null => {}
         }
