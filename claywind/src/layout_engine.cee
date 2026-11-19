@@ -961,7 +961,8 @@ fn hitTestNode(l: borrow mut LayoutTree, index: usize, point: Vec2) -> bool {
 /// Ending the frame and rendering it, generic over the text metrics and the backend.
 impl<region r> LayoutTree<r> {
     /// Ends the frame: measures, sizes and positions everything and builds the render commands
-    /// (Clay_EndLayout + Clay__CalculateFinalLayout). Err when the frame outgrew the capacity.
+    /// (Clay_EndLayout + Clay__CalculateFinalLayout). Err when the frame outgrew the capacity; it then has no
+    /// commands.
     public fn endLayout<M: TextMetrics>(borrow mut this, metrics: borrow M) -> Result<void, AllocError> {
         if (this.failed) {
             return Err(AllocError.OutOfMemory);
@@ -993,6 +994,9 @@ impl<region r> LayoutTree<r> {
             }
         }
         if (!calculateFinalLayout(mut this, metrics)) {
+            // The commands so far are a part of the frame, perhaps with a clip or an opacity opened and not closed:
+            // a failed frame has none, so that nothing draws it.
+            this.commands.clear();
             return Err(AllocError.OutOfMemory);
         }
         this.remember();

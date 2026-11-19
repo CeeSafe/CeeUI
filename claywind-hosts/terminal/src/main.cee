@@ -126,17 +126,19 @@ fn keyLabel(code: u32) -> StringView => match (code) {
     _ => "no key yet",
 };
 
-/// One frame: build, lay out, draw into the cell grid.
-fn frame(ui: borrow mut Ui, platform: borrow mut dyn Platform, screen: borrow mut Screen, app: borrow mut App) {
+/// One frame: build, lay out, draw into the cell grid. False, the grid left as the last frame drew it, when the
+/// frame does not fit the UI's capacity: its commands are only a part of it.
+fn frame(ui: borrow mut Ui, platform: borrow mut dyn Platform, screen: borrow mut Screen, app: borrow mut App) -> bool {
     let measure = CellMeasure { unused: 0 };
     ui.begin(platform);
     view(ui, app);
     match (ui.endFrame(platform, measure)) {
         Ok() => {}
-        Err(_) => {}
+        Err(_) => { return false; }
     }
     screen.clear();
     ui.render(screen);
+    return true;
 }
 
 fn main() -> i32 {
@@ -154,7 +156,10 @@ fn main() -> i32 {
     if (Environment.variable("CLAYWIND_ONCE") != null) {
         var screen = Screen.create(80, 24)!;
         var term = Terminal.create(screen.size());
-        frame(mut ui, mut term, mut screen, mut app);
+        if (!frame(mut ui, mut term, mut screen, mut app)) {
+            Console.writeErrorLine("claywind: the frame does not fit the UI capacity");
+            return 1;
+        }
         term.endFrame();
         let text = screen.plain()!;
         Console.writeBytes(text.view());
@@ -176,7 +181,7 @@ fn main() -> i32 {
     var buffer = [0u8; 256];
     var running = true;
     var lastMs = Timer.now();
-    frame(mut ui, mut term, mut screen, mut app);
+    let _ = frame(mut ui, mut term, mut screen, mut app); // a frame that does not fit leaves the screen as it was
     term.endFrame();
     screen.present()!;
     while (running) {
@@ -207,7 +212,7 @@ fn main() -> i32 {
             let now = Timer.now();
             term.setFrameTime(round<f32>(now - lastMs) / 1000.0);
             lastMs = now;
-            frame(mut ui, mut term, mut screen, mut app);
+            let _ = frame(mut ui, mut term, mut screen, mut app);
             term.endFrame();
         }
         screen.present()!;

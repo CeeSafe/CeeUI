@@ -896,6 +896,8 @@ impl<region r> Ui<r> {
     }
 
     /// Ends the frame: lays out, keeps what scrolling needs, and shows the cursor the hovered elements asked for.
+    /// Err when the frame does not fit the Ui's capacity: it then has no commands, and a host keeps the last frame
+    /// it drew rather than draw this one.
     public fn endFrame<M: TextMetrics>(
         borrow mut this,
         platform: borrow mut dyn Platform,

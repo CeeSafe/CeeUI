@@ -1098,3 +1098,30 @@ fn aPasswordFieldShowsDotsAndCopiesNothing() -> Result<void, TestFailure> {
     passwordFrame(mut ui, mut platform, mut buf[..], mut len, mut edit, 1)?;
     return Check.isTrue(ui.copiedText() == null, "Copy takes nothing from a password");
 }
+
+@test
+fn aFrameOutOfRoomForItsCommandsHasNone() -> Result<void, TestFailure> {
+    // Room for the elements but not their commands: the frame fails while its commands are made, after a clip has
+    // been opened, and keeps none of them (a part of a frame, its clip unclosed, is drawn by nothing).
+    var storage = heap(524288);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var capacity = UiCapacity.of(32);
+    capacity.layout.commands = 3;
+    var ui = Ui.create(memory, capacity)!;
+    var platform = platformAt(100.0, 100.0, -1.0, -1.0);
+    ui.begin(mut platform);
+    ui.open(Style.column().w(Size.fixed(80.0)).h(Size.fixed(80.0)).clip());
+    for (i in 0..6) {
+        let _ = i;
+        ui.open(Style.box().w(Size.fixed(10.0)).h(Size.fixed(10.0)).bg(0x3B82F6FF));
+        ui.close();
+    }
+    ui.close();
+    let measure = ClayMeasure { unused: 0 };
+    let failed = match (ui.endFrame(mut platform, measure)) {
+        Ok() => false,
+        Err(_) => true,
+    };
+    Check.isTrue(failed, "too many commands for the capacity")?;
+    return Check.equalU64(0, ui.commandCount() as u64);
+}

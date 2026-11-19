@@ -221,6 +221,8 @@ async fn session(stream: borrow mut AsyncTcpStream, host: borrow mut Host) -> Re
     host.lastCursor = 255;
     var last = Timer.now();
     var next = last;
+    // Whether the last frame did not fit the UI's capacity: told once, not every frame.
+    var overflowing = false;
     loop {
         // Wait for input until the next frame is due.
         let now = Timer.now();
@@ -270,11 +272,20 @@ async fn session(stream: borrow mut AsyncTcpStream, host: borrow mut Host) -> Re
         }
         host.ui.begin(mut platform);
         demoFrame(mut host.ui, mut host.app, host.raster);
-        match (host.ui.endFrame(mut platform, host.raster)) {
-            Ok() => {}
-            Err(_) => { await AsyncConsole.writeLine("browser: the frame does not fit the UI capacity")?; }
-        }
+        let fits = match (host.ui.endFrame(mut platform, host.raster)) {
+            Ok() => true,
+            Err(_) => false,
+        };
         platform.endFrame();
+        if (!fits) {
+            // Its commands are only a part of it: the page keeps the last frame that fit.
+            if (!overflowing) {
+                await AsyncConsole.writeLine("browser: the frame does not fit the UI capacity")?;
+            }
+            overflowing = true;
+            continue;
+        }
+        overflowing = false;
         let cursor: u8 = match (platform.cursor) {
             Cursor.Default => 0,
             Cursor.Pointer => 1,
