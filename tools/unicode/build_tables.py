@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 """Builds claywind/src/unicode_data.cee from the Unicode Character Database: the properties line breaking (UAX #14),
-grapheme clusters (UAX #29), the bidirectional algorithm (UAX #9) and Arabic joining need, for every code point, as
+grapheme clusters and words (UAX #29), the bidirectional algorithm (UAX #9) and Arabic joining need, for every code point, as
 one sorted table of ranges; and the bidi paired brackets and mirrored glyphs, as sorted pairs. The generated file is
 checked in, so building ClayWind needs neither this script nor the UCD. Run it after a Unicode update:
 
@@ -10,7 +10,7 @@ checked in, so building ClayWind needs neither this script nor the UCD. Run it a
 UCD_DIR holds, from https://www.unicode.org/Public/<version>/ucd/: LineBreak.txt, EastAsianWidth.txt,
 DerivedCoreProperties.txt, extracted/DerivedGeneralCategory.txt (as DerivedGeneralCategory.txt),
 auxiliary/GraphemeBreakProperty.txt, emoji/emoji-data.txt, extracted/DerivedBidiClass.txt,
-extracted/DerivedJoiningType.txt, BidiBrackets.txt and BidiMirroring.txt.
+extracted/DerivedJoiningType.txt, BidiBrackets.txt, BidiMirroring.txt and auxiliary/WordBreakProperty.txt.
 
 Each range's value packs:
   bits 0-5    Line_Break class (LB_* below)
@@ -21,6 +21,7 @@ Each range's value packs:
   bits 14-16  General_Category, as far as the rules ask: 0 other, 1 Mn, 2 Mc, 3 Me, 4 Pi, 5 Pf, 6 Cn
   bits 17-21  Bidi_Class (BIDI_* below)
   bits 22-24  Joining_Type: 0 U, 1 C, 2 D, 3 L, 4 R, 5 T
+  bits 25-29  Word_Break (WB_*)
 """
 
 import os
@@ -38,6 +39,9 @@ BIDI = ["L", "R", "AL", "EN", "ES", "ET", "AN", "CS", "NSM", "BN", "B", "S", "WS
         "PDF", "LRI", "RLI", "FSI", "PDI"]
 BIDI_LONG = {"Left_To_Right": "L", "Right_To_Left": "R", "Arabic_Letter": "AL", "European_Terminator": "ET",
              "Boundary_Neutral": "BN"}
+WB = ["Other", "CR", "LF", "Newline", "Extend", "ZWJ", "Regional_Indicator", "Format", "Katakana", "Hebrew_Letter",
+      "ALetter", "Single_Quote", "Double_Quote", "MidNumLet", "MidLetter", "MidNum", "Numeric", "ExtendNumLet",
+      "WSegSpace"]
 JT = {"U": 0, "C": 1, "D": 2, "L": 3, "R": 4, "T": 5, "Non_Joining": 0, "Transparent": 5}
 LIMIT = 0x110000
 
@@ -92,6 +96,8 @@ def main():
     fill(bidi, os.path.join(ucd, "DerivedBidiClass.txt"), lambda f: BIDI.index(BIDI_LONG.get(f[0], f[0])))
     jt = [0] * LIMIT
     fill(jt, os.path.join(ucd, "DerivedJoiningType.txt"), lambda f: JT[f[0]])
+    wb = [0] * LIMIT
+    fill(wb, os.path.join(ucd, "WordBreakProperty.txt"), lambda f: WB.index(f[0]))
     brackets = []
     for first, last, fields in entries(os.path.join(ucd, "BidiBrackets.txt"))[1]:
         brackets.append((first, int(fields[0], 16), 1 if fields[1] == "c" else 0))
@@ -105,7 +111,7 @@ def main():
 
     def pack(cp):
         return (lb[cp] | gcb[cp] << 6 | pict[cp] << 10 | wide[cp] << 11 | incb[cp] << 12 | gc[cp] << 14 |
-                bidi[cp] << 17 | jt[cp] << 22)
+                bidi[cp] << 17 | jt[cp] << 22 | wb[cp] << 25)
 
     ranges = []
     previous = None
@@ -143,6 +149,9 @@ def main():
     ]
     for i, name in enumerate(BIDI):
         lines.append(f"const BIDI_{name}: u32 = {i};")
+    lines.append("")
+    for i, name in enumerate(WB):
+        lines.append(f"const WB_{name.upper()}: u32 = {i};")
     lines += [
         "",
         "/// ASCII's properties, for a lookup without the search.",

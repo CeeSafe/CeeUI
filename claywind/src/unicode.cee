@@ -551,3 +551,192 @@ public fn lineBreaks(utf8: Slice<u8>, breaks: SliceMut<u8>, scratch: SliceMut<u3
     }
     return true;
 }
+
+// ---- words (UAX #29) -----------------------------------------------------------------------------------------------
+
+fn wbOf(p: u32) -> u32 => (p >> 25) & 31;
+
+/// Extend, Format and ZWJ: WB4 attaches them to the character before.
+fn wbIgnored(c: u32) -> bool => c == WB_EXTEND || c == WB_FORMAT || c == WB_ZWJ;
+
+fn wbHardBreak(c: u32) -> bool => c == WB_CR || c == WB_LF || c == WB_NEWLINE;
+
+fn wbLetter(c: u32) -> bool => c == WB_ALETTER || c == WB_HEBREW_LETTER;
+
+fn wbMidLetter(c: u32) -> bool => c == WB_MIDLETTER || c == WB_MIDNUMLET || c == WB_SINGLE_QUOTE;
+
+fn wbMidNum(c: u32) -> bool => c == WB_MIDNUM || c == WB_MIDNUMLET || c == WB_SINGLE_QUOTE;
+
+/// The Word_Break class of the character at byte `i` of `utf8`.
+fn wbAt(utf8: Slice<u8>, i: usize) -> u32 => wbOf(unicodeProps(decodeUtf8(utf8, i)[0]));
+
+/// The start of the character the rules see before byte `i` (WB4: back over Extend, Format and ZWJ, which belong to
+/// the character before them, unless that is a line break or the start, where they stand alone); null at the start.
+fn wbBefore(utf8: Slice<u8>, i: usize) -> usize? {
+    var k = i;
+    var skipped: usize? = null;
+    while (k > 0) {
+        let s = utf8Start(utf8, k);
+        let c = wbAt(utf8, s);
+        if (!wbIgnored(c)) {
+            if (wbHardBreak(c)) {
+                return match (skipped) {
+                    Some(x) => Some(x),
+                    null => Some(s),
+                };
+            }
+            return Some(s);
+        }
+        skipped = Some(s);
+        k = s;
+    }
+    return skipped;
+}
+
+/// The class of the character the rules see after the one at byte `i` (forward over the Extend, Format and ZWJ
+/// that belong to it); Other at the end.
+fn wbAfterClass(utf8: Slice<u8>, i: usize) -> u32 {
+    var k = i + (decodeUtf8(utf8, i)[1] as usize);
+    while (k < utf8.length) {
+        let c = wbAt(utf8, k);
+        if (!wbIgnored(c)) {
+            return c;
+        }
+        k += decodeUtf8(utf8, k)[1] as usize;
+    }
+    return WB_OTHER;
+}
+
+/// Whether a word boundary (UAX #29, Unicode's default word boundaries) falls before byte `at` of `utf8`, which
+/// starts a character: always at the start and the end.
+public fn wordBoundary(utf8: Slice<u8>, at: usize) -> bool {
+    if (at == 0 || at >= utf8.length) {
+        return true; // WB1, WB2
+    }
+    let a = utf8Start(utf8, at);
+    let ca = wbAt(utf8, a);
+    let next = decodeUtf8(utf8, at);
+    let cb = wbOf(unicodeProps(next[0]));
+    if (ca == WB_CR && cb == WB_LF) {
+        return false; // WB3
+    }
+    if (wbHardBreak(ca) || wbHardBreak(cb)) {
+        return true; // WB3a, WB3b
+    }
+    if (ca == WB_ZWJ && isPictographic(next[0])) {
+        return false; // WB3c
+    }
+    if (ca == WB_WSEGSPACE && cb == WB_WSEGSPACE) {
+        return false; // WB3d
+    }
+    if (wbIgnored(cb)) {
+        return false; // WB4
+    }
+    let lPos = match (wbBefore(utf8, at)) {
+        Some(p) => p,
+        null => { return true; }
+    };
+    let l = wbAt(utf8, lPos);
+    let l2 = match (wbBefore(utf8, lPos)) {
+        Some(p) => wbAt(utf8, p),
+        null => WB_OTHER,
+    };
+    let r = cb;
+    let r2 = wbAfterClass(utf8, at);
+    if (wbLetter(l) && wbLetter(r)) {
+        return false; // WB5
+    }
+    if (wbLetter(l) && wbMidLetter(r) && wbLetter(r2)) {
+        return false; // WB6
+    }
+    if (wbLetter(l2) && wbMidLetter(l) && wbLetter(r)) {
+        return false; // WB7
+    }
+    if (l == WB_HEBREW_LETTER && r == WB_SINGLE_QUOTE) {
+        return false; // WB7a
+    }
+    if (l == WB_HEBREW_LETTER && r == WB_DOUBLE_QUOTE && r2 == WB_HEBREW_LETTER) {
+        return false; // WB7b
+    }
+    if (l2 == WB_HEBREW_LETTER && l == WB_DOUBLE_QUOTE && r == WB_HEBREW_LETTER) {
+        return false; // WB7c
+    }
+    if ((l == WB_NUMERIC || wbLetter(l)) && r == WB_NUMERIC) {
+        return false; // WB8, WB9
+    }
+    if (l == WB_NUMERIC && wbLetter(r)) {
+        return false; // WB10
+    }
+    if (l2 == WB_NUMERIC && wbMidNum(l) && r == WB_NUMERIC) {
+        return false; // WB11
+    }
+    if (l == WB_NUMERIC && wbMidNum(r) && r2 == WB_NUMERIC) {
+        return false; // WB12
+    }
+    if (l == WB_KATAKANA && r == WB_KATAKANA) {
+        return false; // WB13
+    }
+    if ((wbLetter(l) || l == WB_NUMERIC || l == WB_KATAKANA || l == WB_EXTENDNUMLET) && r == WB_EXTENDNUMLET) {
+        return false; // WB13a
+    }
+    if (l == WB_EXTENDNUMLET && (wbLetter(r) || r == WB_NUMERIC || r == WB_KATAKANA)) {
+        return false; // WB13b
+    }
+    if (l == WB_REGIONAL_INDICATOR && r == WB_REGIONAL_INDICATOR) {
+        // WB15, WB16: regional indicators pair up; break before one that would start a third.
+        var count: u32 = 0;
+        var p: usize? = Some(lPos);
+        loop {
+            match (p) {
+                Some(x) => {
+                    if (wbAt(utf8, x) != WB_REGIONAL_INDICATOR) {
+                        break;
+                    }
+                    count += 1;
+                    p = wbBefore(utf8, x);
+                }
+                null => { break; }
+            }
+        }
+        return (count & 1) == 0;
+    }
+    return true; // WB999
+}
+
+/// The next word boundary after byte `at` of `utf8` (the end of the word, the run of spaces or the punctuation
+/// that `at` starts in); its length at the end.
+public fn wordEnd(utf8: Slice<u8>, at: usize) -> usize {
+    var k = at;
+    while (k < utf8.length) {
+        k += decodeUtf8(utf8, k)[1] as usize;
+        if (wordBoundary(utf8, k)) {
+            return k;
+        }
+    }
+    return utf8.length;
+}
+
+/// The word boundary at or before byte `at` of `utf8`: the start of the segment `at` is in.
+public fn wordStart(utf8: Slice<u8>, at: usize) -> usize {
+    var k = at.min(utf8.length);
+    while (k > 0 && !wordBoundary(utf8, k)) {
+        k = utf8Start(utf8, k);
+    }
+    return k;
+}
+
+/// Whether bytes [`from`, `to`) of `utf8`, one segment between word boundaries, are a word: they hold a letter, a
+/// digit, kana or an ideograph, rather than only spaces or punctuation.
+public fn isWordLike(utf8: Slice<u8>, from: usize, to: usize) -> bool {
+    var k = from;
+    while (k < to && k < utf8.length) {
+        let c = decodeUtf8(utf8, k);
+        let p = unicodeProps(c[0]);
+        let w = wbOf(p);
+        if (wbLetter(w) || w == WB_NUMERIC || w == WB_KATAKANA || w == WB_EXTENDNUMLET || lbOf(p) == LB_ID) {
+            return true;
+        }
+        k += c[1] as usize;
+    }
+    return false;
+}

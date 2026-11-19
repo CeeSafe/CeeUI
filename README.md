@@ -52,8 +52,8 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   face for each character the loaded ones lack, and loads it into the fallback chain. Its catalog (each face's
   coverage, weight and style, read from its cmap and OS/2 tables) is built the first time a character is missing.
 - **Unicode text segmentation:** lines break at UAX #14's opportunities (so CJK wraps between ideographs and a
-  line breaks after a hyphen), and the caret, Backspace and line clamping work in UAX #29 grapheme clusters. Both
-  pass Unicode 16's own test files.
+  line breaks after a hyphen), the caret, Backspace and line clamping work in UAX #29 grapheme clusters, and words
+  are UAX #29's (`wordBoundary`, `wordEnd`, `wordStart`, `isWordLike`). All three pass Unicode 16's own test files.
 - **Bidirectional text:** each line goes through the Unicode Bidirectional Algorithm (UAX #9, all of it: explicit
   embeddings, overrides and isolates, paired brackets), so Hebrew and other right-to-left text reads right to left
   inside a left-to-right line and as a line of its own, brackets mirrored, and Arabic joins. It passes Unicode 16's BidiTest.txt and
@@ -62,7 +62,8 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   directions is several boxes (`TextMetrics.spans`). A paragraph whose first strong character is right to left sits at
   the right (`TextAlign.Start`, the default), in a text field too.
 - **Text editing:** `Controls.textField` keeps a caret and a selection (`TextEdit`): the pointer places the caret and
-  a drag selects, the arrows, Home and End move it (Shift extends), Backspace and Delete remove a selection or a
+  a drag selects (a double click a word, a triple click everything), the arrows, Home and End move it (Shift
+  extends; with Option on macOS or Control elsewhere, the arrows move by words), Backspace and Delete remove a selection or a
   grapheme cluster, typing and Paste replace the selection, Copy, Cut and Select All act on it, and an input
   method's composition shows underlined at the caret. Hosts pass the platform's shortcuts and clipboard in and out
   (`Ui.editCommand`, `Ui.paste`, `Ui.copiedText`) and drive the input method (`Ui.setComposition`,

@@ -528,6 +528,11 @@ public struct Ui<region r> {
     /// Pressed or OS-repeated this frame.
     public fn keyHit(borrow this, k: Key) -> bool => this.keyPressed(k) || this.keyRepeated(k);
     public fn shiftDown(borrow this) -> bool => this.keyDown(Key.LeftShift) || this.keyDown(Key.RightShift);
+    /// Whether the modifier that makes an arrow move by words is held: Option on macOS (where the secondary modifier
+    /// is Command), Control elsewhere.
+    public fn wordModifierDown(borrow this) -> bool =>
+        if (this.secondaryIsCommand) this.keyDown(Key.LeftAlt) || this.keyDown(Key.RightAlt)
+            else this.keyDown(Key.LeftControl) || this.keyDown(Key.RightControl);
 
     /// The next character typed this frame, or 0 (ClayWind_CharPressed: each is consumed once).
     public fn nextChar(borrow mut this) -> u32 {

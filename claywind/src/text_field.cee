@@ -41,26 +41,42 @@ fn offsetAt<M: TextMetrics>(metrics: borrow M, text: Slice<u8>, x: f32) -> usize
     return best;
 }
 
-/// Whether byte `b` ends a word: ASCII space, punctuation or a symbol (a letter, digit or anything non-ASCII does
-/// not).
-fn wordBreakByte(b: u8) -> bool =>
-    b < 0x80 && !((b >= '0' && b <= '9') || (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || b == '_');
-
-/// The word around byte `at` of `text`: its start and end (by grapheme clusters).
+/// The segment between word boundaries (UAX #29) around byte `at` of `text`, which a double click selects: a word,
+/// a run of spaces or a mark of punctuation; at the end, the one before.
 fn wordAround(text: Slice<u8>, at: usize) -> [usize; 2] {
-    var from = at.min(text.length);
-    var to = from;
-    while (from > 0) {
-        let b = graphemeBefore(text, from);
-        if (wordBreakByte(text[b])) {
-            break;
+    if (text.length == 0) {
+        return [0, 0];
+    }
+    let inside = if (at >= text.length) utf8Start(text, text.length) else at;
+    let from = wordStart(text, inside);
+    return [from, wordEnd(text, from)];
+}
+
+/// Where the caret goes from byte `at` of `text` a word forward: the end of the word it is in, or of the next one
+/// (spaces and punctuation are passed over).
+fn wordForward(text: Slice<u8>, at: usize) -> usize {
+    var k = at;
+    while (k < text.length) {
+        let e = wordEnd(text, k);
+        if (isWordLike(text, k, e)) {
+            return e;
         }
-        from = b;
+        k = e;
     }
-    while (to < text.length && !wordBreakByte(text[to])) {
-        to = graphemeEnd(text, to);
+    return text.length;
+}
+
+/// Where the caret goes from byte `at` of `text` a word back: the start of the word it is in, or of the one before.
+fn wordBackward(text: Slice<u8>, at: usize) -> usize {
+    var k = at.min(text.length);
+    while (k > 0) {
+        let from = wordStart(text, utf8Start(text, k));
+        if (isWordLike(text, from, k)) {
+            return from;
+        }
+        k = from;
     }
-    return [from, to];
+    return 0;
 }
 
 /// Replaces the selection of `buf[0..len]` with the typeable characters of `utf8` (as far as they fit): the caret
@@ -336,15 +352,20 @@ impl Controls {
                 let none = [0u8; 1];
                 changed = replaceSelection(buf, mut len, mut edit, none[0..0]) || changed;
             }
-            // The arrows move the caret as the text is drawn (in right-to-left text, Right goes towards its start):
-            // with Shift they extend the selection; without, they end it at its edge on the arrow's side, or move.
+            // The arrows move the caret as the text is drawn (in right-to-left text, Right goes towards its start), or
+            // with the word modifier (Option on macOS, Control elsewhere) by words: with Shift they extend the
+            // selection; without, they end it at its edge on the arrow's side, or move.
             let shift = ui.shiftDown();
             let text = buf[0..len];
             for (right in [false, true]) {
                 if (!ui.keyHit(if (right) Key.Right else Key.Left)) {
                     continue;
                 }
-                if (!shift && edit.selects()) {
+                if (ui.wordModifierDown() && !masked) {
+                    // By words: Right is forward in a left-to-right paragraph, back in a right-to-left one.
+                    let forward = right != bidiParagraphRtl(text);
+                    edit.caret = if (forward) wordForward(text, edit.caret) else wordBackward(text, edit.caret);
+                } else if (!shift && edit.selects()) {
                     let a = fieldCaretX(metrics, text, masked, edit.from());
                     let b = fieldCaretX(metrics, text, masked, edit.to());
                     edit.caret = if ((a <= b) == right) edit.to() else edit.from();

@@ -311,3 +311,76 @@ fn textWrapsAtUnicodeBreakOpportunities() -> Result<void, TestFailure> {
     Check.isTrue(clean && n >= 3 && got[n - 1] == '.', "the ellipsized line is whole characters and ...")?;
     return Ok();
 }
+
+@test
+fn wordsPassUnicodesTests() -> Result<void, TestFailure> {
+    let file = ucdFile("WordBreakTest.txt");
+    if (file.length == 0) {
+        Console.writeLine("  (CLAYWIND_UCD not set or WordBreakTest.txt missing: skipped)");
+        return Ok();
+    }
+    var at: usize = 0;
+    var cases: u32 = 0;
+    var failed: u32 = 0;
+    var bytes = [0u8; 256];
+    var offsets = [0usize; 65];
+    loop {
+        let c = match (parseCase(file.view(), mut at)) {
+            Some(x) => x,
+            null => { break; }
+        };
+        cases += 1;
+        let n = encodeCase(c, mut bytes, mut offsets);
+        // wordBoundary before each code point, and the boundaries wordEnd walks to, against the test's.
+        var good = true;
+        var walked = [false; 257];
+        var start: usize = 0;
+        while (start < n) {
+            let end = wordEnd(bytes[0..n], start);
+            if (end <= start) {
+                good = false;
+                break;
+            }
+            walked[end] = true;
+            start = end;
+        }
+        for (k in 1..c.count) {
+            let o = offsets[k];
+            if (wordBoundary(bytes[0..n], o) != c.breaks[k] || walked[o] != c.breaks[k]) {
+                good = false;
+            }
+        }
+        if (!good) {
+            failed += 1;
+            if (failed <= 12) {
+                Console.write("  word case ");
+                Console.writeLine(cases);
+            }
+        }
+    }
+    Console.write("  ");
+    Console.write(cases - failed);
+    Console.write(" of ");
+    Console.write(cases);
+    Console.writeLine(" word cases pass");
+    return Check.isTrue(failed == 0, "every WordBreakTest.txt case passes");
+}
+
+@test
+fn wordsOnCommonText() -> Result<void, TestFailure> {
+    // "can't stop 3.14": can't is one word (WB6, WB7), 3.14 one number (WB11, WB12), the spaces their own segments.
+    let text = "can't stop 3.14".bytes();
+    Check.equalU64(5, wordEnd(text, 0) as u64)?;
+    Check.equalU64(6, wordEnd(text, 5) as u64)?;
+    Check.equalU64(10, wordEnd(text, 6) as u64)?;
+    Check.equalU64(15, wordEnd(text, 11) as u64)?;
+    Check.equalU64(6, wordStart(text, 8) as u64)?;
+    Check.isTrue(isWordLike(text, 0, 5), "can't is a word")?;
+    Check.isTrue(!isWordLike(text, 5, 6), "a space is not")?;
+    // Arabic letters are one word; 中文 is two ideographs, each its own word-like segment.
+    let arabic = "\u{645}\u{631}\u{62D}\u{628}\u{627} x".bytes();
+    Check.equalU64(10, wordEnd(arabic, 0) as u64)?;
+    let han = "\u{4E2D}\u{6587}".bytes();
+    Check.equalU64(3, wordEnd(han, 0) as u64)?;
+    return Check.isTrue(isWordLike(han, 0, 3), "an ideograph is a word");
+}

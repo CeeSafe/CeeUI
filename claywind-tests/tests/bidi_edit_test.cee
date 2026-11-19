@@ -286,3 +286,59 @@ fn aRightToLeftFieldShowsItsTextAtTheRight() -> Result<void, TestFailure> {
     mixedFrame(mut ui, mut platform, mut field)?;
     return Check.equalU64(0, field.edit.caret as u64);
 }
+
+@test
+fn theWordModifierMovesTheCaretByWords() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(400.0, 120.0, -1.0, -1.0);
+    var field = focusedMixedField(mut ui, mut platform, "can't stop now", 0)?;
+    // Control (the word modifier off macOS) with the arrows: to the end of each word forward, its start back;
+    // can't is one word (UAX #29).
+    platform.down = 1u64 << (keyIndex(Key.LeftControl) as u64);
+    let forward = [5usize, 10, 14, 14];
+    for (k in 0..forward.length) {
+        Check.equalU64(forward[k] as u64, mixedArrow(mut ui, mut platform, mut field, Key.Right)? as u64)?;
+    }
+    let back = [11usize, 6, 0, 0];
+    for (k in 0..back.length) {
+        Check.equalU64(back[k] as u64, mixedArrow(mut ui, mut platform, mut field, Key.Left)? as u64)?;
+    }
+    // Shift too: the selection grows by a word.
+    platform.down = platform.down | (1u64 << (keyIndex(Key.LeftShift) as u64));
+    Check.equalU64(5, mixedArrow(mut ui, mut platform, mut field, Key.Right)? as u64)?;
+    Check.isTrue(field.edit.anchor == 0, "the anchor stays")?;
+    platform.down = 0;
+    // In a right-to-left paragraph Left is forward: two Arabic words of two letters (four bytes) each.
+    var arabic = focusedMixedField(mut ui, mut platform, "\u{645}\u{631} \u{628}\u{627}", 0)?;
+    platform.down = 1u64 << (keyIndex(Key.LeftControl) as u64);
+    Check.equalU64(4, mixedArrow(mut ui, mut platform, mut arabic, Key.Left)? as u64)?;
+    Check.equalU64(9, mixedArrow(mut ui, mut platform, mut arabic, Key.Left)? as u64)?;
+    Check.equalU64(5, mixedArrow(mut ui, mut platform, mut arabic, Key.Right)? as u64)?;
+    platform.down = 0;
+    return Ok();
+}
+
+@test
+fn aDoubleClickSelectsAWordAsUnicodeSegmentsIt() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(400.0, 120.0, -1.0, -1.0);
+    var field = focusedMixedField(mut ui, mut platform, "say can't now", 0)?;
+    // Double-click inside "can't" (bytes 4 to 9, 40 to 90 points in the fake font): the apostrophe stays inside.
+    let box = ui.boxOf("f")!;
+    let padX = space(3.0);
+    for (k in 0..2) {
+        let _ = k;
+        platform.pointerState.position = Vec2 { x: box.x + padX + 62.0, y: box.y + box.h / 2.0 };
+        platform.pointerState.pressed = true;
+        platform.pointerState.down = true;
+        mixedFrame(mut ui, mut platform, mut field)?;
+        platform.pointerState.down = false;
+        platform.pointerState.released = true;
+        mixedFrame(mut ui, mut platform, mut field)?;
+    }
+    return Check.isTrue(field.edit.from() == 4 && field.edit.to() == 9, "can't is selected whole");
+}
