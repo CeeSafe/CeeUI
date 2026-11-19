@@ -9,7 +9,9 @@ import claywind;
 fn squareFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, x: f32, color: u32) -> Result<void, TestFailure> {
     ui.begin(mut platform);
     ui.open(Style.box().w(Size.fixed(120.0)).h(Size.fixed(60.0)).bg(0x0F172AFF));
-    ui.open(Style.box().absolute().left(x).top(10.0).w(Size.fixed(20.0)).h(Size.fixed(20.0)).bg(color).rounded(Radius.Md));
+    ui.open(
+        Style.box().absolute().left(x).top(10.0).w(Size.fixed(20.0)).h(Size.fixed(20.0)).bg(color).rounded(Radius.Md),
+    );
     ui.close();
     ui.close();
     return finish(mut ui, mut platform);
@@ -47,19 +49,19 @@ fn twoWindowsShareOneRaster() -> Result<void, TestFailure> {
     // Window A, then window B (A's frame kept meanwhile).
     Check.isTrue(ras.resize(240, 120), "fits")?;
     squareFrame(mut uiA, mut pa, 10.0, 0x3B82F6FF)?;
-    Check.isTrue(damageA.plan(uiA, clear, 240, 120, 2.0) == 1 && damageA.isWhole(), "A's first frame is whole")?;
+    Check.isTrue(damageA.plan(uiA, ras, clear, 240, 120, 2.0) == 1 && damageA.isWhole(), "A's first frame is whole")?;
     damageA.draw(mut ras, uiA, clear);
     Check.isTrue(ras.keepFrame(mut frameA), "A's frame is kept")?;
     squareFrame(mut uiB, mut pb, 50.0, 0xF59E0BFF)?;
-    Check.isTrue(damageB.plan(uiB, clear, 240, 120, 2.0) == 1, "B's first frame is whole")?;
+    Check.isTrue(damageB.plan(uiB, ras, clear, 240, 120, 2.0) == 1, "B's first frame is whole")?;
     damageB.draw(mut ras, uiB, clear);
     Check.isTrue(ras.keepFrame(mut frameB), "B's frame is kept")?;
     // A again, unchanged: nothing to draw, so its frame need not even come back.
     squareFrame(mut uiA, mut pa, 10.0, 0x3B82F6FF)?;
-    Check.equalU64(0, damageA.plan(uiA, clear, 240, 120, 2.0) as u64)?;
+    Check.equalU64(0, damageA.plan(uiA, ras, clear, 240, 120, 2.0) as u64)?;
     // A's square moves: its frame comes back and only the change is redrawn.
     squareFrame(mut uiA, mut pa, 70.0, 0x3B82F6FF)?;
-    let boxes = damageA.plan(uiA, clear, 240, 120, 2.0);
+    let boxes = damageA.plan(uiA, ras, clear, 240, 120, 2.0);
     Check.isTrue(boxes > 0 && !damageA.isWhole(), "a part of A is redrawn")?;
     Check.isTrue(ras.takeFrame(mut frameA), "A's frame comes back")?;
     damageA.draw(mut ras, uiA, clear);
@@ -68,11 +70,71 @@ fn twoWindowsShareOneRaster() -> Result<void, TestFailure> {
     }
     // The same frame of A drawn whole gives the same pixels.
     damageA.invalidate();
-    Check.isTrue(damageA.plan(uiA, clear, 240, 120, 2.0) == 1 && damageA.isWhole(), "whole")?;
+    Check.isTrue(damageA.plan(uiA, ras, clear, 240, 120, 2.0) == 1 && damageA.isWhole(), "whole")?;
     damageA.draw(mut ras, uiA, clear);
     Check.isTrue(samePixels(whole.view(), ras.pixels()), "A's partial frame equals its whole frame")?;
     // B comes back as it was.
     Check.isTrue(ras.takeFrame(mut frameB), "B's frame comes back")?;
     Check.isTrue(ras.pixelAt(120, 40).r > 200, "B's amber square is there")?;
     return Check.isTrue(!frameB.isKept() && !ras.takeFrame(mut frameB), "a frame comes back once");
+}
+
+/// One frame showing image `handle` as a 40 × 40 picture on a dark panel.
+fn pictureFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, handle: u32) -> Result<void, TestFailure> {
+    ui.begin(mut platform);
+    ui.open(Style.box().w(Size.fixed(120.0)).h(Size.fixed(60.0)).bg(0x0F172AFF));
+    ui.open(Style.box().absolute().left(10.0).top(10.0).w(Size.fixed(40.0)).h(Size.fixed(40.0)).image(handle));
+    ui.close();
+    ui.close();
+    return finish(mut ui, mut platform);
+}
+
+/// Every pixel of image `handle` set to `rgba` (0xAABBGGRR) through imagePixelsMut.
+fn paintImage(ras: borrow mut Raster, handle: u32, rgba: u32) {
+    match (ras.imagePixelsMut(handle)) {
+        Some(px) => {
+            for (p in 0..px.length) {
+                px[p] = rgba;
+            }
+        }
+        null => {}
+    }
+}
+
+@test
+fn aPictureWhosePixelsChangeIsRedrawn() -> Result<void, TestFailure> {
+    var storage = heap(33554432);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ras = Raster.create(memory, capacity())!;
+    var ui = Ui.create(memory, UiCapacity.of(32))!;
+    var damage = Damage.create(memory, 64)!;
+    var platform = platformAt(120.0, 60.0, -1.0, -1.0);
+    let clear = Color.hex(0x000000FF);
+    let handle: u32 = 7;
+    Check.isTrue(ras.resize(120, 60), "fits")?;
+    Check.isTrue(ras.addImage(handle, 4, 4), "the image fits")?;
+    paintImage(mut ras, handle, 0xFF0000FF); // red
+    pictureFrame(mut ui, mut platform, handle)?;
+    Check.isTrue(damage.render(mut ras, ui, clear), "the first frame is drawn")?;
+    Check.isTrue(ras.pixelAt(30, 30).r > 200, "the picture is red")?;
+    // The same frame and the same pixels: nothing to redraw.
+    pictureFrame(mut ui, mut platform, handle)?;
+    Check.isTrue(!damage.render(mut ras, ui, clear), "nothing changed")?;
+    // New pixels under the same handle, the frame's commands the same: the picture is redrawn, and only it.
+    paintImage(mut ras, handle, 0xFFFF0000); // blue
+    pictureFrame(mut ui, mut platform, handle)?;
+    Check.isTrue(damage.render(mut ras, ui, clear), "new pixels are drawn")?;
+    Check.isTrue(!damage.isWhole(), "only the picture")?;
+    Check.isTrue(ras.pixelAt(30, 30).b > 200 && ras.pixelAt(30, 30).r < 50, "the picture is blue")?;
+    // The image taken away and added again under the same handle (as a report's preview replaces its pages).
+    Check.isTrue(ras.removeImage(handle), "the image goes")?;
+    Check.isTrue(ras.addImage(handle, 4, 4), "and comes back")?;
+    paintImage(mut ras, handle, 0xFF00FF00); // green
+    pictureFrame(mut ui, mut platform, handle)?;
+    Check.isTrue(damage.render(mut ras, ui, clear), "the new image is drawn")?;
+    Check.isTrue(ras.pixelAt(30, 30).g > 200 && ras.pixelAt(30, 30).b < 50, "the picture is green")?;
+    // setImagePixel counts as a change too.
+    ras.setImagePixel(handle, 0, 0, 0xFFFFFFFF);
+    pictureFrame(mut ui, mut platform, handle)?;
+    return Check.isTrue(damage.render(mut ras, ui, clear), "a pixel set is drawn");
 }

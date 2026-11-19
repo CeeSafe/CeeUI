@@ -173,14 +173,14 @@ public struct Pane<region r> {
         let scale = window.scale();
         let px = pixelsFor(size, scale);
         let ratio = ratioFor(size, scale);
-        var boxes = this.damage.plan(this.ui, clear, px[0], px[1], ratio);
+        var boxes = this.damage.plan(this.ui, raster, clear, px[0], px[1], ratio);
         if (boxes == 0) {
             return true;
         }
         if (share.owner != this.id) {
             if (!raster.takeFrame(mut this.frame)) {
                 this.damage.invalidate(); // no frame of its own to draw over: draw it whole
-                boxes = this.damage.plan(this.ui, clear, px[0], px[1], ratio);
+                boxes = this.damage.plan(this.ui, raster, clear, px[0], px[1], ratio);
             }
             share.owner = this.id;
         }

@@ -77,6 +77,8 @@ struct ImageRecord {
     offset: usize;
     w: usize;
     h: usize;
+    /// The raster's image clock when the image was added or its pixels last handed out (imageVersion).
+    version: u64;
 }
 
 /// A loaded font: bytes [offset, offset + size) of the font pool, parsed.
@@ -114,6 +116,8 @@ public struct Raster<region r> {
     images: FixedList<r, ImageRecord>;
     imagePool: SliceMut<r, u32>;
     imageTop: usize;
+    /// Counts the changes to images, so that each gets a version no image of this raster had before.
+    imageClock: u64;
     fontPool: SliceMut<r, u8>;
     fontTop: usize;
     fonts: FixedList<r, FontSlot>;
@@ -159,7 +163,7 @@ public struct Raster<region r> {
         let clip = ClipState { x0: 0, y0: 0, x1: 0, y1: 0, hasMask: false, maskOffset: 0, maskTop: 0 };
         let clips = memory.allocArray(64, clip)?;
         let transforms = memory.allocArray(64, Affine2.identity())?;
-        let images = memory.allocArray(capacity.images, ImageRecord { handle: 0, offset: 0, w: 0, h: 0 })?;
+        let images = memory.allocArray(capacity.images, ImageRecord { handle: 0, offset: 0, w: 0, h: 0, version: 0 })?;
         let imagePool = memory.allocArray(capacity.imagePixels, 0u32)?;
         let fontPool = memory.allocArray(capacity.fontBytes, 0u8)?;
         // The two text buffers are 120 KiB together: in the memory, not in the Raster, which is moved about by value.
@@ -210,6 +214,7 @@ public struct Raster<region r> {
             images: FixedList<ImageRecord>.over(images),
             imagePool: imagePool,
             imageTop: 0,
+            imageClock: 0,
             fontPool: fontPool,
             fontTop: 0,
             fonts: FixedList<FontSlot>.over(fonts),
@@ -334,17 +339,21 @@ public struct Raster<region r> {
         if (handle == 0 || this.imageTop + w * h > this.imagePool.length) {
             return false;
         }
-        if (!this.images.push(ImageRecord { handle: handle, offset: this.imageTop, w: w, h: h })) {
+        this.imageClock += 1;
+        let record = ImageRecord { handle: handle, offset: this.imageTop, w: w, h: h, version: this.imageClock };
+        if (!this.images.push(record)) {
             return false;
         }
         this.imageTop += w * h;
         return true;
     }
 
-    /// The pixels of image `handle` (row-major, 0xAABBGGRR, straight alpha), to fill in place.
+    /// The pixels of image `handle` (row-major, 0xAABBGGRR, straight alpha), to fill in place. The image counts as
+    /// changed (imageVersion), whether or not they are written.
     public fn imagePixelsMut(borrow mut this, handle: u32) -> SliceMut<u32>? {
         match (this.imageIndex(handle)) {
             Some(k) => {
+                this.touchImage(k);
                 let rec = this.images.get(k);
                 return borrow mut this.imagePool[rec.offset..rec.offset + rec.w * rec.h];
             }
@@ -389,10 +398,27 @@ public struct Raster<region r> {
                 let rec = this.images.get(k);
                 if (x < rec.w && y < rec.h) {
                     this.imagePool[rec.offset + y * rec.w + x] = rgba;
+                    this.touchImage(k);
                 }
             }
             null => {}
         }
+    }
+
+    /// Image `handle`'s version: it changes whenever the image is added (again, under the same handle too) or its
+    /// pixels are handed out or set, and is 0 when there is no such image. Damage hashes it with each picture, so a
+    /// picture whose pixels changed is redrawn.
+    public fn imageVersion(borrow this, handle: u32) -> u64 => match (this.imageIndex(handle)) {
+        Some(k) => this.images.get(k).version,
+        null => 0,
+    };
+
+    /// Image `k` changed: a version newer than any image's.
+    fn touchImage(borrow mut this, k: usize) {
+        this.imageClock += 1;
+        var rec = this.images.get(k);
+        rec.version = this.imageClock;
+        this.images.set(k, rec);
     }
 
     // ---- fonts -----------------------------------------------------------------------------------------------------

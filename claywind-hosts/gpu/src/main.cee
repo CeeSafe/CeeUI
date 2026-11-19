@@ -347,7 +347,7 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
             damage.invalidate(); // the same commands draw other glyphs now (the next frame lays them out)
         }
         let clear = Color.hex(pageBg(ui));
-        let boxes = damage.plan(ui, clear, width as usize, height as usize, scale);
+        let boxes = damage.plan(ui, gpu.raster, clear, width as usize, height as usize, scale);
         if (boxes > 0 && onScreen) {
             gpu.begin(width, height, scale);
             ui.renderInto(mut gpu);
@@ -546,7 +546,7 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
         settle(mut ui, mut app, gpu, mut platform, 28);
         let before = Color.hex(pageBg(ui));
         damage.invalidate();
-        let whole = damage.plan(ui, before, width as usize, height as usize, ratio);
+        let whole = damage.plan(ui, gpu.raster, before, width as usize, height as usize, ratio);
         gpu.begin(width, height, ratio);
         ui.renderInto(mut gpu);
         if (gpu.renderTo(width, height, before, mut pixels.viewMut()) != 0) {
@@ -555,7 +555,7 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
         }
         settle(mut ui, mut app, gpu, mut platform, 1);
         let clear = Color.hex(pageBg(ui));
-        let boxes = damage.plan(ui, clear, width as usize, height as usize, ratio);
+        let boxes = damage.plan(ui, gpu.raster, clear, width as usize, height as usize, ratio);
         var area: f32 = 0.0;
         for (k in 0..boxes) {
             let b = damage.redrawn(k);
@@ -1217,7 +1217,7 @@ fn bench(ui: borrow mut Ui, gpu: borrow mut GpuBackend, frames: u64) -> i32 {
         ui.endFrame(mut platform, gpu.raster)!;
         platform.endFrame();
         let clear = Color.hex(pageBg(ui));
-        let boxes = damage.plan(ui, clear, width as usize, height as usize, ratio);
+        let boxes = damage.plan(ui, gpu.raster, clear, width as usize, height as usize, ratio);
         gpu.begin(width, height, ratio);
         ui.renderInto(mut gpu);
         gpu.limitTo(damage);

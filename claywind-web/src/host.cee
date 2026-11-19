@@ -339,7 +339,7 @@ impl WebPlatform {
             damage.invalidate();
             this.again = true;
         }
-        let boxes = damage.plan(ui, clear, w, h, scale);
+        let boxes = damage.plan(ui, raster, clear, w, h, scale);
         if (boxes == 0) {
             return;
         }
