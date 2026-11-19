@@ -444,7 +444,10 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   `tools/bootstrap_release.sh` failed: the code used `Vector.remove`, which 0.8.0 (the chain's last) lacks; `pop` now.
   The contract suite's release-chain step had passed only because it builds the commit and ran before the ADR was
   committed.
-- **P6 (open). No bitwise complement on unsigned integers.** CeeSafeReporting's MD5 (for a PDF/A trailer ID) needs
+- **P6 (fixed in ceesafec 0.76.0, ADR 0176; the owner chose "Unary ~"). No bitwise complement on unsigned
+  integers.** `~x` now flips every bit of an unsigned integer (N0207 on anything else), in constants and literal
+  arithmetic too; CeeSafeReporting's MD5 uses it. Releasing it, the release chain failed twice (a block arm ending
+  with its value, a two-phase `mut` argument: 0.8.0 reads neither) and the code was rewritten. The report as made: CeeSafeReporting's MD5 (for a PDF/A trailer ID) needs
   `~x`; the parser rejects `~` ("expected expression") and `!x` on a `u32` is N0205 (`!` is for `bool` only). Written as
   `x ^ 0xFFFFFFFF`, which says less and needs the width spelt out. Bitwise operators are defined on unsigned types
   (type-system.md §6), so a unary `~` there would complete the set without the signed cases M1 avoids.
