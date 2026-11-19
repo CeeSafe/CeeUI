@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end check of the browser host without a browser: fetches the page, opens the WebSocket (checking the
-RFC 6455 accept key, and that a page from another origin is refused), assembles the frame rectangles into a full 1024x640 frame, sends input, and checks the frame
-reacts. Writes the assembled frames as PNGs when Pillow is there.
+RFC 6455 accept key, and that a page from another origin is refused), assembles the frame rectangles into a full
+1024x640 frame, sends input, and checks the frame reacts. Writes the assembled frames as PPM images.
 
 Usage: test_client.py [PORT] [OUT_DIR]   (the host must be running: ./out/browser PORT)
 """
@@ -102,16 +102,27 @@ class Ws:
                 rects += 1
         return rects
 
+    def pump_until(self, done, seconds=3.0):
+        """Applies messages until `done()` holds, for at most `seconds` (a slow machine draws fewer frames a
+        second); whether it held."""
+        end = time.time() + seconds
+        while time.time() < end:
+            if done():
+                return True
+            self.pump(0.05)
+        return done()
+
     def pixel(self, x, y):
         i = (y * W + x) * 4
         return tuple(self.frame[i:i + 3])
 
     def save(self, name):
-        try:
-            from PIL import Image
-        except ImportError:
-            return
-        Image.frombytes("RGBA", (W, H), bytes(self.frame)).convert("RGB").save(os.path.join(OUT, name))
+        """The frame as a PPM image (any viewer reads it; no Pillow needed)."""
+        rgb = bytearray()
+        for i in range(0, len(self.frame), 4):
+            rgb += self.frame[i:i + 3]
+        with open(os.path.join(OUT, name.replace(".png", ".ppm")), "wb") as f:
+            f.write(b"P6 %d %d 255\n" % (W, H) + bytes(rgb))
 
 
 def main():
@@ -134,8 +145,9 @@ def main():
     print(f"initial: {first} rectangle(s); idle 0.5s: {idle}")
     # Hover the counter button: the cursor becomes a pointer.
     ws.send("m 855 46")
-    ws.pump(0.3)
-    assert ws.cursor == "pointer", ws.cursor
+    if not ws.pump_until(lambda: ws.cursor == "pointer"):
+        ws.save("browser-1-hover.png")
+        raise AssertionError(f"the cursor over the counter button is {ws.cursor}, not pointer")
     # Click it twice: the label reads "Clicked 2".
     for _ in range(2):
         ws.send("d 855 46 0")
@@ -169,7 +181,7 @@ def main():
     ws.send("K Enter")
     ws.pump(0.1)
     ws.send("c 84")
-    ws.pump(0.4)
+    ws.pump_until(lambda: sum(ws.pixel(1000, 630)) > 600)
     bg = ws.pixel(1000, 630)
     ws.save("browser-3-light.png")
     print("light-mode background", bg)

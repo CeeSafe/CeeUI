@@ -100,10 +100,19 @@ jobs:
           host=$!
           for _ in $(seq 50); do grep -q "open http" browser.log && break; sleep 0.2; done
           status=0
-          python3 test_client.py 8391 "$RUNNER_TEMP" || status=$?
+          mkdir -p "$RUNNER_TEMP/frames"
+          python3 test_client.py 8391 "$RUNNER_TEMP/frames" || status=$?
           kill $host || true
           cat browser.log
           exit $status
+
+      - name: Keep the browser host's frames
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-frames-${{ matrix.os }}
+          path: ${{ runner.temp }}/frames
+          if-no-files-found: ignore
 
       - name: Benchmarks
         run: |
