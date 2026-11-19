@@ -14,7 +14,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  CEESAFE_VERSION: v0.77.1 # the release ClayWind was last tested with and is formatted by
+  # The release ClayWind was last tested with and is formatted by. 0.78.0 or later: on Linux, 0.77's runtime left the
+  # browser host's input unread when its frames ran behind.
+  CEESAFE_VERSION: v0.78.0
 
 defaults:
   run:
