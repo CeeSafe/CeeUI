@@ -787,6 +787,50 @@ impl<region r> Raster<r> {
         }
     }
 
+    /// Where bytes [`from`, `to`) of one line `utf8` are drawn (TextMetrics.spans): the glyphs whose clusters start in
+    /// the range, as `drawText` places them, joined into spans left to right; how many went into `out`.
+    public fn spansAt(
+        borrow this,
+        utf8: Slice<u8>,
+        fontId: u32,
+        fontSize: f32,
+        letterSpacing: f32,
+        from: usize,
+        to: usize,
+        out: SliceMut<TextSpan>,
+    ) -> usize {
+        if (out.length == 0 || to <= from) {
+            return 0;
+        }
+        let primary = match (this.slotIndex(fontId)) {
+            Some(k) => k,
+            null => {
+                let half = 0.5 * fontSize;
+                out[0] = TextSpan { left: half * round<f32>(from), right: half * round<f32>(to.min(utf8.length)) };
+                return 1;
+            }
+        };
+        let scale = fontSize / this.fonts.get(primary).info.unitsPerEm;
+        let spacing = this.spacingFactor(primary, utf8, fontSize, letterSpacing);
+        var chunk = [emptyStep(); 64];
+        var done: usize = 0;
+        var count: usize = 0;
+        loop {
+            let totals = this.shapeLine(primary, utf8, spacing, done, mut chunk[..]);
+            let n = (totals.glyphs - done).min(64);
+            for (k in 0..n) {
+                let g = chunk[k];
+                if (g.cluster >= from && g.cluster < to) {
+                    count = addTextSpan(out, count, g.pen * scale, (g.pen + g.advance) * scale);
+                }
+            }
+            done += n;
+            if (n == 0 || done >= totals.glyphs) {
+                return count;
+            }
+        }
+    }
+
     /// Shapes one line of `utf8` in font `fontId` at `fontSize` pixels per em, as `Command.Text` draws it: its glyphs
     /// into `out` (the font each is from, its id, where it goes), with `letterSpacing` spread as `drawText` spreads
     /// it. Null without a font.

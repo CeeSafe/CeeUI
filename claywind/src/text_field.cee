@@ -146,6 +146,53 @@ fn fieldOffsetAt<M: TextMetrics>(metrics: borrow M, text: Slice<u8>, masked: boo
     return at;
 }
 
+/// The grapheme boundary of `text` whose caret is the next one to the right (`right`) or left of the caret at
+/// byte `at`, as the field shows them; `at` when none is. An arrow moves the caret across the screen, so in
+/// right-to-left text Right goes back towards the text's start, and at the meeting of two runs it crosses to the
+/// other run's near end. Of two carets at the same place, the one nearer `at` in the text is taken.
+fn visualStep<M: TextMetrics>(metrics: borrow M, text: Slice<u8>, masked: bool, at: usize, right: bool) -> usize {
+    let here = fieldCaretX(metrics, text, masked, at);
+    var best = at;
+    var bestAhead: f32 = 0.0;
+    var b: usize = 0;
+    loop {
+        if (b != at) {
+            let x = fieldCaretX(metrics, text, masked, b);
+            let ahead = if (right) x - here else here - x;
+            if (ahead > 0.25) {
+                let nearer = (if (b > at) b - at else at - b) < (if (best > at) best - at else at - best);
+                if (best == at || ahead < bestAhead - 0.25 || ((ahead - bestAhead).abs() <= 0.25 && nearer)) {
+                    best = b;
+                    bestAhead = ahead;
+                }
+            }
+        }
+        if (b >= text.length) {
+            return best;
+        }
+        b = graphemeEnd(text, b);
+    }
+}
+
+/// Where bytes [`from`, `to`) of `text` are drawn, as the field shows it (TextMetrics.spans; among the dots when
+/// masked); how many spans went into `out`.
+fn fieldSpans<M: TextMetrics>(
+    metrics: borrow M,
+    text: Slice<u8>,
+    masked: bool,
+    from: usize,
+    to: usize,
+    out: SliceMut<TextSpan>,
+) -> usize {
+    let config = TextConfig.of(FIELD_TEXT);
+    if (!masked) {
+        return metrics.spans(text, config, from, to, out);
+    }
+    var dots = [0u8; 1020];
+    let n = maskInto(text, mut dots);
+    return metrics.spans(dots[0..n], config, maskedAt(text, from), maskedAt(text, to), out);
+}
+
 impl Controls {
     /// ClayWind_TextField: a one-line text field with a selection (see TextEdit). The pointer places the caret and
     /// a drag selects; the arrows, Home and End move it (with Shift, extending the selection); Backspace and Delete
@@ -275,23 +322,20 @@ impl Controls {
                 let none = [0u8; 1];
                 changed = replaceSelection(buf, mut len, mut edit, none[0..0]) || changed;
             }
-            // The arrows: with Shift they extend the selection; without, they end it (at its near side) or move.
+            // The arrows move the caret as the text is drawn (in right-to-left text, Right goes towards its start):
+            // with Shift they extend the selection; without, they end it at its edge on the arrow's side, or move.
             let shift = ui.shiftDown();
-            if (ui.keyHit(Key.Left)) {
-                if (!shift && edit.selects()) {
-                    edit.caret = edit.from();
-                } else if (edit.caret > 0) {
-                    edit.caret = graphemeBefore(buf[0..len], edit.caret);
+            let text = buf[0..len];
+            for (right in [false, true]) {
+                if (!ui.keyHit(if (right) Key.Right else Key.Left)) {
+                    continue;
                 }
-                if (!shift) {
-                    edit.anchor = edit.caret;
-                }
-            }
-            if (ui.keyHit(Key.Right)) {
                 if (!shift && edit.selects()) {
-                    edit.caret = edit.to();
-                } else if (edit.caret < len) {
-                    edit.caret = graphemeEnd(buf[0..len], edit.caret);
+                    let a = fieldCaretX(metrics, text, masked, edit.from());
+                    let b = fieldCaretX(metrics, text, masked, edit.to());
+                    edit.caret = if ((a <= b) == right) edit.to() else edit.from();
+                } else {
+                    edit.caret = visualStep(metrics, text, masked, edit.caret, right);
                 }
                 if (!shift) {
                     edit.anchor = edit.caret;
@@ -329,19 +373,21 @@ impl Controls {
             ui.accessCaret(node, edit.caret, edit.anchor);
         }
         let config = TextConfig.of(FIELD_TEXT);
-        // The selection, behind the text.
+        // The selection, behind the text: where its characters are drawn, so a selection across right-to-left and
+        // left-to-right text is several boxes.
         if (focused && edit.selects()) {
-            let a = fieldCaretX(metrics, buf[0..len], masked, edit.from());
-            let b = fieldCaretX(metrics, buf[0..len], masked, edit.to());
-            let x0 = a.min(b);
-            let x1 = a.max(b);
-            ui.open(
-                Style.box().absolute().passthrough().left(padX + x0).top(padY).w(
-                    Size.fixed(x1 - x0),
-                ).h(Size.fixed(FIELD_TEXT))
-                    .bg(0x3B82F666), // BLUE_500 at 40 %: the selected text shows through
-            );
-            ui.close();
+            var spans = [TextSpan { left: 0.0, right: 0.0 }; 8];
+            let count = fieldSpans(metrics, buf[0..len], masked, edit.from(), edit.to(), mut spans[..]);
+            for (k in 0..count) {
+                let s = spans[k];
+                ui.open(
+                    Style.box().absolute().passthrough().left(padX + s.left).top(padY).w(
+                        Size.fixed(s.right - s.left),
+                    ).h(Size.fixed(FIELD_TEXT))
+                        .bg(0x3B82F666), // BLUE_500 at 40 %: the selected text shows through
+                );
+                ui.close();
+            }
         }
         // The text, with the composition (underlined) at the caret while the input method composes.
         let composing = focused && !masked && ui.composition().length > 0;

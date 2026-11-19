@@ -24,6 +24,66 @@ public interface TextMetrics {
     /// conjuncts, ligatures).
     fn caretX(borrow this, utf8: Slice<u8>, config: TextConfig, offset: usize) -> f32 =>
         this.measure(utf8[0..offset.min(utf8.length)], config).w;
+    /// Where bytes [`from`, `to`) of one line `utf8` are drawn: the spans of x they cover, from the line's left edge,
+    /// left to right and apart, into `out`; how many. By default one span, from the caret before `from` to the caret
+    /// before `to`; a shaper's metrics give the glyphs' own places, so a range across right-to-left and left-to-right
+    /// text is several spans (a selection's boxes).
+    fn spans(
+        borrow this,
+        utf8: Slice<u8>,
+        config: TextConfig,
+        from: usize,
+        to: usize,
+        out: SliceMut<TextSpan>,
+    ) -> usize {
+        if (out.length == 0 || to <= from) {
+            return 0;
+        }
+        let a = this.caretX(utf8, config, from);
+        let b = this.caretX(utf8, config, to);
+        out[0] = TextSpan { left: a.min(b), right: a.max(b) };
+        return 1;
+    }
+}
+
+/// A part of a line, by x from its left edge (TextMetrics.spans).
+public struct TextSpan {
+    public left: f32;
+    public right: f32;
+}
+
+/// Adds [`left`, `right`) to the spans `out[0..count]` (left to right and apart), joining those it touches; the new
+/// count. A span that finds no room widens the last.
+public fn addTextSpan(out: SliceMut<TextSpan>, count: usize, left: f32, right: f32) -> usize {
+    if (out.length == 0 || right <= left) {
+        return count;
+    }
+    var l = left;
+    var r = right;
+    // Take out every span this one touches, widening it by them.
+    var kept: usize = 0;
+    for (k in 0..count) {
+        let s = out[k];
+        if (s.right + 0.01 >= l && s.left <= r + 0.01) {
+            l = l.min(s.left);
+            r = r.max(s.right);
+        } else {
+            out[kept] = s;
+            kept += 1;
+        }
+    }
+    if (kept == out.length) {
+        out[kept - 1] = TextSpan { left: out[kept - 1].left.min(l), right: out[kept - 1].right.max(r) };
+        return kept;
+    }
+    // Put it in its place, left to right.
+    var at = kept;
+    while (at > 0 && out[at - 1].left > l) {
+        out[at] = out[at - 1];
+        at -= 1;
+    }
+    out[at] = TextSpan { left: l, right: r };
+    return kept + 1;
 }
 
 /// One measured word of a text element (Clay__MeasuredWord). `newline` marks a line break (length 0).

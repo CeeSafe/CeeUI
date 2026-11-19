@@ -30,6 +30,18 @@ impl<region r> TextMetrics for Raster<r> {
         let size = if (config.fontSize > 0.0) config.fontSize else 16.0;
         return this.caretAt(utf8, config.fontId, size, config.letterSpacing, offset);
     }
+
+    fn spans(
+        borrow this,
+        utf8: Slice<u8>,
+        config: TextConfig,
+        from: usize,
+        to: usize,
+        out: SliceMut<TextSpan>,
+    ) -> usize {
+        let size = if (config.fontSize > 0.0) config.fontSize else 16.0;
+        return this.spansAt(utf8, config.fontId, size, config.letterSpacing, from, to, out);
+    }
 }
 
 impl<region r> Backend for Raster<r> {

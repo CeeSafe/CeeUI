@@ -1,0 +1,210 @@
+// SPDX-License-Identifier: MIT
+// Editing mixed-direction text: a text field's arrows move the caret as the text is drawn, and a selection is
+// highlighted where its characters are, so one across a right-to-left run is several boxes.
+
+import claywind;
+
+/// A "font" for mixed-direction text: every character 10 points wide; the capitals A to Z are right-to-left
+/// letters, everything else left to right, in a left-to-right line. Carets and spans are placed as Raster places
+/// them (TextMetrics.caretX: the leading edge of the first glyph at or after the offset, else the trailing edge of
+/// the last), so the field is tested as it behaves over shaped text.
+struct MixedAdvance {
+    unused: u8;
+}
+
+fn rtlLetter(b: u8) -> bool => b >= 'A' && b <= 'Z';
+
+/// Where character `i` of `text` is drawn: its left edge (runs left to right in the text's order, each right-to-left
+/// run reversed).
+fn mixedLeft(text: Slice<u8>, i: usize) -> f32 {
+    var start = i;
+    var end = i + 1;
+    if (rtlLetter(text[i])) {
+        while (start > 0 && rtlLetter(text[start - 1])) {
+            start -= 1;
+        }
+        while (end < text.length && rtlLetter(text[end])) {
+            end += 1;
+        }
+        // Within the run, the last character is leftmost.
+        return 10.0 * round<f32>(start + (end - 1 - i));
+    }
+    return 10.0 * round<f32>(i);
+}
+
+impl TextMetrics for MixedAdvance {
+    fn measure(borrow this, utf8: Slice<u8>, config: TextConfig) -> Dims => Dims {
+        w: 10.0 * round<f32>(utf8.length),
+        h: config.fontSize,
+    };
+    fn baseline(borrow this, config: TextConfig) -> f32 => 0.8 * config.fontSize;
+    fn caretX(borrow this, utf8: Slice<u8>, config: TextConfig, offset: usize) -> f32 {
+        if (offset < utf8.length) {
+            let left = mixedLeft(utf8, offset);
+            return if (rtlLetter(utf8[offset])) left + 10.0 else left;
+        }
+        if (utf8.length == 0) {
+            return 0.0;
+        }
+        let last = utf8.length - 1;
+        let left = mixedLeft(utf8, last);
+        return if (rtlLetter(utf8[last])) left else left + 10.0;
+    }
+    fn spans(borrow this, utf8: Slice<u8>, config: TextConfig, from: usize, to: usize, out: SliceMut<TextSpan>) -> usize {
+        var count: usize = 0;
+        for (i in from..to.min(utf8.length)) {
+            let left = mixedLeft(utf8, i);
+            count = addTextSpan(out, count, left, left + 10.0);
+        }
+        return count;
+    }
+}
+
+struct MixedField {
+    text: [u8; 32];
+    len: usize;
+    edit: TextEdit;
+}
+
+fn mixedFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, field: borrow mut MixedField) -> Result<void, TestFailure> {
+    let metrics = MixedAdvance { unused: 0 };
+    ui.begin(mut platform);
+    ui.open(Style.column().w(Size.grow()).h(Size.grow()).p(space(4.0)));
+    let _ = Controls.textField(mut ui, metrics, "f", mut field.text[..], mut field.len, mut field.edit);
+    ui.close();
+    let ok = finish(mut ui, mut platform);
+    platform.pressed = 0;
+    platform.typedCount = 0;
+    platform.pointerState.pressed = false;
+    platform.pointerState.released = false;
+    return ok;
+}
+
+/// A field holding `text`, focused, its caret at `caret`.
+fn focusedMixedField(ui: borrow mut Ui, platform: borrow mut FakePlatform, text: StringView, caret: usize) -> Result<MixedField, TestFailure> {
+    var field = MixedField { text: [0u8; 32], len: 0, edit: TextEdit.at(0) };
+    let b = text.bytes();
+    for (i in 0..b.length) {
+        field.text[i] = b[i];
+    }
+    field.len = b.length;
+    mixedFrame(mut ui, mut platform, mut field)?;
+    let box = ui.boxOf("f")!;
+    platform.pointerState.position = Vec2 { x: box.x + 2.0, y: box.y + box.h / 2.0 };
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    mixedFrame(mut ui, mut platform, mut field)?;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    mixedFrame(mut ui, mut platform, mut field)?;
+    Check.isTrue(ui.hasFocusNamed("f"), "the field has the focus")?;
+    field.edit = TextEdit.at(caret);
+    return Ok(field);
+}
+
+fn mixedArrow(ui: borrow mut Ui, platform: borrow mut FakePlatform, field: borrow mut MixedField, k: Key) -> Result<usize, TestFailure> {
+    platform.pressed = 1u64 << (keyIndex(k) as u64);
+    mixedFrame(mut ui, mut platform, mut field)?;
+    return Ok(field.edit.caret);
+}
+
+@test
+fn arrowsMoveTheCaretAsTheTextIsDrawn() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(400.0, 120.0, -1.0, -1.0);
+    // "abCDEfg": a b, then C D E right to left (drawn E D C), then f g. The carets by offset: 0 at 0, 1 at 10, 2 at
+    // 50 (C's right edge), 3 at 40, 4 at 30, 5 at 50 (f's left edge), 6 at 60, 7 at 70.
+    var field = focusedMixedField(mut ui, mut platform, "abCDEfg", 0)?;
+    let rights = [1usize, 4, 3, 2, 6, 7, 7];
+    for (k in 0..rights.length) {
+        Check.equalU64(rights[k] as u64, mixedArrow(mut ui, mut platform, mut field, Key.Right)? as u64)?;
+    }
+    // Back the other way: at 50 the caret nearer 6 in the text is 5 (after E), so every offset is reached.
+    let lefts = [6usize, 5, 3, 4, 1, 0, 0];
+    for (k in 0..lefts.length) {
+        Check.equalU64(lefts[k] as u64, mixedArrow(mut ui, mut platform, mut field, Key.Left)? as u64)?;
+    }
+    return Ok();
+}
+
+@test
+fn anArrowEndsASelectionAtItsEdgeOnThatSide() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(400.0, 120.0, -1.0, -1.0);
+    // "CDE" alone, right to left: offset 0 is drawn at the right (30), 3 at the left (0).
+    var field = focusedMixedField(mut ui, mut platform, "CDE", 0)?;
+    field.edit = TextEdit { caret: 3, anchor: 0 };
+    Check.equalU64(3, mixedArrow(mut ui, mut platform, mut field, Key.Left)? as u64)?;
+    Check.isTrue(!field.edit.selects(), "Left ends the selection")?;
+    field.edit = TextEdit { caret: 3, anchor: 0 };
+    Check.equalU64(0, mixedArrow(mut ui, mut platform, mut field, Key.Right)? as u64)?;
+    // In right-to-left text Right goes towards the start, Left towards the end.
+    Check.equalU64(0, mixedArrow(mut ui, mut platform, mut field, Key.Right)? as u64)?;
+    Check.equalU64(1, mixedArrow(mut ui, mut platform, mut field, Key.Left)? as u64)?;
+    // Shift with an arrow extends the selection the same way.
+    platform.down = 1u64 << (keyIndex(Key.LeftShift) as u64);
+    Check.equalU64(2, mixedArrow(mut ui, mut platform, mut field, Key.Left)? as u64)?;
+    platform.down = 0;
+    return Check.isTrue(field.edit.anchor == 1 && field.edit.caret == 2, "Shift-Left selected one letter");
+}
+
+@test
+fn aSelectionIsHighlightedWhereItsCharactersAre() -> Result<void, TestFailure> {
+    let metrics = MixedAdvance { unused: 0 };
+    let config = TextConfig.of(18.0);
+    var spans = [TextSpan { left: 0.0, right: 0.0 }; 4];
+    // b, C and D of "abCDEfg": b at 10..20, D and C at 30..50, apart.
+    let n = metrics.spans("abCDEfg".bytes(), config, 1, 4, mut spans[..]);
+    Check.equalU64(2, n as u64)?;
+    expect("b's box starts", spans[0].left, 10.0)?;
+    expect("b's box ends", spans[0].right, 20.0)?;
+    expect("C D's box starts", spans[1].left, 30.0)?;
+    expect("C D's box ends", spans[1].right, 50.0)?;
+    // addTextSpan keeps spans left to right and joins those that touch.
+    var out = [TextSpan { left: 0.0, right: 0.0 }; 3];
+    var c = addTextSpan(mut out[..], 0, 40.0, 50.0);
+    c = addTextSpan(mut out[..], c, 0.0, 10.0);
+    c = addTextSpan(mut out[..], c, 20.0, 30.0);
+    Check.equalU64(3, c as u64)?;
+    expect("sorted", out[1].left, 20.0)?;
+    c = addTextSpan(mut out[..], c, 10.0, 20.0);
+    Check.equalU64(2, c as u64)?;
+    expect("joined", out[0].right, 30.0)?;
+    return Ok();
+}
+
+@test
+fn rasterSpansFollowTheShapedGlyphs() -> Result<void, TestFailure> {
+    let wide = readFile("/System/Library/Fonts/Supplemental/Arial Unicode.ttf");
+    if (wide.length == 0) {
+        Console.writeLine("  (Arial Unicode not found: skipped)");
+        return Ok();
+    }
+    var storage = heap(67108864);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(64, 64);
+    c.imagePixels = 4;
+    c.fontBytes = 33554432;
+    var ras = Raster.create(memory, c)!;
+    Check.isTrue(ras.loadFont(0, wide.view()), "Arial Unicode loads")?;
+    let config = TextConfig.of(20.0);
+    // "ab" then three Arabic letters (two bytes each) then "cd": the Arabic is drawn right to left between them.
+    let text = "ab\u{628}\u{62A}\u{62B}cd".bytes();
+    var spans = [TextSpan { left: 0.0, right: 0.0 }; 4];
+    // b and the first Arabic letter: b at the left, the letter at the Arabic run's right end, apart.
+    let n = ras.spans(text, config, 1, 4, mut spans[..]);
+    Check.equalU64(2, n as u64)?;
+    let b = ras.caretX(text, config, 1);
+    expect("b's box starts at its caret", spans[0].left, b)?;
+    let runRight = ras.caretX(text, config, 2); // before the first Arabic letter: the run's right edge
+    expect("the letter's box ends at the run's right edge", spans[1].right, runRight)?;
+    // The whole line is one span.
+    let whole = ras.spans(text, config, 0, text.length, mut spans[..]);
+    Check.equalU64(1, whole as u64)?;
+    expect("the line's width", spans[0].right, ras.measure(text, config).w)?;
+    return Ok();
+}
