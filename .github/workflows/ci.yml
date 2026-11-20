@@ -87,6 +87,16 @@ jobs:
             (cd "$p" && ceesafec build)
           done
 
+      - name: A new app from the template
+        if: runner.os != 'Windows' # claywind-pack needs a Unix
+        run: |
+          set -e
+          python3 claywind-pack/template/make_templates.py
+          git diff --exit-code claywind-pack/src/templates.cee # templates.cee made from template/ as it is
+          cd "$RUNNER_TEMP"
+          "$GITHUB_WORKSPACE/claywind-pack/out/claywind_pack" new ci_app --claywind "$GITHUB_WORKSPACE"
+          cd ci_app && ceesafec fetch && ceesafec check && ceesafec fmt --check && ceesafec build
+
       - name: Terminal host, one frame
         working-directory: claywind-hosts/terminal
         run: |

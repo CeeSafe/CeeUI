@@ -14,6 +14,9 @@
 //                    it, or with any server that sends the same two headers. Needs a clang with the wasm64 target
 //                    (CLANG, else Homebrew's llvm, else `clang`) and wasm-ld (WASM_LD).
 //
+//   new NAME         a new app in directory NAME, from template/ (a window with a list of tasks); `--claywind PATH`
+//                    takes ClayWind's packages from the checkout at PATH rather than from GitHub
+//
 // `--network WHY` is for an app that uses the network: Android's INTERNET permission, and on iOS the sentence shown
 // when the app first reaches a device on the local network.
 // `--bluetooth WHY` is for an app that prints to Bluetooth printers (CeeSafe ADR 0177): Android's Bluetooth
@@ -918,10 +921,118 @@ fn usage() -> i32 {
     );
     Console.writeErrorLine("           [--font FILE]... [--fallback FILE]...");
     Console.writeErrorLine("run in the app's package directory; the result is under out/pack");
+    Console.writeErrorLine(
+        "   or: claywind_pack new NAME [--claywind PATH]   a new app in directory NAME (its ClayWind",
+    );
+    Console.writeErrorLine("       packages from GitHub, or from the ClayWind checkout at PATH)");
     return 2;
 }
 
+/// `text` with every `from` in it replaced by `to`.
+fn replaced(text: StringView, from: StringView, to: StringView) -> String {
+    var out = String.create();
+    let t = text.bytes();
+    let f = from.bytes();
+    var i: usize = 0;
+    var run: usize = 0;
+    while (i < t.length) {
+        var same = f.length > 0 && i + f.length <= t.length;
+        if (same) {
+            for (k in 0..f.length) {
+                if (t[i + k] != f[k]) {
+                    same = false;
+                    break;
+                }
+            }
+        }
+        if (same) {
+            out.appendUtf8(t[run..i])!;
+            out.append(to)!;
+            i += f.length;
+            run = i;
+        } else {
+            i += 1;
+        }
+    }
+    out.appendUtf8(t[run..t.length])!;
+    return out;
+}
+
+/// Whether `name` can name a package: lowercase letters, digits and underscores, a letter first.
+fn packageName(name: StringView) -> bool {
+    let b = name.bytes();
+    if (b.length == 0 || b[0] < 'a' || b[0] > 'z') {
+        return false;
+    }
+    for (c in b) {
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// `claywind-pack new NAME [--claywind PATH]`: a new app in directory NAME (templates.cee), depending on ClayWind's
+/// packages from its repository, or from the checkout at PATH.
+fn newApp() -> i32 {
+    let name = Process.argument(2) ?? "";
+    if (!packageName(name)) {
+        return fail("new: give the app a name of lowercase letters, digits and underscores, a letter first");
+    }
+    var local = String.create();
+    if (Process.argumentCount() >= 5 && (Process.argument(3) ?? "") == "--claywind") {
+        local = text(Process.argument(4) ?? "");
+    } else if (Process.argumentCount() != 3) {
+        return usage();
+    }
+    // Never over what is there.
+    if (run("test", ["-e", name])) {
+        return fail("new: there is already a file or directory of that name here");
+    }
+    var deps = String.create();
+    for (dep in [
+        ["claywind", "claywind"],
+        ["claywind_fonts", "claywind-fonts"],
+        ["claywind_desktop", "claywind-desktop"],
+    ]) {
+        deps.append(dep[0])!;
+        if (local.view().length > 0) {
+            deps.append(" = { path = \"")!;
+            deps.append(local.view())!;
+            deps.append("/")!;
+            deps.append(dep[1])!;
+            deps.append("\" }\n")!;
+        } else {
+            deps.append(" = { git = \"https://github.com/CeeSafe/Clay.git\", branch = \"main\", dir = \"")!;
+            deps.append(dep[1])!;
+            deps.append("\" }\n")!;
+        }
+    }
+    if (!run("mkdir", ["-p", cat([name, "/src"]).view()])) {
+        return fail("new: cannot make the app's directory");
+    }
+    for (k in 0..TEMPLATE_COUNT) {
+        let named = replaced(TEMPLATE_TEXTS[k], "__NAME__", name);
+        let content = replaced(named.view(), "__DEPS__\n", deps.view());
+        let path = cat([name, "/", TEMPLATE_PATHS[k]]);
+        if (!writeText(path.view(), content.view())) {
+            return fail("new: cannot write the app's files");
+        }
+    }
+    Console.write("claywind-pack: made ");
+    Console.write(name);
+    Console.writeLine(": a ClayWind app. Then:");
+    Console.write("  cd ");
+    Console.write(name);
+    Console.write(" && ceesafec fetch && ceesafec build && out/");
+    Console.writeLine(name);
+    return 0;
+}
+
 fn main() -> i32 {
+    if ((Process.argument(1) ?? "") == "new") {
+        return newApp();
+    }
     let toml = readText("ceesafe.toml");
     let package = tomlValue(toml.view(), "name");
     if (package.view().length == 0) {

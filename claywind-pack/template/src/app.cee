@@ -1,0 +1,133 @@
+// The app: its state, and the frame that shows it. ClayWind is immediate mode: `appFrame` runs each frame and lays out
+// the whole window from the state; what the user does comes back through the controls' results.
+
+import claywind;
+
+/// The most tasks the app keeps, and the longest a task's text is.
+const MAX_TASKS: usize = 1000;
+const TASK_BYTES: usize = 96;
+
+/// A task: its text, and whether it is done.
+struct Task {
+    text: [u8; 96];
+    length: usize;
+    done: bool;
+}
+
+/// The app's state.
+public struct App {
+    tasks: Vector<Task>;
+    /// The new task's text, as it is typed.
+    draft: [u8; 96];
+    draftLength: usize;
+    draftEdit: TextEdit;
+    selected: usize?;
+
+    public fn create() -> App {
+        var app = App {
+            tasks: Vector<Task>.create(),
+            draft: [0u8; 96],
+            draftLength: 0,
+            draftEdit: TextEdit.at(0),
+            selected: null,
+        };
+        app.add("Read ClayWind's README");
+        app.add("Change this app's frame in src/app.cee");
+        app.add("Pack it: claywind-pack macos");
+        return app;
+    }
+
+    /// Adds a task (cut to TASK_BYTES at a character's start), unless the list is full.
+    fn add(borrow mut this, text: StringView) {
+        if (this.tasks.length >= MAX_TASKS) {
+            return;
+        }
+        let b = text.bytes();
+        var n = b.length.min(TASK_BYTES);
+        while (n > 0 && n < b.length && (b[n] & 0xC0) == 0x80) {
+            n -= 1;
+        }
+        var task = Task { text: [0u8; 96], length: n, done: false };
+        for (i in 0..n) {
+            task.text[i] = b[i];
+        }
+        this.tasks.push(task)!;
+    }
+}
+
+/// One frame of the app.
+public fn appFrame<M: TextMetrics>(ui: borrow mut Ui, app: borrow mut App, metrics: borrow M) {
+    let dark = ui.isDarkMode();
+    let ink = if (dark) SLATE_100 else SLATE_900;
+    ui.open(Style.column().id("page").w(Size.grow()).h(Size.grow()).p(space(6.0)).gap(space(4.0))
+        .bg(if (dark) SLATE_950 else SLATE_50).safe(ui.safeArea()));
+    // The header: the title, how many are left, and the theme.
+    ui.open(Style.row().w(Size.grow()).gap(space(3.0)).alignXY(AxisAlign.Start, AxisAlign.Center));
+    ui.label("Tasks", Text.of().size(24.0).bold().color(ink));
+    var left: usize = 0;
+    for (task in app.tasks.view()) {
+        if (!task.done) {
+            left += 1;
+        }
+    }
+    var count = [0u8; 32];
+    var w = TextWriter.create(mut count[..]);
+    w.decimal(left as u64);
+    w.text(" left");
+    ui.labelBytes(w.written(), Text.of().color(SLATE_400));
+    ui.open(Style.box().w(Size.grow()));
+    ui.close();
+    if (Controls.button(mut ui, "theme", if (dark) "Light" else "Dark")) {
+        ui.setDarkMode(!dark);
+    }
+    ui.close();
+    // A new task: typed, then added with the button or Enter.
+    // (Enter is read before the field, which gives up the focus on it.)
+    let enter = ui.hasFocusNamed("draft") && ui.keyPressed(Key.Enter);
+    ui.open(Style.row().w(Size.grow()).gap(space(2.0)).alignXY(AxisAlign.Start, AxisAlign.Center));
+    ui.open(Style.box().w(Size.grow()));
+    Controls.textField(mut ui, metrics, "draft", mut app.draft[..], mut app.draftLength, mut app.draftEdit);
+    ui.close();
+    if ((Controls.button(mut ui, "add", "Add") || enter) && app.draftLength > 0) {
+        let typed = app.draft; // a copy: adding changes the app
+        let text = StringView.fromUtf8(typed[0..app.draftLength]) ?? "";
+        app.add(text);
+        app.draftLength = 0;
+        app.draftEdit = TextEdit.at(0);
+        ui.setFocus(hashId("draft")); // ready for the next one
+    }
+    ui.close();
+    // The tasks: a press selects one, Enter (or its box) marks it done, Delete takes it away.
+    let list = Controls.virtualList(mut ui, "tasks", app.tasks.length, 40.0, Size.grow(), mut app.selected);
+    for (i in list.first..list.last) {
+        let task = app.tasks[i];
+        let name = StringView.fromUtf8(task.text[0..task.length]) ?? "";
+        let on = Controls.virtualRow(mut ui, list, i, mut app.selected, name);
+        var done = task.done;
+        var boxId = [0u8; 24];
+        var b = TextWriter.create(mut boxId[..]);
+        b.text("done");
+        b.decimal(i as u64);
+        if (Controls.checkbox(mut ui, StringView.fromUtf8(b.written()) ?? "done", "", mut done)) {
+            app.tasks[i].done = done;
+        }
+        ui.label(name, Text.of().color(if (on) WHITE else if (task.done) SLATE_500 else SLATE_200));
+        ui.close();
+    }
+    Controls.endVirtualList(mut ui, list);
+    if (ui.hasFocusNamed("tasks")) {
+        match (app.selected) {
+            Some(i) => {
+                if (ui.keyPressed(Key.Enter)) {
+                    app.tasks[i].done = !app.tasks[i].done;
+                }
+                if (ui.keyPressed(Key.Delete) || ui.keyPressed(Key.Backspace)) {
+                    app.tasks.remove(i);
+                    app.selected = if (app.tasks.length == 0) null else Some(i.min(app.tasks.length - 1));
+                }
+            }
+            null => {}
+        }
+    }
+    ui.close();
+}

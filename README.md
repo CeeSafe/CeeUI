@@ -125,7 +125,7 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 | `claywind-tasks/` | Background work for a UI (hosted): a `Task` runs jobs on threads of their own, whose results wake the window (`Window.waitEvent`) and reach the frame through `poll`; a new job cancels the one before |
 | `claywind-demo/` | The demo app (the C version's `main.c`) and `ScriptPlatform`, a scripted input source for tests |
 | `claywind-dev/` | Hot reload: rebuilds an app when its sources change and restarts it where it was (`--hot`) |
-| `claywind-pack/` | Packaging: an app as a macOS `.app`, an iOS `.app` (simulator, or signed for a device) or an Android `.apk`, from its package directory |
+| `claywind-pack/` | Packaging: an app as a macOS `.app`, an iOS `.app` (simulator, or signed for a device) or an Android `.apk`, from its package directory; and `new`, a new app from its template |
 | `claywind-demo-tasks/` | What both hosts share for the demo: its saved state (`hotSave`, `hotRestore`: hot reload's, and a phone's when the app leaves the screen) and its background jobs on threads (`claywind-tasks`): the Controls page's Tasks tab counts primes on one |
 | `claywind-hosts/desktop/` | The demo in a native window: AppKit, Win32 or X11, through CeeSafe's `Window`. The Controls page's Live state panel opens in a second window that shares the app's state and the renderer |
 | `claywind-hosts/headless/` | The demo rendered to files: screenshots, golden tests and benchmarks |
@@ -285,6 +285,12 @@ again when the handle changes, and presents nothing while there is none; the swa
 unrotated, so a phone held sideways is drawn upright. It saves and restores its state as the desktop host does.
 The iOS Simulator's Metal cannot run it (no reading of the render target in a fragment shader); an iPhone can. On an
 iPhone it needs ceesafec 0.62.1 (findings O11).
+
+A new app: `claywind-pack new NAME` makes directory NAME, a ClayWind app that builds and runs as it is (a window
+with a list of tasks to add to, tick off and delete; its state and frame in `src/app.cee`, its window and memory in
+`src/main.cee`), depending on ClayWind's packages from GitHub, or with `--claywind PATH` from a checkout. Then
+`cd NAME && ceesafec fetch && ceesafec build && out/NAME`. The app is `claywind-pack/template/` (after changing it,
+`python3 claywind-pack/template/make_templates.py`); CI makes one and builds it.
 
 Packaging (roadmap P4 step 8): `claywind-pack`, run in an app's package directory, makes what a system installs,
 under `out/pack`:

@@ -1,0 +1,9 @@
+[package]
+name = "__NAME__"
+version = "0.1.0"
+kind = "executable"
+windowed = true # a GUI program: no console window on Windows
+ceesafec = ">=0.78.0"
+
+[dependencies]
+__DEPS__
