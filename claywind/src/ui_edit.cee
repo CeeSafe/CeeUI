@@ -126,6 +126,50 @@ impl<region r> Ui<r> {
         this.hasCopied = true;
     }
 
+    /// Hosts, after the frame: the focus moved from one text field to another mid-composition. The composition went
+    /// to the field it was typed in (handoverFor); the host ends it there, so that the input method does not commit
+    /// it again into the new field: it turns text input off and on (a phone's keyboard composes a word until it is
+    /// committed, and commits it when the field it was in is left).
+    public fn textFocusMovedBetweenFields(borrow this) -> bool => this.textFocusMoved;
+
+    /// For text controls: the composition the field `id` held when the focus left it, to be inserted as typed text,
+    /// once (empty for any other field, and after it was taken).
+    public fn handoverFor(borrow mut this, id: u32) -> Slice<u8> {
+        if (id == 0 || this.handoverOwner != id || this.handoverLength == 0) {
+            return this.handover[0..0];
+        }
+        let n = this.handoverLength;
+        this.handoverOwner = 0;
+        this.handoverLength = 0;
+        return this.handover[0..n];
+    }
+
+    /// At the frame's end: which text field has the focus. When it left a field while the input method was
+    /// composing there, the composition is given back to that field (handoverFor, next frame) and ends here; one
+    /// not taken by the next frame is dropped.
+    fn endTextFocus(borrow mut this) {
+        let now = if (this.wantsText) this.focusedId else 0;
+        this.textFocusMoved = false;
+        if (this.handoverOwner != 0) {
+            this.handoverOwner = 0; // given at the last frame's end and not taken: its field was not built
+            this.handoverLength = 0;
+        }
+        if (this.lastTextFocus != 0 && now != this.lastTextFocus) {
+            if (this.composingLength > 0) {
+                let n = this.composingLength.min(this.handover.length);
+                for (i in 0..n) {
+                    this.handover[i] = this.composing[i];
+                }
+                this.handoverLength = n;
+                this.handoverOwner = this.lastTextFocus;
+                this.composingLength = 0;
+                this.composingCaret = 0;
+                this.textFocusMoved = now != 0;
+            }
+        }
+        this.lastTextFocus = now;
+    }
+
     /// The input method's composition, and its caret.
     public fn composition(borrow this) -> Slice<u8> => this.composing[0..this.composingLength];
     public fn compositionCaret(borrow this) -> usize => this.composingCaret;

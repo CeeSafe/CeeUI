@@ -120,6 +120,13 @@ public struct Ui<region r> {
     composing: SliceMut<r, u8>;
     composingLength: usize;
     composingCaret: usize;
+    /// The text field that had the focus at the end of the last frame (0: none), and a composition it was given back
+    /// when the focus left it mid-composition: its owner's id, and its bytes (ui_edit.cee).
+    lastTextFocus: u32;
+    handover: SliceMut<r, u8>;
+    handoverLength: usize;
+    handoverOwner: u32;
+    textFocusMoved: bool;
     caretArea: Rect;
     /// The layout inspector (ui_inspect.cee): whether it is on, and the element it shows.
     inspecting: bool;
@@ -210,6 +217,7 @@ public struct Ui<region r> {
         let triggered = memory.allocArray(16, 0u32)?;
         let copied = memory.allocArray(capacity.textBytes, 0u8)?;
         let composing = memory.allocArray(capacity.textBytes, 0u8)?;
+        let handover = memory.allocArray(capacity.textBytes, 0u8)?;
         var ui = Ui {
             tree: tree,
             animations: animations,
@@ -242,6 +250,11 @@ public struct Ui<region r> {
             composing: composing,
             composingLength: 0,
             composingCaret: 0,
+            lastTextFocus: 0,
+            handover: handover,
+            handoverLength: 0,
+            handoverOwner: 0,
+            textFocusMoved: false,
             caretArea: Rect.zero(),
             inspecting: false,
             inspected: null,
@@ -960,6 +973,7 @@ impl<region r> Ui<r> {
             }
             this.leavingId = 0;
         }
+        this.endTextFocus();
         this.drawInspector();
         let result = this.tree.endLayout(metrics);
         // Scroll containers that were declared this frame record their size and content; the rest go away.

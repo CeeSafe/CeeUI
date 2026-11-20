@@ -309,6 +309,17 @@ impl Controls {
         if (p.released && ui.captured() == h) {
             ui.capture(0);
         }
+        // A word the input method was still composing here when the focus left: it is the field's text, as if
+        // committed before the focus moved (a phone's keyboard composes a word until a space or a tap elsewhere).
+        let handed = ui.handoverFor(h);
+        if (handed.length > 0) {
+            var bytes = [0u8; 1024];
+            let n = handed.length.min(1024);
+            for (i in 0..n) {
+                bytes[i] = handed[i];
+            }
+            changed = replaceSelection(buf, mut len, mut edit, bytes[0..n]) || changed;
+        }
         let focused = ui.hasFocus(h);
         if (focused) {
             if (ui.commanded(EditCommand.SelectAll)) {

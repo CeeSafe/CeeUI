@@ -180,6 +180,13 @@ public struct DesktopPlatform {
             null => {}
         }
         let wanted = ui.wantsTextInput();
+        // The focus moved from one text field to another mid-composition: the Ui gave the composition to the field
+        // it was typed in, so the input method's is ended here, not committed again into the new field. Text input
+        // off ends it (CeeSafe's window discards a composition there); it is turned on again below.
+        if (ui.textFocusMovedBetweenFields() && this.textInput) {
+            window.setTextInput(false);
+            this.textInput = false;
+        }
         if (wanted) {
             // The kind of text first, so that a phone's keyboard comes up as the field's (the window ignores a kind
             // it already has, and a desktop every kind).

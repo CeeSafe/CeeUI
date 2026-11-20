@@ -1532,6 +1532,16 @@ impl Controls {
         doc.undo.end = doc.undo.end.min(doc.history.length).max(doc.undo.used);
         let countBefore = doc.count;
         var changed = false;
+        // A word the input method was still composing here when the focus left: typed text, as a text field takes it.
+        let handed = ui.handoverFor(h);
+        if (handed.length > 0 && doc.count > 0) {
+            var bytes = [0u8; 1024];
+            let n = handed.length.min(1024);
+            for (i in 0..n) {
+                bytes[i] = handed[i];
+            }
+            changed = replaceIn(mut doc, bytes[0..n], true) || changed;
+        }
         if (ui.hasFocus(h) && doc.count > 0) {
             if (ui.commanded(EditCommand.Undo)) {
                 changed = undoIn(mut doc) || changed;
