@@ -52,7 +52,13 @@ fn viewFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow m
 }
 
 /// A press and release at (x, y) in the view's text (from its top left, before any scroll).
-fn clickDoc(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow mut Doc, x: f32, y: f32) -> Result<void, TestFailure> {
+fn clickDoc(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    doc: borrow mut Doc,
+    x: f32,
+    y: f32,
+) -> Result<void, TestFailure> {
     let box = ui.boxOf("doc")!;
     platform.pointerState.position = Vec2 { x: box.x + x, y: box.y + y };
     platform.pointerState.pressed = true;
@@ -63,7 +69,12 @@ fn clickDoc(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow mu
     return viewFrame(mut ui, mut platform, mut doc);
 }
 
-fn key(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow mut Doc, k: Key) -> Result<usize, TestFailure> {
+fn key(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    doc: borrow mut Doc,
+    k: Key,
+) -> Result<usize, TestFailure> {
     platform.pressed = 1u64 << (keyIndex(k) as u64);
     viewFrame(mut ui, mut platform, mut doc)?;
     return Ok(doc.edit.caret);
@@ -182,10 +193,35 @@ struct EditorDoc {
     clipped: bool;
     /// The document's place across for Up and Down, carried from frame to frame.
     goal: f32;
+    /// A rich document: a mark for each byte, and the mark typing takes.
+    rich: bool;
+    marks: [u8; 128];
+    typing: u8;
+    /// A mark given to the selection (or to typing) in the next frame, before the editor runs.
+    markWanted: u8?;
 }
 
 fn editorOf(text: StringView) -> EditorDoc {
-    var d = EditorDoc { buf: [0u8; 128], len: 0, starts: [0u32; 8], count: 0, edit: TextEdit.at(0), command: null, paste: false, composing: false, history: [0u8; 256], state: TextHistory.create(), rows: [0u16; 8], nowrap: false, clipped: false, goal: -1.0 };
+    var d = EditorDoc {
+        buf: [0u8; 128],
+        len: 0,
+        starts: [0u32; 8],
+        count: 0,
+        edit: TextEdit.at(0),
+        command: null,
+        paste: false,
+        composing: false,
+        history: [0u8; 256],
+        state: TextHistory.create(),
+        rows: [0u16; 8],
+        nowrap: false,
+        clipped: false,
+        goal: -1.0,
+        rich: false,
+        marks: [0u8; 128],
+        typing: 0,
+        markWanted: null,
+    };
     let b = text.bytes();
     for (i in 0..b.length) {
         d.buf[i] = b[i];
@@ -194,7 +230,11 @@ fn editorOf(text: StringView) -> EditorDoc {
     return d;
 }
 
-fn editorFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow mut EditorDoc) -> Result<bool, TestFailure> {
+fn editorFrame(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    doc: borrow mut EditorDoc,
+) -> Result<bool, TestFailure> {
     let metrics = MixedAdvance { unused: 0 };
     ui.begin(mut platform);
     match (doc.command) {
@@ -211,13 +251,29 @@ fn editorFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow
     }
     let parent = Style.column().w(Size.fixed(300.0)).h(Size.fixed(200.0));
     ui.open(if (doc.clipped) parent.clip() else parent);
-    let look = if (doc.nowrap) Text.of().size(14.0).leading(20.0).wrap(TextWrap.None) else Text.of().size(14.0).leading(20.0);
+    let look = if (doc.nowrap) Text.of().size(14.0).leading(20.0).wrap(
+        TextWrap.None,
+    ) else Text.of().size(14.0).leading(20.0);
     // The document over the test's arrays, its state carried from frame to frame.
-    var d = TextDocument.over(mut doc.buf[..], doc.len, mut doc.starts[..], mut doc.rows[..], mut doc.history[..]);
+    var d = if (doc.rich) TextDocument.styled(
+        mut doc.buf[..],
+        doc.len,
+        mut doc.marks[..],
+        mut doc.starts[..],
+        mut doc.rows[..],
+        mut doc.history[..],
+    ) else TextDocument.over(mut doc.buf[..], doc.len, mut doc.starts[..], mut doc.rows[..], mut doc.history[..]);
+    d.typing = doc.typing;
     d.edit = doc.edit;
     d.undo = doc.state;
     d.goalX = doc.goal;
+    match (doc.markWanted) {
+        Some(m) => { let _ = d.setMark(m); }
+        null => {}
+    }
+    doc.markWanted = null;
     let changed = Controls.textEditor(mut ui, metrics, "ed", mut d, look, false);
+    doc.typing = d.typing;
     doc.len = d.len;
     doc.count = d.count;
     doc.edit = d.edit;
@@ -247,7 +303,11 @@ fn isText(doc: borrow EditorDoc, want: StringView) -> bool {
 }
 
 /// An editor holding `text`, focused by a click at its start.
-fn focusedEditor(ui: borrow mut Ui, platform: borrow mut FakePlatform, text: StringView) -> Result<EditorDoc, TestFailure> {
+fn focusedEditor(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    text: StringView,
+) -> Result<EditorDoc, TestFailure> {
     var doc = editorOf(text);
     editorFrame(mut ui, mut platform, mut doc)?;
     let box = ui.boxOf("ed")!;
@@ -262,7 +322,12 @@ fn focusedEditor(ui: borrow mut Ui, platform: borrow mut FakePlatform, text: Str
     return Ok(doc);
 }
 
-fn editKey(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow mut EditorDoc, k: Key) -> Result<bool, TestFailure> {
+fn editKey(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    doc: borrow mut EditorDoc,
+    k: Key,
+) -> Result<bool, TestFailure> {
     platform.pressed = 1u64 << (keyIndex(k) as u64);
     return editorFrame(mut ui, mut platform, mut doc);
 }
@@ -373,7 +438,12 @@ fn anEditorShowsTheInputMethodsComposition() -> Result<void, TestFailure> {
     return expect("the caret after the composition", area.x - box.x, 80.0);
 }
 
-fn command(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow mut EditorDoc, c: EditCommand) -> Result<bool, TestFailure> {
+fn command(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    doc: borrow mut EditorDoc,
+    c: EditCommand,
+) -> Result<bool, TestFailure> {
     doc.command = Some(c);
     return editorFrame(mut ui, mut platform, mut doc);
 }
@@ -438,7 +508,10 @@ fn anEditorUndoesDeletesAndPastesWithTheirSelection() -> Result<void, TestFailur
     editorFrame(mut ui, mut platform, mut doc)?;
     Check.isTrue(isText(doc, "ox\nyo"), "pasted")?;
     command(mut ui, mut platform, mut doc, EditCommand.Undo)?;
-    return Check.isTrue(isText(doc, "one\ntwo") && doc.edit.anchor == 1 && doc.edit.caret == 6, "the selection is back");
+    return Check.isTrue(
+        isText(doc, "one\ntwo") && doc.edit.anchor == 1 && doc.edit.caret == 6,
+        "the selection is back",
+    );
 }
 
 @test
@@ -448,8 +521,8 @@ fn aSmallHistoryKeepsTheLatestEdits() -> Result<void, TestFailure> {
     var ui = Ui.create(memory, UiCapacity.of(128))!;
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var doc = focusedEditor(mut ui, mut platform, "")?;
-    // Twelve words, each its own record of 29 bytes (24 of head and trail, "abcd " typed into it): 256 bytes keep
-    // the last eight.
+    // Twelve words, each its own record of 33 bytes (28 of head and trail, "abcd " typed into it): 256 bytes keep
+    // the last seven.
     for (k in 0..12) {
         let _ = k;
         typeChars(mut platform, "abcd ");
@@ -463,8 +536,8 @@ fn aSmallHistoryKeepsTheLatestEdits() -> Result<void, TestFailure> {
         }
         undone += 1;
     }
-    Check.equalU64(8, undone)?;
-    return Check.equalU64(20, doc.len as u64);
+    Check.equalU64(7, undone)?;
+    return Check.equalU64(25, doc.len as u64);
 }
 
 /// The y of each Text command whose text starts with `first`, in order.
@@ -549,7 +622,12 @@ fn anEditorWithoutWrappingKeepsALineOneRow() -> Result<void, TestFailure> {
     return Check.equalU64(0, ys.length as u64);
 }
 
-fn editCaret(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow mut EditorDoc, k: Key) -> Result<usize, TestFailure> {
+fn editCaret(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    doc: borrow mut EditorDoc,
+    k: Key,
+) -> Result<usize, TestFailure> {
     editKey(mut ui, mut platform, mut doc, k)?;
     return Ok(doc.edit.caret);
 }

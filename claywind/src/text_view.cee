@@ -826,29 +826,75 @@ impl Controls {
 
 /// Replaces bytes [`from`, `to`) of `buf[0..len]` with `insert`, the tail moved once. False when it does not fit
 /// `buf` (nothing changes then).
-fn spliceBytes(buf: SliceMut<u8>, len: borrow mut usize, from: usize, to: usize, insert: Slice<u8>) -> bool {
+fn spliceBytes(buf: SliceMut<u8>, len: borrow mut usize, from: usize, to: usize, insert: Slice<u8>) -> bool =>
+    spliceEvery(buf, mut len, from, to, insert, 1, 0);
+
+/// spliceBytes from every `stride`th byte of `source` from `phase` on (2 and 0: the bytes of byte-mark pairs; 2
+/// and 1: their marks).
+fn spliceEvery(
+    buf: SliceMut<u8>,
+    len: borrow mut usize,
+    from: usize,
+    to: usize,
+    source: Slice<u8>,
+    stride: usize,
+    phase: usize,
+) -> bool {
+    let count = source.length / stride;
     let removed = to - from;
     let n: usize = len;
-    if (n - removed + insert.length > buf.length) {
+    if (n - removed + count > buf.length) {
         return false;
     }
-    if (insert.length > removed) {
-        let grow = insert.length - removed;
+    if (count > removed) {
+        let grow = count - removed;
         var i = n;
         while (i > to) {
             i -= 1;
             buf[i + grow] = buf[i];
         }
-    } else if (insert.length < removed) {
-        let shrink = removed - insert.length;
+    } else if (count < removed) {
+        let shrink = removed - count;
         for (i in to..n) {
             buf[i - shrink] = buf[i];
         }
     }
-    for (i in 0..insert.length) {
-        buf[from + i] = insert[i];
+    for (i in 0..count) {
+        buf[from + i] = source[i * stride + phase];
     }
-    len = n - removed + insert.length;
+    len = n - removed + count;
+    return true;
+}
+
+/// Bytes [`from`, `to`) of `buf[0..len]` replaced by `count` bytes of `fill`.
+fn spliceFill(buf: SliceMut<u8>, len: borrow mut usize, from: usize, to: usize, count: usize, fill: u8) -> bool {
+    let one = [fill];
+    if (count == 0) {
+        return spliceEvery(buf, mut len, from, to, one[0..0], 1, 0);
+    }
+    // Made room for, then filled.
+    let n: usize = len;
+    let removed = to - from;
+    if (n - removed + count > buf.length) {
+        return false;
+    }
+    if (count > removed) {
+        let grow = count - removed;
+        var i = n;
+        while (i > to) {
+            i -= 1;
+            buf[i + grow] = buf[i];
+        }
+    } else if (count < removed) {
+        let shrink = removed - count;
+        for (i in to..n) {
+            buf[i - shrink] = buf[i];
+        }
+    }
+    for (i in 0..count) {
+        buf[from + i] = fill;
+    }
+    len = n - removed + count;
     return true;
 }
 
@@ -871,6 +917,19 @@ public fn reindexLines(text: Slice<u8>, starts: SliceMut<u32>, first: usize) -> 
             starts[n] = truncate<u32>(i + 1);
             n += 1;
         }
+    }
+    return n;
+}
+
+/// How many line breaks every `stride`th byte of `bytes` holds (the bytes of byte-mark pairs, at 2).
+fn newlinesEvery(bytes: Slice<u8>, stride: usize) -> usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < bytes.length) {
+        if (bytes[i] == '\n') {
+            n += 1;
+        }
+        i += stride;
     }
     return n;
 }
@@ -904,9 +963,12 @@ public struct TextHistory {
     public fn canRedo(borrow this) -> bool => this.end > this.used;
 }
 
-/// A record's header: from, removed length, inserted length, caret before, anchor before (u32 each), then the
-/// removed and inserted bytes, then the record's whole length (u32), so records are walked back from the end.
-const RECORD_HEAD: usize = 20;
+/// A record's header: from, removed length, inserted length, caret before, anchor before, flags (u32 each), then the
+/// removed bytes, then the inserted ones, then the record's whole length (u32), so records are walked back from the
+/// end. A record of a document with marks (flag 1) keeps the removed bytes' marks after them, and its inserted
+/// bytes each with its mark (byte, mark, byte, mark…), so that a run of typing still grows at its end.
+const RECORD_HEAD: usize = 24;
+const RECORD_MARKED: usize = 1;
 
 fn putU32(store: SliceMut<u8>, at: usize, v: usize) {
     let x = truncate<u32>(v);
@@ -920,12 +982,18 @@ fn getU32(store: Slice<u8>, at: usize) -> usize =>
     ((store[at] as u32) |
         ((store[at + 1] as u32) << 8) | ((store[at + 2] as u32) << 16) | ((store[at + 3] as u32) << 24)) as usize;
 
+/// The size of the record whose header is at `at`.
+fn recordSize(store: Slice<u8>, at: usize) -> usize {
+    let per: usize = if ((getU32(store, at + 20) & RECORD_MARKED) != 0) 2 else 1;
+    return RECORD_HEAD + (getU32(store, at + 4) + getU32(store, at + 8)) * per + 4;
+}
+
 /// Drops the oldest record of `store`, moving the rest down.
 fn dropOldest(store: SliceMut<u8>, state: borrow mut TextHistory) {
     if (state.end == 0) {
         return;
     }
-    let size = RECORD_HEAD + getU32(store, 4) + getU32(store, 8) + 4;
+    let size = recordSize(store, 0);
     for (i in size..state.end) {
         store[i - size] = store[i];
     }
@@ -934,13 +1002,16 @@ fn dropOldest(store: SliceMut<u8>, state: borrow mut TextHistory) {
 }
 
 /// Records an edit about to be made: bytes [`from`, `from + removed.length`) become `inserted`, the selection
-/// before it `caret` and `anchor`. A typed character right after the record being typed joins it.
+/// before it `caret` and `anchor`. In a document with marks, `removedMarks` are the removed bytes' and `mark` the
+/// inserted ones' (null without marks). A typed character right after the record being typed joins it.
 fn record(
     store: SliceMut<u8>,
     state: borrow mut TextHistory,
     from: usize,
     removed: Slice<u8>,
+    removedMarks: Slice<u8>,
     inserted: Slice<u8>,
+    mark: u8?,
     caret: usize,
     anchor: usize,
     typed: bool,
@@ -948,6 +1019,7 @@ fn record(
     if (store.length == 0) {
         return;
     }
+    let per: usize = if (mark == null) 1 else 2;
     // A run of typing goes on until a space or a line break, which ends it.
     let ends = inserted.length == 1 && (inserted[0] == ' ' || inserted[0] == '\n');
     state.end = state.used; // what was undone cannot be redone after a new edit
@@ -955,21 +1027,25 @@ fn record(
     if (joins) {
         let size = getU32(store, state.used - 4);
         let start = state.used - size;
-        if (state.used + inserted.length <= store.length) {
-            // Over the old trailer: the new bytes, then the trailer again.
+        let grow = inserted.length * per;
+        if (state.used + grow <= store.length) {
+            // Over the old trailer: the new bytes (each with its mark), then the trailer again.
             let at = state.used - 4;
             for (i in 0..inserted.length) {
-                store[at + i] = inserted[i];
+                store[at + i * per] = inserted[i];
+                if (per == 2) {
+                    store[at + i * 2 + 1] = mark ?? 0;
+                }
             }
             putU32(store, start + 8, getU32(store, start + 8) + inserted.length);
-            putU32(store, at + inserted.length, size + inserted.length);
-            state.used += inserted.length;
+            putU32(store, at + grow, size + grow);
+            state.used += grow;
             state.end = state.used;
             state.typingAt = if (ends) null else Some(from + inserted.length);
             return;
         }
     }
-    let size = RECORD_HEAD + removed.length + inserted.length + 4;
+    let size = RECORD_HEAD + (removed.length + inserted.length) * per + 4;
     if (size > store.length) {
         // An edit larger than the whole history: nothing before it can be undone across it.
         state.used = 0;
@@ -986,16 +1062,29 @@ fn record(
     putU32(store, at + 8, inserted.length);
     putU32(store, at + 12, caret);
     putU32(store, at + 16, anchor);
+    putU32(store, at + 20, if (per == 2) RECORD_MARKED else 0);
+    var w = at + RECORD_HEAD;
     for (i in 0..removed.length) {
-        store[at + RECORD_HEAD + i] = removed[i];
+        store[w + i] = removed[i];
+    }
+    w += removed.length;
+    if (per == 2) {
+        for (i in 0..removed.length) {
+            store[w + i] = if (i < removedMarks.length) removedMarks[i] else 0;
+        }
+        w += removed.length;
     }
     for (i in 0..inserted.length) {
-        store[at + RECORD_HEAD + removed.length + i] = inserted[i];
+        store[w + i * per] = inserted[i];
+        if (per == 2) {
+            store[w + i * 2 + 1] = mark ?? 0;
+        }
     }
     putU32(store, at + size - 4, size);
     state.used += size;
     state.end = state.used;
-    state.typingAt = if (typed && removed.length == 0 && !ends) Some(from + inserted.length) else null;
+    // Typing goes on growing it, even when its first character replaced a selection: its inserted bytes are last.
+    state.typingAt = if (typed && !ends) Some(from + inserted.length) else null;
 }
 
 /// A text editor's document, all in caller-owned memory: the text (`buf`, its first `len` bytes), the index of its
@@ -1018,6 +1107,11 @@ public struct TextDocument<region r> {
     /// The place across (from the view's text edge) that Up and Down keep while they move the caret through
     /// shorter lines; negative when there is none (any other move forgets it). Carried over as `wrapWidth` is.
     public goalX: f32;
+    /// A rich document's marks: one for each byte of the text (its first `len`), the look it is drawn in (an index
+    /// into the editor's looks; 0 the plain one). Null for plain text. Edits, Undo and Redo keep them in step.
+    public marks: SliceMut<r, u8>?;
+    /// The mark typed and pasted text takes (`setMark` with nothing selected sets it).
+    public typing: u8;
 
     /// A document of `buf`'s first `len` bytes, its lines indexed into `starts`.
     public fn over(
@@ -1040,11 +1134,64 @@ public struct TextDocument<region r> {
             undo: TextHistory.create(),
             wrapWidth: 0.0,
             goalX: -1.0,
+            marks: null,
+            typing: 0,
         };
+    }
+
+    /// A rich document: as `over`, with `marks` (as long as `buf`; its first `len` the text's) saying the look of
+    /// each byte.
+    public fn styled(
+        buf: SliceMut<r, u8>,
+        len: usize,
+        marks: SliceMut<r, u8>,
+        starts: SliceMut<r, u32>,
+        rows: SliceMut<r, u16>,
+        history: SliceMut<r, u8>,
+    ) -> TextDocument<r> {
+        var doc = TextDocument.over(buf, len, starts, rows, history);
+        doc.marks = marks;
+        return doc;
     }
 
     /// The text.
     public fn text(borrow this) -> Slice<u8> => this.buf[0..this.len];
+
+    /// Gives the selection mark `mark` (Undo takes it back), or with nothing selected makes it the mark typing
+    /// takes from here. Whether the text's marks changed.
+    public fn setMark(borrow mut this, mark: u8) -> bool {
+        if (this.marks == null) {
+            return false;
+        }
+        if (!this.edit.selects()) {
+            this.typing = mark;
+            return false;
+        }
+        this.typing = mark;
+        return markIn(mut this, this.edit.from(), this.edit.to(), mark);
+    }
+
+    /// The mark all of the selection has (with nothing selected, the mark typing takes), or null when it is mixed.
+    public fn selectionMark(borrow this) -> u8? {
+        if (!this.edit.selects()) {
+            return this.typing;
+        }
+        let first = this.markAt(this.edit.from());
+        for (i in this.edit.from()..this.edit.to()) {
+            if (this.markAt(i) != first) {
+                return null;
+            }
+        }
+        return first;
+    }
+
+    /// The mark of byte `at` (0 past the end, or without marks).
+    public fn markAt(borrow this, at: usize) -> u8 {
+        return match (borrow this.marks) {
+            Some(m) => if (at < this.len && at < m.length) m[at] else 0,
+            null => 0,
+        };
+    }
 }
 
 impl Controls {
@@ -1076,35 +1223,14 @@ impl Controls {
         var changed = false;
         if (ui.hasFocus(h) && doc.count > 0) {
             if (ui.commanded(EditCommand.Undo)) {
-                changed = undoIn(
-                    doc.buf,
-                    mut doc.len,
-                    doc.starts,
-                    mut doc.count,
-                    mut doc.edit,
-                    doc.history,
-                    mut doc.undo,
-                ) ||
-                    changed;
+                changed = undoIn(mut doc) || changed;
             }
             if (ui.commanded(EditCommand.Redo)) {
-                changed = redoIn(
-                    doc.buf,
-                    mut doc.len,
-                    doc.starts,
-                    mut doc.count,
-                    mut doc.edit,
-                    doc.history,
-                    mut doc.undo,
-                ) ||
-                    changed;
+                changed = redoIn(mut doc) || changed;
             }
             if (ui.commanded(EditCommand.Cut) && doc.edit.selects()) {
                 ui.copyText(doc.buf[doc.edit.from()..doc.edit.to()]);
-                changed = replaceIn(
-                    doc.buf, mut doc.len, doc.starts, mut doc.count, mut doc.edit, "".bytes(), doc.history, mut doc.undo,
-                    false,
-                ) || changed;
+                changed = replaceIn(mut doc, "".bytes(), false) || changed;
             }
             if (ui.commanded(EditCommand.Paste)) {
                 var pasted = [0u8; 4096];
@@ -1113,10 +1239,7 @@ impl Controls {
                 for (i in 0..n) {
                     pasted[i] = text[i];
                 }
-                changed = replaceIn(
-                    doc.buf, mut doc.len, doc.starts, mut doc.count, mut doc.edit, pasted[0..n], doc.history, mut doc.undo,
-                    false,
-                ) || changed;
+                changed = replaceIn(mut doc, pasted[0..n], false) || changed;
             }
             loop {
                 let c = ui.nextChar();
@@ -1128,34 +1251,22 @@ impl Controls {
                 }
                 var bytes = [0u8; 4];
                 let n = encodeUtf8(c, mut bytes);
-                changed = replaceIn(
-                    doc.buf, mut doc.len, doc.starts, mut doc.count, mut doc.edit, bytes[0..n], doc.history, mut doc.undo,
-                    true,
-                ) || changed;
+                changed = replaceIn(mut doc, bytes[0..n], true) || changed;
             }
             if (ui.keyHit(Key.Enter)) {
-                changed = replaceIn(
-                    doc.buf, mut doc.len, doc.starts, mut doc.count, mut doc.edit, "\n".bytes(), doc.history, mut doc.undo,
-                    true,
-                ) || changed;
+                changed = replaceIn(mut doc, "\n".bytes(), true) || changed;
             }
             if (ui.keyHit(Key.Backspace) && (doc.edit.selects() || doc.edit.caret > 0)) {
                 if (!doc.edit.selects()) {
                     doc.edit.anchor = stepBack(doc.buf[0..doc.len], doc.starts[0..doc.count], doc.edit.caret);
                 }
-                changed = replaceIn(
-                    doc.buf, mut doc.len, doc.starts, mut doc.count, mut doc.edit, "".bytes(), doc.history, mut doc.undo,
-                    false,
-                ) || changed;
+                changed = replaceIn(mut doc, "".bytes(), false) || changed;
             }
             if (ui.keyHit(Key.Delete) && (doc.edit.selects() || doc.edit.caret < doc.len)) {
                 if (!doc.edit.selects()) {
                     doc.edit.anchor = stepOn(doc.buf[0..doc.len], doc.starts[0..doc.count], doc.edit.caret);
                 }
-                changed = replaceIn(
-                    doc.buf, mut doc.len, doc.starts, mut doc.count, mut doc.edit, "".bytes(), doc.history, mut doc.undo,
-                    false,
-                ) || changed;
+                changed = replaceIn(mut doc, "".bytes(), false) || changed;
             }
         }
         if (changed) {
@@ -1191,99 +1302,180 @@ impl Controls {
     }
 }
 
-/// The selection of `buf[0..len]` replaced by `insert`, the caret after it and nothing selected, the index
-/// following, the edit recorded in `history` (`typed`: a typed character, which may join a run of typing); whether
-/// anything changed (false too when the text or its index has no room for it).
-fn replaceIn(
-    buf: SliceMut<u8>,
-    len: borrow mut usize,
-    starts: SliceMut<u32>,
-    count: borrow mut usize,
-    edit: borrow mut TextEdit,
-    insert: Slice<u8>,
-    history: SliceMut<u8>,
-    state: borrow mut TextHistory,
-    typed: bool,
-) -> bool {
-    let from = edit.from();
-    let to = edit.to();
+/// The selection of `doc` replaced by `insert` (in the document's typing mark, if it has marks), the caret after
+/// it and nothing selected, the index following, the edit recorded in its history (`typed`: a typed character,
+/// which may join a run of typing); whether anything changed (false too when the text, its marks or its index has
+/// no room for it).
+fn replaceIn(doc: borrow mut TextDocument, insert: Slice<u8>, typed: bool) -> bool {
+    let from = doc.edit.from();
+    let to = doc.edit.to();
     if (from == to && insert.length == 0) {
         return false;
     }
-    let lines = count - newlines(buf[from..to]) + newlines(insert);
-    if (lines > starts.length || len - (to - from) + insert.length > buf.length) {
+    let lines = doc.count - newlines(doc.buf[from..to]) + newlines(insert);
+    let room = doc.len - (to - from) + insert.length;
+    let marksRoom = match (borrow doc.marks) {
+        Some(m) => room <= m.length,
+        null => true,
+    };
+    if (lines > doc.starts.length || room > doc.buf.length || !marksRoom) {
         return false;
     }
-    record(history, mut state, from, buf[from..to], insert, edit.caret, edit.anchor, typed);
-    let _ = spliceBytes(buf, mut len, from, to, insert);
-    let first = lineAt(starts[0..count], count, from) + 1;
-    count = reindexLines(buf[0..len], starts, first) ?? count;
-    edit.caret = from + insert.length;
-    edit.anchor = edit.caret;
+    let caret = doc.edit.caret;
+    let anchor = doc.edit.anchor;
+    match (borrow mut doc.marks) {
+        Some(m) => {
+            record(
+                doc.history,
+                mut doc.undo,
+                from,
+                doc.buf[from..to],
+                m[from..to],
+                insert,
+                doc.typing,
+                caret,
+                anchor,
+                typed,
+            );
+            var n = doc.len;
+            let _ = spliceFill(mut m[..], mut n, from, to, insert.length, doc.typing);
+        }
+        null => {
+            let none = [0u8];
+            record(doc.history, mut doc.undo, from, doc.buf[from..to], none[0..0], insert, null, caret, anchor, typed);
+        }
+    }
+    let _ = spliceBytes(doc.buf, mut doc.len, from, to, insert);
+    let first = lineAt(doc.starts[0..doc.count], doc.count, from) + 1;
+    doc.count = reindexLines(doc.buf[0..doc.len], doc.starts, first) ?? doc.count;
+    doc.edit.caret = from + insert.length;
+    doc.edit.anchor = doc.edit.caret;
     return true;
 }
 
-/// Undoes the last edit of `history`: its inserted bytes become the removed ones again, and the selection is as it
-/// was before it. False when there is none, or no room to put the text back.
-fn undoIn(
-    buf: SliceMut<u8>,
-    len: borrow mut usize,
-    starts: SliceMut<u32>,
-    count: borrow mut usize,
-    edit: borrow mut TextEdit,
-    history: SliceMut<u8>,
-    state: borrow mut TextHistory,
-) -> bool {
-    if (state.used < RECORD_HEAD + 4) {
+/// Gives bytes [`from`, `to`) of a rich `doc` mark `mark`, recorded so that Undo takes it back; the selection stays.
+/// False when it has no marks or nothing changes.
+fn markIn(doc: borrow mut TextDocument, from: usize, to: usize, mark: u8) -> bool {
+    let caret = doc.edit.caret;
+    let anchor = doc.edit.anchor;
+    match (borrow mut doc.marks) {
+        Some(m) => {
+            var differs = false;
+            for (i in from..to) {
+                if (m[i] != mark) {
+                    differs = true;
+                }
+            }
+            if (!differs) {
+                return false;
+            }
+            // A record whose text is the same before and after: only its marks change.
+            record(
+                doc.history,
+                mut doc.undo,
+                from,
+                doc.buf[from..to],
+                m[from..to],
+                doc.buf[from..to],
+                mark,
+                caret,
+                anchor,
+                false,
+            );
+            for (i in from..to) {
+                m[i] = mark;
+            }
+            return true;
+        }
+        null => { return false; }
+    }
+}
+
+/// Undoes the last edit of `doc`'s history: its inserted bytes become the removed ones again (with their marks),
+/// and the selection is as it was before it. False when there is none, or no room to put the text back.
+fn undoIn(doc: borrow mut TextDocument) -> bool {
+    if (doc.undo.used < RECORD_HEAD + 4) {
         return false;
     }
-    let size = getU32(history, state.used - 4);
-    let at = state.used - size;
+    let history = doc.history;
+    let size = getU32(history, doc.undo.used - 4);
+    let at = doc.undo.used - size;
     let from = getU32(history, at);
     let removed = getU32(history, at + 4);
     let inserted = getU32(history, at + 8);
+    let marked = (getU32(history, at + 20) & RECORD_MARKED) != 0;
     let back = history[at + RECORD_HEAD..at + RECORD_HEAD + removed];
-    let lines = count - newlines(buf[from..from + inserted]) + newlines(back);
-    if (from + inserted > len || lines > starts.length || !spliceBytes(buf, mut len, from, from + inserted, back)) {
+    let lines = doc.count - newlines(doc.buf[from..from + inserted.min(doc.len - from.min(doc.len))]) + newlines(back);
+    if (from + inserted > doc.len || lines > doc.starts.length) {
         return false;
     }
-    let first = lineAt(starts[0..count], count, from) + 1;
-    count = reindexLines(buf[0..len], starts, first) ?? count;
-    edit.caret = getU32(history, at + 12).min(len);
-    edit.anchor = getU32(history, at + 16).min(len);
-    state.used = at;
-    state.typingAt = null;
+    let lenBefore = doc.len;
+    if (!spliceBytes(doc.buf, mut doc.len, from, from + inserted, back)) {
+        return false;
+    }
+    match (borrow mut doc.marks) {
+        Some(m) => {
+            var n = lenBefore;
+            if (marked) {
+                let backMarks = history[at + RECORD_HEAD + removed..at + RECORD_HEAD + removed * 2];
+                let _ = spliceEvery(mut m[..], mut n, from, from + inserted, backMarks, 1, 0);
+            } else {
+                let _ = spliceFill(mut m[..], mut n, from, from + inserted, removed, 0);
+            }
+        }
+        null => {}
+    }
+    let first = lineAt(doc.starts[0..doc.count], doc.count, from) + 1;
+    doc.count = reindexLines(doc.buf[0..doc.len], doc.starts, first) ?? doc.count;
+    doc.edit.caret = getU32(history, at + 12).min(doc.len);
+    doc.edit.anchor = getU32(history, at + 16).min(doc.len);
+    doc.undo.used = at;
+    doc.undo.typingAt = null;
     return true;
 }
 
-/// Makes the edit after `history`'s undone ones again. False when there is none, or no room for it.
-fn redoIn(
-    buf: SliceMut<u8>,
-    len: borrow mut usize,
-    starts: SliceMut<u32>,
-    count: borrow mut usize,
-    edit: borrow mut TextEdit,
-    history: SliceMut<u8>,
-    state: borrow mut TextHistory,
-) -> bool {
-    if (state.end < state.used + RECORD_HEAD + 4) {
+/// Makes the edit after `doc`'s undone ones again. False when there is none, or no room for it.
+fn redoIn(doc: borrow mut TextDocument) -> bool {
+    if (doc.undo.end < doc.undo.used + RECORD_HEAD + 4) {
         return false;
     }
-    let at = state.used;
+    let history = doc.history;
+    let at = doc.undo.used;
     let from = getU32(history, at);
     let removed = getU32(history, at + 4);
     let inserted = getU32(history, at + 8);
-    let again = history[at + RECORD_HEAD + removed..at + RECORD_HEAD + removed + inserted];
-    let lines = count - newlines(buf[from..from + removed]) + newlines(again);
-    if (from + removed > len || lines > starts.length || !spliceBytes(buf, mut len, from, from + removed, again)) {
+    let marked = (getU32(history, at + 20) & RECORD_MARKED) != 0;
+    let per: usize = if (marked) 2 else 1;
+    let body = at + RECORD_HEAD + removed * per;
+    let again = history[body..body + inserted * per];
+    if (from + removed > doc.len) {
         return false;
     }
-    let first = lineAt(starts[0..count], count, from) + 1;
-    count = reindexLines(buf[0..len], starts, first) ?? count;
-    edit.caret = from + inserted;
-    edit.anchor = edit.caret;
-    state.used = at + RECORD_HEAD + removed + inserted + 4;
-    state.typingAt = null;
+    let lines = doc.count - newlines(doc.buf[from..from + removed]) + newlinesEvery(again, per);
+    if (lines > doc.starts.length) {
+        return false;
+    }
+    let lenBefore = doc.len;
+    if (!spliceEvery(doc.buf, mut doc.len, from, from + removed, again, per, 0)) {
+        return false;
+    }
+    match (borrow mut doc.marks) {
+        Some(m) => {
+            var n = lenBefore;
+            if (marked) {
+                let _ = spliceEvery(mut m[..], mut n, from, from + removed, again, 2, 1);
+            } else {
+                let _ = spliceFill(mut m[..], mut n, from, from + removed, inserted, 0);
+            }
+        }
+        null => {}
+    }
+    let first = lineAt(doc.starts[0..doc.count], doc.count, from) + 1;
+    doc.count = reindexLines(doc.buf[0..doc.len], doc.starts, first) ?? doc.count;
+    doc.edit.caret = from + inserted;
+    doc.edit.anchor = doc.edit.caret;
+    doc.undo.used = at + RECORD_HEAD + (removed + inserted) * per + 4;
+    doc.undo.typingAt = null;
     return true;
 }
 

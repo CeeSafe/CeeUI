@@ -1,0 +1,110 @@
+// SPDX-License-Identifier: MIT
+// A rich document's marks (TextDocument.styled): a look for each byte that typing, marking, Undo and Redo keep in
+// step with the text. Driven through the editor of text_view_test.
+
+import claywind;
+
+/// The marks of `doc`'s text, as digits ("0012").
+fn marksAre(doc: borrow EditorDoc, want: StringView) -> bool {
+    let w = want.bytes();
+    if (doc.len != w.length) {
+        return false;
+    }
+    for (i in 0..w.length) {
+        if (doc.marks[i] != w[i] - '0') {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn richEditor(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    text: StringView,
+) -> Result<EditorDoc, TestFailure> {
+    var doc = focusedEditor(mut ui, mut platform, text)?;
+    doc.rich = true;
+    return Ok(doc);
+}
+
+@test
+fn typingTakesTheTypingMark() -> Result<void, TestFailure> {
+    var storage = heap(2097152);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var doc = richEditor(mut ui, mut platform, "")?;
+    typeChars(mut platform, "ab");
+    editorFrame(mut ui, mut platform, mut doc)?;
+    // With nothing selected, a mark is for what is typed next.
+    doc.markWanted = 2;
+    typeChars(mut platform, "cd");
+    editorFrame(mut ui, mut platform, mut doc)?;
+    Check.isTrue(isText(doc, "abcd") && marksAre(doc, "0022"), "abcd marked 0022")?;
+    // A line break and a paste take it too.
+    doc.paste = true;
+    editorFrame(mut ui, mut platform, mut doc)?;
+    Check.isTrue(isText(doc, "abcdx\ny") && marksAre(doc, "0022222"), "pasted in the typing mark")?;
+    // Deleting takes the marks with the bytes.
+    editKey(mut ui, mut platform, mut doc, Key.Home)?;
+    editKey(mut ui, mut platform, mut doc, Key.Up)?;
+    editKey(mut ui, mut platform, mut doc, Key.Delete)?;
+    return Check.isTrue(isText(doc, "bcdx\ny") && marksAre(doc, "022222"), "one byte and its mark gone");
+}
+
+@test
+fn markingASelectionIsUndone() -> Result<void, TestFailure> {
+    var storage = heap(2097152);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var doc = richEditor(mut ui, mut platform, "plain words")?;
+    // "words" selected and marked 1, then "ai" of "plain" marked 3.
+    doc.edit = TextEdit { caret: 11, anchor: 6 };
+    doc.markWanted = 1;
+    editorFrame(mut ui, mut platform, mut doc)?;
+    Check.isTrue(marksAre(doc, "00000011111"), "words marked")?;
+    doc.edit = TextEdit { caret: 4, anchor: 2 };
+    doc.markWanted = 3;
+    editorFrame(mut ui, mut platform, mut doc)?;
+    Check.isTrue(marksAre(doc, "00330011111"), "ai marked")?;
+    command(mut ui, mut platform, mut doc, EditCommand.Undo)?;
+    Check.isTrue(marksAre(doc, "00000011111") && isText(doc, "plain words"), "the second marking undone")?;
+    Check.isTrue(doc.edit.caret == 4 && doc.edit.anchor == 2, "its selection back")?;
+    command(mut ui, mut platform, mut doc, EditCommand.Undo)?;
+    Check.isTrue(marksAre(doc, "00000000000"), "both undone")?;
+    command(mut ui, mut platform, mut doc, EditCommand.Redo)?;
+    command(mut ui, mut platform, mut doc, EditCommand.Redo)?;
+    return Check.isTrue(marksAre(doc, "00330011111") && isText(doc, "plain words"), "and made again");
+}
+
+@test
+fn undoingAnEditBringsBackItsMarks() -> Result<void, TestFailure> {
+    var storage = heap(2097152);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var doc = richEditor(mut ui, mut platform, "one two")?;
+    doc.edit = TextEdit { caret: 7, anchor: 4 };
+    doc.markWanted = 2;
+    editorFrame(mut ui, mut platform, mut doc)?;
+    // "two" (marked 2) typed over in mark 1: Undo brings it back in its own.
+    doc.edit = TextEdit { caret: 7, anchor: 4 };
+    doc.markWanted = 1;
+    editorFrame(mut ui, mut platform, mut doc)?;
+    doc.markWanted = null;
+    // The selection marked 1 as well (setMark marks a selection); typed over now, in mark 1.
+    doc.edit = TextEdit { caret: 7, anchor: 4 };
+    typeChars(mut platform, "six");
+    editorFrame(mut ui, mut platform, mut doc)?;
+    Check.isTrue(isText(doc, "one six") && marksAre(doc, "0000111"), "typed over")?;
+    // Undo takes the typing back (one record: the word), then the marking.
+    command(mut ui, mut platform, mut doc, EditCommand.Undo)?;
+    Check.isTrue(isText(doc, "one two") && marksAre(doc, "0000111"), "two back, as it was marked then")?;
+    command(mut ui, mut platform, mut doc, EditCommand.Undo)?;
+    Check.isTrue(marksAre(doc, "0000222"), "its first marking back")?;
+    command(mut ui, mut platform, mut doc, EditCommand.Redo)?;
+    command(mut ui, mut platform, mut doc, EditCommand.Redo)?;
+    return Check.isTrue(isText(doc, "one six") && marksAre(doc, "0000111"), "redone, marks and all");
+}
