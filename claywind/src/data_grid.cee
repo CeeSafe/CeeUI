@@ -1,0 +1,272 @@
+// SPDX-License-Identifier: MIT
+// A data grid: a virtual list (list_view.cee) of rows cut into columns under a header. A header's title sorts by
+// its column (the program sorts its rows: the grid says when), and the edge at a title's right is dragged to make
+// the column wider or narrower. The header stays at the top and follows the rows when they scroll sideways.
+//
+//     let grid = Controls.dataGrid(mut ui, "orders", titles, mut widths[..], orders.length, 28.0, Size.grow(),
+//         mut sort, mut selected);
+//     if (grid.sortChanged) { ...sort the rows by `sort`... }
+//     for (i in grid.first..grid.last) {
+//         Controls.gridRow(mut ui, grid, i, mut selected, names[i]);
+//         Controls.gridCell(mut ui, grid, 0);
+//         ui.label(names[i], Text.of());
+//         ui.close();
+//         ...a cell for each column...
+//         ui.close();
+//     }
+//     Controls.endDataGrid(mut ui, grid);
+
+/// The most columns a grid has; titles past it are not shown.
+const GRID_COLUMNS: usize = 32;
+/// The narrowest a column is dragged to.
+const GRID_MIN_WIDTH: f32 = 32.0;
+/// The width of the edge at a title's right that resizes its column.
+const GRID_EDGE: f32 = 6.0;
+
+/// How a data grid's rows are sorted: by a column, ascending or descending (none: as the program has them).
+public struct GridSort {
+    public column: usize?;
+    public descending: bool;
+
+    public fn none() -> GridSort => GridSort { column: null, descending: false };
+    public fn by(column: usize, descending: bool) -> GridSort => GridSort { column: column, descending: descending };
+}
+
+/// A data grid being built: the rows in view the program draws, `first` to `last` (not included).
+public struct DataGrid {
+    public first: usize;
+    public last: usize;
+    /// A title was pressed this frame and the sort changed: the program sorts its rows again.
+    public sortChanged: bool;
+    count: usize;
+    rowH: f32;
+    key: u32;
+    columns: usize;
+    widths: [f32; 32];
+    total: f32;
+}
+
+impl Controls {
+    /// ClayWind_DataGrid: opens a grid of `count` rows each `rowHeight` tall under a header of `titles`, `height`
+    /// tall itself. `widths` are the columns' widths (the program keeps them; dragging a title's edge changes
+    /// them), `sort` how the rows are sorted (a title's press changes it), `selected` the selected row. Draw rows
+    /// `first` to `last` of what it returns with gridRow and gridCell, then end it with endDataGrid.
+    public fn dataGrid(
+        ui: borrow mut Ui,
+        id: StringView,
+        titles: Slice<StringView>,
+        widths: SliceMut<f32>,
+        count: usize,
+        rowHeight: f32,
+        height: SizingAxis,
+        sort: borrow mut GridSort,
+        selected: borrow mut (usize?),
+    ) -> DataGrid {
+        let h = hashId(id);
+        let headId = subId(id, "head", -1);
+        let columns = titles.length.min(widths.length).min(GRID_COLUMNS);
+        let rowH = rowHeight.max(1.0);
+        let p = ui.pointer();
+        var sortChanged = false;
+        // The header: an edge dragged resizes its column, a title pressed sorts by it.
+        for (c in 0..columns) {
+            let title = subId(id, "title", truncate<i64>(c));
+            let edge = subId(id, "edge", truncate<i64>(c));
+            if (p.pressed && ui.overHash(edge)) {
+                // Held at a distance from the column's right edge, which the drag keeps.
+                let grab = match (ui.boxOfHash(title)) {
+                    Some(b) => b.x + widths[c] - p.position.x,
+                    null => 0.0,
+                };
+                ui.captureWith(edge, grab);
+            } else if (ui.pressedOn(title)) {
+                sortChanged = true;
+                let same = match (sort.column) {
+                    Some(k) => k == c,
+                    null => false,
+                };
+                sort.descending = same && !sort.descending;
+                sort.column = c;
+            }
+            if (ui.captured() == edge) {
+                if (p.down) {
+                    match (ui.boxOfHash(title)) {
+                        Some(b) => { widths[c] = (p.position.x + ui.captureAnchor() - b.x).max(GRID_MIN_WIDTH); }
+                        null => {}
+                    }
+                }
+                if (p.released) {
+                    ui.capture(0);
+                }
+            }
+        }
+        // The rows: focus, and the keys move the selection as a virtual list's do.
+        let box = ui.boxOfHash(h);
+        let viewH = match (box) {
+            Some(b) => b.h,
+            null => ui.screenSize().h,
+        };
+        if (ui.pressedOn(h)) {
+            ui.setFocus(h);
+        }
+        if (count == 0) {
+            selected = null;
+        } else {
+            match (selected) {
+                Some(s) => {
+                    if (s >= count) {
+                        selected = count - 1;
+                    }
+                }
+                null => {}
+            }
+        }
+        if (ui.hasFocus(h) && count > 0) {
+            let page = truncate<usize>((viewH / rowH).floor().max(2.0)) - 1;
+            match (virtualListKey(ui, selected, count, page)) {
+                Some(target) => {
+                    selected = target;
+                    match (box) {
+                        Some(b) => {
+                            let top = round<f32>(target) * rowH;
+                            let shownTop = (0.0 - ui.scrollOffsetHash(h).y).max(0.0);
+                            if (top < shownTop) {
+                                ui.scrollByHash(h, 0.0, shownTop - top);
+                            } else if (top + rowH > shownTop + b.h) {
+                                ui.scrollByHash(h, 0.0, shownTop + b.h - (top + rowH));
+                            }
+                        }
+                        null => {}
+                    }
+                }
+                null => {}
+            }
+        }
+        // The header follows the rows sideways.
+        let bodyX = ui.scrollOffsetHash(h).x;
+        let headX = ui.scrollOffsetHash(headId).x;
+        if (bodyX != headX) {
+            ui.scrollByHash(headId, bodyX - headX, 0.0);
+        }
+        var grid = DataGrid {
+            first: 0,
+            last: 0,
+            sortChanged: sortChanged,
+            count: count,
+            rowH: rowH,
+            key: h,
+            columns: columns,
+            widths: [0.0f32; 32],
+            total: 0.0,
+        };
+        for (c in 0..columns) {
+            grid.widths[c] = widths[c].max(GRID_MIN_WIDTH);
+            grid.total += grid.widths[c];
+        }
+        let focused = ui.hasFocus(h);
+        ui.open(
+            Style.column().w(Size.grow()).h(height).bg(SLATE_800).rounded(Radius.Md).border(
+                1.0,
+                if (focused) BLUE_500 else SLATE_600,
+            ),
+        );
+        ui.open(
+            Style.row().idHash(headId).w(Size.grow()).h(Size.fixed(rowH)).scroll(ScrollAxis.Horizontal).bg(SLATE_900),
+        );
+        for (c in 0..columns) {
+            let title = subId(id, "title", truncate<i64>(c));
+            let edge = subId(id, "edge", truncate<i64>(c));
+            ui.open(
+                Style.row().idHash(title).w(Size.fixed(grid.widths[c])).h(Size.grow()).pl(space(3.0)).alignXY(
+                    AxisAlign.Start,
+                    AxisAlign.Center,
+                ).gap(space(1.0)).cursor(Cursor.Pointer).clip().hover(Style.of().bg(SLATE_700)),
+            );
+            let node = ui.access(title, AccessRole.Button, titles[c].bytes());
+            let sorted = match (sort.column) {
+                Some(k) => k == c,
+                null => false,
+            };
+            ui.accessFlag(node, ACCESS_SELECTED, sorted);
+            ui.label(titles[c], Text.of().size(13.0).color(SLATE_300).wrap(TextWrap.None));
+            if (sorted) {
+                // A chevron down for descending, turned up for ascending.
+                ui.open(
+                    Style.box().size(Size.fixed(12.0)).icon(ICON_CHEVRON_DOWN, SLATE_300, 0.0).rotate(
+                        if (sort.descending) 0.0 else 180.0,
+                    ),
+                );
+                ui.close();
+            }
+            ui.open(Style.box().w(Size.grow()));
+            ui.close();
+            ui.open(
+                Style.box().idHash(edge).w(Size.fixed(GRID_EDGE)).h(Size.grow()).alignXY(
+                    AxisAlign.Center,
+                    AxisAlign.Center,
+                ).bg(if (ui.captured() == edge) BLUE_500 else NONE).hover(Style.of().bg(SLATE_500)),
+            );
+            ui.open(Style.box().w(Size.fixed(1.0)).h(Size.grow()).bg(SLATE_600));
+            ui.close();
+            ui.close();
+            ui.close();
+        }
+        ui.close();
+        let rows = visibleLines(ui.scrollOffsetHash(h).y, viewH, rowH, count, 4);
+        grid.first = rows[0];
+        grid.last = rows[1];
+        ui.open(Style.column().id(id).w(Size.grow()).h(Size.grow()).scroll(ScrollAxis.Both));
+        // The rows above the view, as their height.
+        ui.open(Style.box().w(Size.fixed(grid.total)).h(Size.fixed(round<f32>(grid.first) * rowH)));
+        ui.close();
+        return grid;
+    }
+
+    /// Opens row `i` of `grid`, named `name` for a screen reader: a press selects it. The program puts a cell in it
+    /// for each column (gridCell), then closes it (ui.close()). True when it is the selected row.
+    public fn gridRow(
+        ui: borrow mut Ui,
+        grid: borrow DataGrid,
+        i: usize,
+        selected: borrow mut (usize?),
+        name: StringView,
+    ) -> bool {
+        let row = virtualRowId(grid.key, i);
+        if (ui.pressedOn(row)) {
+            selected = i;
+            ui.setFocus(grid.key);
+        }
+        let on = match (selected) {
+            Some(s) => s == i,
+            null => false,
+        };
+        var style = Style.row().idHash(row).w(Size.fixed(grid.total)).h(Size.fixed(grid.rowH)).cursor(Cursor.Pointer)
+            .bg(if (on) BLUE_600 else if (i % 2 == 1) SLATE_900 else NONE);
+        if (!on) {
+            style = style.hover(Style.of().bg(SLATE_700));
+        }
+        ui.open(style);
+        let node = ui.access(row, AccessRole.ListItem, name.bytes());
+        ui.accessFlag(node, ACCESS_SELECTED, on);
+        return on;
+    }
+
+    /// Opens the cell of column `column` in the row being drawn, its column's width: the program draws its content,
+    /// then closes it (ui.close()). What does not fit is clipped.
+    public fn gridCell(ui: borrow mut Ui, grid: borrow DataGrid, column: usize) {
+        let w = if (column < grid.columns) grid.widths[column] else GRID_MIN_WIDTH;
+        ui.open(
+            Style.row().w(Size.fixed(w)).h(Size.grow()).px(space(3.0)).alignXY(AxisAlign.Start, AxisAlign.Center).gap(
+                space(1.0),
+            ).clip(),
+        );
+    }
+
+    /// Ends a data grid: the rows below the view, as their height, and the grid itself.
+    public fn endDataGrid(ui: borrow mut Ui, grid: borrow DataGrid) {
+        ui.open(Style.box().w(Size.fixed(1.0)).h(Size.fixed(round<f32>(grid.count - grid.last) * grid.rowH)));
+        ui.close();
+        ui.close();
+        ui.close();
+    }
+}

@@ -106,6 +106,8 @@ public struct Ui<region r> {
     // Focus and drag capture (controls.h's ClayWind_focusedId / ClayWind_activeId), and this frame's focusables.
     focusedId: u32;
     activeId: u32;
+    /// Where the captured control was taken hold of, in whatever terms it chose (captureAnchor).
+    anchor: f32;
     focusables: FixedList<r, u32>;
     // Text editing with the host (ui_edit.cee): this frame's edit commands, text pasted and copied, the input
     // method's composition, and the focused text field's caret.
@@ -226,6 +228,7 @@ public struct Ui<region r> {
             clock: 0.0,
             focusedId: 0,
             activeId: 0,
+            anchor: 0.0,
             focusables: FixedList<u32>.over(focusables),
             commands: 0,
             pasted: pasted,
@@ -613,6 +616,16 @@ public struct Ui<region r> {
         this.activeId = id;
     }
 
+    /// Captures `id` and keeps `anchor` with it: how far from what it drags it was taken hold of, so that the drag
+    /// keeps that distance (a column's edge, grabbed a few points from it).
+    fn captureWith(borrow mut this, id: u32, anchor: f32) {
+        this.activeId = id;
+        this.anchor = anchor;
+    }
+
+    /// The anchor the captured control kept (captureWith).
+    fn captureAnchor(borrow this) -> f32 => this.anchor;
+
     /// ClayWind_RegisterFocusable: `id` takes part in Tab cycling this frame.
     public fn registerFocusable(borrow mut this, id: u32) {
         this.focusables.push(id);
@@ -704,8 +717,11 @@ public struct Ui<region r> {
     // ---- scrolling -------------------------------------------------------------------------------------------------
 
     /// The scroll offset of the container named `name` (0, 0 if it is not one).
-    public fn scrollOffset(borrow this, name: StringView) -> Vec2 {
-        return match (this.scrollSlot(hashId(name))) {
+    public fn scrollOffset(borrow this, name: StringView) -> Vec2 => this.scrollOffsetHash(hashId(name));
+
+    /// The scroll offset of the container whose id hashes to `id`.
+    fn scrollOffsetHash(borrow this, id: u32) -> Vec2 {
+        return match (this.scrollSlot(id)) {
             Some(k) => this.scrolls.items[k].position,
             null => Vec2.zero(),
         };
@@ -713,7 +729,11 @@ public struct Ui<region r> {
 
     /// ScrollContainerByY / ByX: moves by a delta, clamped to the content.
     public fn scrollBy(borrow mut this, name: StringView, dx: f32, dy: f32) {
-        match (this.scrollSlot(hashId(name))) {
+        this.scrollByHash(hashId(name), dx, dy);
+    }
+
+    fn scrollByHash(borrow mut this, id: u32, dx: f32, dy: f32) {
+        match (this.scrollSlot(id)) {
             Some(k) => {
                 let s = this.scrolls.items[k];
                 let minX = -(s.content.w - s.size.w).max(0.0);

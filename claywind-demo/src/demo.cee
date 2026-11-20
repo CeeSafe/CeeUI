@@ -19,8 +19,11 @@ public const DEMO_STATE_VERSION: u32 = 1;
 const NAV_CONTROLS: usize = 1;
 const NAV_EFFECTS: usize = 2;
 const NAV_EDITOR: usize = 3;
+const NAV_DATA: usize = 4;
+/// The orders the Data page's grid shows (made up from their numbers).
+const ORDER_COUNT: usize = 10000;
 
-static NAV_ITEMS: [StringView; 6] = ["Dashboard", "Controls", "Effects", "Editor", "Activity", "Settings"];
+static NAV_ITEMS: [StringView; 6] = ["Dashboard", "Controls", "Effects", "Editor", "Data", "Settings"];
 static PRIO_ITEMS: [StringView; 3] = ["Low", "Medium", "High"];
 static FILE_ITEMS: [StringView; 6] = ["README.md", "main.c", "clay.h", "renderer.h", "controls.h", "PARITY.md"];
 static THEME_ITEMS: [StringView; 3] = ["System", "Light", "Dark"];
@@ -232,6 +235,12 @@ public struct DemoApp {
     editorWrap: f32;
     editorGoal: f32;
     editorLoaded: bool;
+    /// The Data page: its grid's rows in their sorted order, its columns' widths, sort and selection.
+    orderRows: [u32; 10000];
+    orderWidths: [f32; 4];
+    orderSort: GridSort;
+    orderSelected: usize?;
+    ordersLoaded: bool;
 
     /// main.c's initial state (and `ClayWind_darkMode = true`, which the host sets on the Ui).
     public fn create() -> DemoApp => DemoApp {
@@ -292,6 +301,11 @@ public struct DemoApp {
         editorWrap: 0.0,
         editorGoal: -1.0,
         editorLoaded: false,
+        orderRows: [0u32; 10000],
+        orderWidths: [110.0f32, 200.0, 120.0, 130.0],
+        orderSort: GridSort.none(),
+        orderSelected: null,
+        ordersLoaded: false,
     };
 
     /// Writes what the demo shows into a snapshot (hot reload: the rebuilt demo reads it back on start).
@@ -566,6 +580,8 @@ public fn demoFrameWith<M: TextMetrics, J: DemoJobs>(
         effectsPage(mut ui, app);
     } else if (app.activeNav == NAV_EDITOR) {
         editorPage(mut ui, mut app, metrics);
+    } else if (app.activeNav == NAV_DATA) {
+        dataPage(mut ui, mut app);
     } else {
         dashboard(mut ui, app);
     }
@@ -654,14 +670,16 @@ fn update(ui: borrow mut Ui, app: borrow mut DemoApp) {
     if (app.opensFiles && ui.action("save-as")) {
         app.fileWanted = FileRequest.Save;
     }
-    // Keyboard focus: Up/Down move the cursor, Enter selects the focused item.
-    if (ui.keyPressed(Key.Down)) {
+    // Keyboard focus: Up/Down move the cursor, Enter selects the focused item; not while a control has the focus
+    // (an editor's, a list's or a grid's own keys).
+    let free = ui.focused() == 0;
+    if (free && ui.keyPressed(Key.Down)) {
         app.focusedNav = (app.focusedNav + 1) % NAV_COUNT;
     }
-    if (ui.keyPressed(Key.Up)) {
+    if (free && ui.keyPressed(Key.Up)) {
         app.focusedNav = (app.focusedNav + NAV_COUNT - 1) % NAV_COUNT;
     }
-    if (ui.keyPressed(Key.Enter)) {
+    if (free && ui.keyPressed(Key.Enter)) {
         app.activeNav = app.focusedNav;
     }
     // A click on a nav item also selects it (and moves focus there).
@@ -1576,6 +1594,174 @@ fn editorPage<M: TextMetrics>(ui: borrow mut Ui, app: borrow mut DemoApp, metric
     app.editorUndo = doc.undo;
     app.editorWrap = doc.wrapWidth;
     app.editorGoal = doc.goalX;
+}
+
+static CUSTOMERS: [StringView; 8] = [
+    "Ada Lovelace",
+    "Alan Turing",
+    "Barbara Liskov",
+    "Donald Knuth",
+    "Edsger Dijkstra",
+    "Frances Allen",
+    "Grace Hopper",
+    "Katherine Johnson",
+];
+/// In alphabetical order, as the customers are, so sorting by their index sorts by name.
+static STATUSES: [StringView; 4] = ["Paid", "Pending", "Refunded", "Shipped"];
+
+/// A made-up order's numbers from its own: a hash, so they look scattered.
+fn orderHash(order: u32) -> u32 {
+    var h = order.wrappingMul(2654435761) ^ 0x9E3779B9;
+    h = (h ^ (h >> 15)).wrappingMul(2246822519);
+    return h ^ (h >> 13);
+}
+
+fn orderCustomer(order: u32) -> usize => (orderHash(order) % 8) as usize;
+fn orderStatus(order: u32) -> usize => ((orderHash(order) >> 8) % 4) as usize;
+/// Its amount in cents.
+fn orderCents(order: u32) -> u32 => (orderHash(order) >> 4) % 500000 + 100;
+
+/// Whether order `a` sorts before order `b` by column `column`.
+fn orderBefore(a: u32, b: u32, column: usize, descending: bool) -> bool {
+    let ka = match (column) {
+        1 => truncate<u32>(orderCustomer(a)),
+        2 => orderCents(a),
+        3 => truncate<u32>(orderStatus(a)),
+        _ => a,
+    };
+    let kb = match (column) {
+        1 => truncate<u32>(orderCustomer(b)),
+        2 => orderCents(b),
+        3 => truncate<u32>(orderStatus(b)),
+        _ => b,
+    };
+    if (ka == kb) {
+        return a < b; // ties stay in order number order, whichever way the column goes
+    }
+    return if (descending) ka > kb else ka < kb;
+}
+
+/// Sorts the orders by `sort`: a heap sort, in place.
+fn sortOrders(rows: SliceMut<u32>, sort: GridSort) {
+    let column = sort.column ?? 0;
+    let n = rows.length;
+    var start = n / 2;
+    var end = n;
+    while (end > 1) {
+        if (start > 0) {
+            start -= 1;
+        } else {
+            end -= 1;
+            let t = rows[0];
+            rows[0] = rows[end];
+            rows[end] = t;
+        }
+        var root = start;
+        loop {
+            let child = 2 * root + 1;
+            if (child >= end) {
+                break;
+            }
+            var big = child;
+            if (child + 1 < end && orderBefore(rows[child], rows[child + 1], column, sort.descending)) {
+                big = child + 1;
+            }
+            if (!orderBefore(rows[root], rows[big], column, sort.descending)) {
+                break;
+            }
+            let t = rows[root];
+            rows[root] = rows[big];
+            rows[big] = t;
+            root = big;
+        }
+    }
+}
+
+fn dataPage(ui: borrow mut Ui, app: borrow mut DemoApp) {
+    if (!app.ordersLoaded) {
+        for (i in 0..ORDER_COUNT) {
+            app.orderRows[i] = truncate<u32>(i) + 1001;
+        }
+        app.ordersLoaded = true;
+    }
+    let titles = ["Order", "Customer", "Amount", "Status"];
+    ui.open(Style.column().id("dataPage").w(Size.grow()).h(Size.grow()).p(space(6.0)).gap(space(3.0)));
+    ui.label("Data", Text.of().font(TEXT_XL).color(inkCol(ui)));
+    ui.label(
+        "10,000 orders; only the rows in view are built. Press a title to sort, drag its edge to resize.",
+        Text.of().color(SLATE_400),
+    );
+    let grid = Controls.dataGrid(
+        mut ui,
+        "orders",
+        titles[..],
+        mut app.orderWidths[..],
+        ORDER_COUNT,
+        30.0,
+        Size.grow(),
+        mut app.orderSort,
+        mut app.orderSelected,
+    );
+    if (grid.sortChanged) {
+        // The selected order stays selected wherever it sorts to.
+        let chosen = match (app.orderSelected) {
+            Some(i) => Some(app.orderRows[i]),
+            null => null,
+        };
+        sortOrders(mut app.orderRows[..], app.orderSort);
+        match (chosen) {
+            Some(order) => {
+                for (i in 0..ORDER_COUNT) {
+                    if (app.orderRows[i] == order) {
+                        app.orderSelected = i;
+                    }
+                }
+            }
+            null => {}
+        }
+    }
+    let cell = Text.of().size(14.0).wrap(TextWrap.None);
+    for (i in grid.first..grid.last) {
+        let order = app.orderRows[i];
+        var number = [0u8; 16];
+        var w = TextWriter.create(mut number[..]);
+        w.byte('#');
+        w.decimal(order as u64);
+        let on = Controls.gridRow(mut ui, grid, i, mut app.orderSelected, CUSTOMERS[orderCustomer(order)]);
+        let ink = if (on) WHITE else SLATE_200;
+        Controls.gridCell(mut ui, grid, 0);
+        ui.labelBytes(w.written(), cell.color(if (on) WHITE else SLATE_400));
+        ui.close();
+        Controls.gridCell(mut ui, grid, 1);
+        ui.label(CUSTOMERS[orderCustomer(order)], cell.color(ink));
+        ui.close();
+        Controls.gridCell(mut ui, grid, 2);
+        let cents = orderCents(order);
+        var amount = [0u8; 24];
+        var a = TextWriter.create(mut amount[..]);
+        a.byte('$');
+        a.decimal((cents / 100) as u64);
+        a.byte('.');
+        if (cents % 100 < 10) {
+            a.byte('0');
+        }
+        a.decimal((cents % 100) as u64);
+        ui.labelBytes(a.written(), cell.color(ink));
+        ui.close();
+        Controls.gridCell(mut ui, grid, 3);
+        let status = orderStatus(order);
+        let tint = match (status) {
+            0 => EMERALD_400,
+            1 => AMBER_400,
+            2 => ROSE_400,
+            _ => SKY_400,
+        };
+        ui.label(STATUSES[status], cell.color(if (on) WHITE else tint));
+        ui.close();
+        ui.close();
+    }
+    Controls.endDataGrid(mut ui, grid);
+    ui.close();
 }
 
 fn effectsPage(ui: borrow mut Ui, app: borrow DemoApp) {

@@ -89,6 +89,10 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   become elements (a million rows cost a screenful). The program draws each row's content between
   `Controls.virtualRow` and `ui.close()`; a press selects a row, and Up, Down, the page keys, Home and End move the
   selection while the list has the focus, scrolling just enough to show it.
+- **Data grid:** `Controls.dataGrid` is a virtual list cut into columns under a header that stays at the top and
+  follows the rows sideways. Pressing a title sorts by its column (`GridSort`; the grid says when, and the program
+  sorts its rows), and dragging a title's edge resizes its column (the program keeps the widths). Cells
+  (`Controls.gridCell`) hold anything and clip what does not fit. The demo's Data page shows 10,000 orders.
 - **Vector paths.** `PathBuilder` makes a path of lines and quadratic and cubic curves; `Ui.path` draws it in an
   element's box, filled (nonzero or even-odd) or stroked with round joins, optionally from a view box.
 - **Also:** focus cycling with Tab, vector icons, eased transitions, and dark and light themes.
