@@ -969,17 +969,19 @@ fn drawText(r: borrow mut Raster, area: Rect, run: TextRun, utf8: Slice<u8>) {
                 }
                 continue;
             }
-            if (slot.info.colr != 0) {
-                let layers = colrLayers(r.fontPool[slot.offset..slot.offset + slot.size], slot.info, g.glyph);
-                match (layers) {
-                    Some(l) => {
-                        fillPath(mut r, solidPaint(run.color), FillTarget.Layer);
-                        fillColrLayers(mut r, g.slot, l, glyphX, glyphY, size / slot.info.unitsPerEm, run.color);
-                        beginPath(mut r);
-                        continue;
-                    }
-                    null => {}
-                }
+            if (slot.info.colr != 0 && isColr(r.fontPool[slot.offset..slot.offset + slot.size], slot.info, g.glyph)) {
+                fillPath(mut r, solidPaint(run.color), FillTarget.Layer);
+                let drawn = drawColrGlyph(
+                    mut r,
+                    g.slot,
+                    g.glyph,
+                    glyphX,
+                    glyphY,
+                    size / slot.info.unitsPerEm,
+                    run.color,
+                );
+                beginPath(mut r);
+                continue;
             }
             var outline = emptyOutline();
             {

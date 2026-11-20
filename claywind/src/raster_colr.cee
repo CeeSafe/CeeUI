@@ -1,0 +1,803 @@
+// SPDX-License-Identifier: MIT
+// COLR version 1 colour glyphs (as Windows 11's Segoe UI Emoji and Noto Color Emoji draw them): each glyph is a graph
+// of paints read from the font. A glyph's outline clips the paint under it; solid colours and linear, two-circle and
+// sweep gradients fill; transforms move what is under them; a composite draws a source onto a backdrop by one of
+// the Porter-Duff operators or blend modes; and layers draw one over another. The variable forms (Var*) draw at the
+// font's default instance: their deltas are not applied.
+//
+// Glyph space has y up; the Raster's has y down. The graph is drawn in font units with y flipped (as decodeGlyph
+// flips outlines), so a point (x, y) of the font is (x, -y) here and a transform M is F M F, F = diag(1, -1).
+
+/// How deep a paint graph may nest, and how many paints a glyph may visit, so no font loops or explodes.
+const COLR_DEPTH: u32 = 48;
+const COLR_BUDGET: u32 = 4096;
+
+/// The glyph a COLR version 1 face paints `glyph` with: its root paint's offset, or null when it has none.
+fn colrV1Paint(d: Slice<u8>, f: FontInfo, glyph: u32) -> usize? {
+    let c = f.colr;
+    if (c == 0 || !valid(d, c, 34) || u16at(d, c) != 1) {
+        return null;
+    }
+    let listAt = u32at(d, c + 14) as usize;
+    if (listAt == 0 || !valid(d, c + listAt, 4)) {
+        return null;
+    }
+    let list = c + listAt;
+    let count = u32at(d, list) as usize;
+    if (!valid(d, list + 4, count * 6)) {
+        return null;
+    }
+    var lo: usize = 0;
+    var hi = count;
+    while (lo < hi) {
+        let mid = lo + (hi - lo) / 2;
+        let r = list + 4 + mid * 6;
+        let g = u16at(d, r);
+        if (g == glyph) {
+            let at = list + (u32at(d, r + 2) as usize);
+            return if (valid(d, at, 1)) at else null;
+        }
+        if (g < glyph) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return null;
+}
+
+/// The ClipBox of COLR version 1 glyph `glyph` (font units, y down), or null when the font gives none.
+fn colrClipBox(d: Slice<u8>, f: FontInfo, glyph: u32) -> Rect? {
+    let c = f.colr;
+    if (c == 0 || !valid(d, c, 34) || u16at(d, c) != 1) {
+        return null;
+    }
+    let listAt = u32at(d, c + 22) as usize;
+    if (listAt == 0 || !valid(d, c + listAt, 5)) {
+        return null;
+    }
+    let list = c + listAt;
+    let count = u32at(d, list + 1) as usize;
+    if (!valid(d, list + 5, count * 7)) {
+        return null;
+    }
+    for (k in 0..count) {
+        let r = list + 5 + k * 7;
+        if (glyph >= u16at(d, r) && glyph <= u16at(d, r + 2)) {
+            let at = list + (u24at(d, r + 4) as usize);
+            if (!valid(d, at, 9)) {
+                return null;
+            }
+            let x0 = round<f32>(i16at(d, at + 1));
+            let y0 = round<f32>(i16at(d, at + 3));
+            let x1 = round<f32>(i16at(d, at + 5));
+            let y1 = round<f32>(i16at(d, at + 7));
+            return Rect { x: x0, y: 0.0 - y1, w: x1 - x0, h: y1 - y0 };
+        }
+    }
+    return null;
+}
+
+fn u24at(d: Slice<u8>, o: usize) -> u32 => ((d[o] as u32) << 16) | ((d[o + 1] as u32) << 8) | (d[o + 2] as u32);
+fn colrF2Dot14(d: Slice<u8>, o: usize) -> f32 => round<f32>(i16at(d, o)) / 16384.0;
+fn fword(d: Slice<u8>, o: usize) -> f32 => round<f32>(i16at(d, o));
+fn fixed(d: Slice<u8>, o: usize) -> f32 => round<f32>(truncate<i32>(u32at(d, o))) / 65536.0;
+
+/// A transform of glyph space (y up) as one of the Raster's (y down).
+fn yDown(m: Affine2) -> Affine2 => Affine2 { a: m.a, b: 0.0 - m.b, c: 0.0 - m.c, d: m.d, e: m.e, f: 0.0 - m.f };
+
+/// One paint table, read: its format without the variable bit (`format`), the paints under it as offsets, and its
+/// numbers.
+struct PaintNode {
+    format: u32;
+    /// Whether it is a variable form (its colour line's stops are then 10 bytes, not 6).
+    variable: bool;
+    /// The paint under it (a composite's source), or 0.
+    child: usize;
+    /// A composite's backdrop, a gradient's colour line, or 0.
+    other: usize;
+    /// A glyph id (PaintGlyph, PaintColrGlyph), a palette index (PaintSolid), a layer count (PaintColrLayers).
+    index: u32;
+    /// The first layer (PaintColrLayers) or a composite mode.
+    first: u32;
+    /// A gradient's points, radii or angles; a solid colour's alpha in v[0].
+    v: [f32; 6];
+    /// A transform's matrix (y down).
+    m: Affine2;
+}
+
+/// The bytes each paint format needs, past which it is not read (0 for an unknown format).
+fn paintSize(format: u32) -> usize {
+    return match (format) {
+        1 => 6,
+        2 => 5,
+        4 => 16,
+        6 => 16,
+        8 => 12,
+        10 => 6,
+        11 => 3,
+        12 => 7,
+        14 => 8,
+        16 => 8,
+        18 => 12,
+        20 => 6,
+        22 => 10,
+        24 => 6,
+        26 => 10,
+        28 => 8,
+        30 => 12,
+        32 => 8,
+        _ => 0,
+    };
+}
+
+/// Reads the paint at `at`, or null when it is no paint this reader knows or runs past the font.
+fn readPaint(d: Slice<u8>, at: usize) -> PaintNode? {
+    if (!valid(d, at, 1)) {
+        return null;
+    }
+    let raw = d[at] as u32;
+    // The variable forms are the odd formats from 3 to 31, but for PaintColrGlyph (11): each one more than its
+    // static form, laid out the same with a variation index after.
+    let variable = raw >= 3 && raw <= 31 && (raw & 1) == 1 && raw != 11;
+    let format = if (variable) raw - 1 else raw;
+    let size = paintSize(format);
+    if (size == 0 || !valid(d, at, size)) {
+        return null;
+    }
+    var n = PaintNode {
+        format: format,
+        variable: variable,
+        child: 0,
+        other: 0,
+        index: 0,
+        first: 0,
+        v: [0.0f32; 6],
+        m: Affine2.identity(),
+    };
+    let up = match (format) {
+        1 => {
+            n.index = d[at + 1] as u32;
+            n.first = u32at(d, at + 2);
+            Affine2.identity()
+        }
+        2 => {
+            n.index = u16at(d, at + 1);
+            n.v[0] = colrF2Dot14(d, at + 3);
+            Affine2.identity()
+        }
+        4 => {
+            n.other = at + (u24at(d, at + 1) as usize);
+            for (k in 0usize..6) {
+                n.v[k] = fword(d, at + 4 + k * 2);
+            }
+            Affine2.identity()
+        }
+        6 => {
+            n.other = at + (u24at(d, at + 1) as usize);
+            n.v[0] = fword(d, at + 4);
+            n.v[1] = fword(d, at + 6);
+            n.v[2] = round<f32>(u16at(d, at + 8));
+            n.v[3] = fword(d, at + 10);
+            n.v[4] = fword(d, at + 12);
+            n.v[5] = round<f32>(u16at(d, at + 14));
+            Affine2.identity()
+        }
+        8 => {
+            n.other = at + (u24at(d, at + 1) as usize);
+            n.v[0] = fword(d, at + 4);
+            n.v[1] = fword(d, at + 6);
+            n.v[2] = colrF2Dot14(d, at + 8);
+            n.v[3] = colrF2Dot14(d, at + 10);
+            Affine2.identity()
+        }
+        10 => {
+            n.child = at + (u24at(d, at + 1) as usize);
+            n.index = u16at(d, at + 4);
+            Affine2.identity()
+        }
+        11 => {
+            n.index = u16at(d, at + 1);
+            Affine2.identity()
+        }
+        32 => {
+            n.child = at + (u24at(d, at + 1) as usize);
+            n.first = d[at + 4] as u32;
+            n.other = at + (u24at(d, at + 5) as usize);
+            Affine2.identity()
+        }
+        12 => {
+            n.child = at + (u24at(d, at + 1) as usize);
+            let t = at + (u24at(d, at + 4) as usize);
+            if (!valid(d, t, 24)) {
+                return null;
+            }
+            Affine2 {
+                a: fixed(d, t),
+                b: fixed(d, t + 4),
+                c: fixed(d, t + 8),
+                d: fixed(d, t + 12),
+                e: fixed(d, t + 16),
+                f: fixed(d, t + 20),
+            }
+        }
+        14 => {
+            n.child = at + (u24at(d, at + 1) as usize);
+            Affine2.translation(fword(d, at + 4), fword(d, at + 6))
+        }
+        16 => {
+            n.child = at + (u24at(d, at + 1) as usize);
+            Affine2.scaling(colrF2Dot14(d, at + 4), colrF2Dot14(d, at + 6))
+        }
+        18 => {
+            n.child = at + (u24at(d, at + 1) as usize);
+            Affine2.scaling(colrF2Dot14(d, at + 4), colrF2Dot14(d, at + 6)).about(fword(d, at + 8), fword(d, at + 10))
+        }
+        20 => {
+            n.child = at + (u24at(d, at + 1) as usize);
+            let s = colrF2Dot14(d, at + 4);
+            Affine2.scaling(s, s)
+        }
+        22 => {
+            n.child = at + (u24at(d, at + 1) as usize);
+            let s = colrF2Dot14(d, at + 4);
+            Affine2.scaling(s, s).about(fword(d, at + 6), fword(d, at + 8))
+        }
+        24 => {
+            n.child = at + (u24at(d, at + 1) as usize);
+            Affine2.rotation(colrF2Dot14(d, at + 4) * 180.0)
+        }
+        26 => {
+            n.child = at + (u24at(d, at + 1) as usize);
+            Affine2.rotation(colrF2Dot14(d, at + 4) * 180.0).about(fword(d, at + 6), fword(d, at + 8))
+        }
+        28 => {
+            n.child = at + (u24at(d, at + 1) as usize);
+            Affine2.skewing(0.0 - colrF2Dot14(d, at + 4) * 180.0, colrF2Dot14(d, at + 6) * 180.0)
+        }
+        30 => {
+            n.child = at + (u24at(d, at + 1) as usize);
+            Affine2.skewing(0.0 - colrF2Dot14(d, at + 4) * 180.0, colrF2Dot14(d, at + 6) * 180.0).about(
+                fword(d, at + 8),
+                fword(d, at + 10),
+            )
+        }
+        _ => Affine2.identity(),
+    };
+    n.m = yDown(up);
+    return n;
+}
+
+/// Whether a paint format fills (a solid colour or a gradient), so a PaintGlyph over it can fill its outline.
+fn fillsArea(format: u32) -> bool => format == 2 || format == 4 || format == 6 || format == 8;
+
+/// A colour line read: its stops sorted, how it extends, and the offsets its first and last stops are at.
+struct ColorLine {
+    stops: [GradientStop; 16];
+    count: usize;
+    spread: GradientSpread;
+    first: f32;
+    last: f32;
+}
+
+/// The colour line at `at` (a variable one's stops are 10 bytes), its colours from palette 0 and `foreground`.
+fn readColorLine(d: Slice<u8>, f: FontInfo, at: usize, variable: bool, foreground: Color) -> ColorLine? {
+    if (!valid(d, at, 3)) {
+        return null;
+    }
+    let spread = match (d[at] as u32) {
+        1 => GradientSpread.Repeat,
+        2 => GradientSpread.Reflect,
+        _ => GradientSpread.Pad,
+    };
+    let size: usize = if (variable) 10 else 6;
+    let count = (u16at(d, at + 1) as usize).min(16);
+    if (count == 0 || !valid(d, at + 3, count * size)) {
+        return null;
+    }
+    let none = GradientStop { color: Color.rgba(0, 0, 0, 0), position: 0.0 };
+    var line = ColorLine { stops: [none; 16], count: count, spread: spread, first: 0.0, last: 0.0 };
+    for (k in 0..count) {
+        let s = at + 3 + k * size;
+        let stop = GradientStop {
+            color: colrAlpha(paletteColor(d, f, u16at(d, s + 2), foreground), colrF2Dot14(d, s + 4)),
+            position: colrF2Dot14(d, s),
+        };
+        // Sorted by offset as they come (fonts give them in order; this keeps equal offsets in theirs).
+        var j = k;
+        while (j > 0 && line.stops[j - 1].position > stop.position) {
+            line.stops[j] = line.stops[j - 1];
+            j -= 1;
+        }
+        line.stops[j] = stop;
+    }
+    line.first = line.stops[0].position;
+    line.last = line.stops[count - 1].position;
+    // The stops at 0 to 1 over the line from its first stop to its last; the gradient's geometry moves to match.
+    if (line.last - line.first < 0.0001) {
+        line.last = line.first + 0.0001;
+    }
+    let span = line.last - line.first;
+    for (k in 0..count) {
+        line.stops[k].position = (line.stops[k].position - line.first) / span;
+    }
+    return line;
+}
+
+/// `c` with its alpha multiplied by `alpha` (0..1).
+fn colrAlpha(c: Color, alpha: f32) -> Color {
+    let a = Math.clamp(round<f32>(c.a as u32) * alpha, 0.0, 255.0);
+    return Color.rgba(c.r, c.g, c.b, truncate<u8>(truncate<u32>(a + 0.5)));
+}
+
+/// The fill of paint `n` (a solid colour or a gradient) under the current transform, or null when it paints
+/// nothing (no stops, a degenerate gradient, a transform that collapses).
+fn colrFill(r: borrow Raster, slot: usize, n: PaintNode, foreground: Color) -> Paint? {
+    let fs = r.fonts.get(slot);
+    let d = r.fontPool[fs.offset..fs.offset + fs.size];
+    if (n.format == 2) {
+        return solidPaint(colrAlpha(paletteColor(d, fs.info, n.index, foreground), n.v[0]));
+    }
+    let line = readColorLine(d, fs.info, n.other, n.variable, foreground)?;
+    if (line.count == 1) {
+        return solidPaint(line.stops[0].color);
+    }
+    var paint = solidPaint(Color.rgba(0, 0, 0, 0));
+    paint.inverse = r.currentTransform().inverse()?;
+    paint.stops = line.stops;
+    paint.stopCount = line.count;
+    paint.spread = line.spread;
+    let s0 = line.first;
+    let s1 = line.last;
+    if (n.format == 4) {
+        // From p0 towards p1, its lines of one colour parallel to p0 -> p2: p1 projected onto the normal of that.
+        let x0 = n.v[0];
+        let y0 = 0.0 - n.v[1];
+        var vx = n.v[2] - x0;
+        var vy = (0.0 - n.v[3]) - y0;
+        let nx = 0.0 - ((0.0 - n.v[5]) - y0);
+        let ny = n.v[4] - x0;
+        let nn = nx * nx + ny * ny;
+        if (nn > 0.0) {
+            let k = (vx * nx + vy * ny) / nn;
+            vx = nx * k;
+            vy = ny * k;
+        }
+        paint.kind = PaintKind.Linear;
+        paint.startX = x0 + vx * s0;
+        paint.startY = y0 + vy * s0;
+        paint.dirX = vx * (s1 - s0);
+        paint.dirY = vy * (s1 - s0);
+        paint.len2 = paint.dirX * paint.dirX + paint.dirY * paint.dirY;
+        if (paint.len2 <= 0.0) {
+            return null;
+        }
+        return paint;
+    }
+    if (n.format == 6) {
+        let cx = n.v[3] - n.v[0];
+        let cy = (0.0 - n.v[4]) - (0.0 - n.v[1]);
+        let dr = n.v[5] - n.v[2];
+        paint.kind = PaintKind.Conical;
+        paint.startX = n.v[0] + cx * s0;
+        paint.startY = 0.0 - n.v[1] + cy * s0;
+        paint.radius = n.v[2] + dr * s0;
+        paint.dirX = cx * (s1 - s0);
+        paint.dirY = cy * (s1 - s0);
+        paint.dr = dr * (s1 - s0);
+        return paint;
+    }
+    // A sweep: its angles in half turns, counter-clockwise.
+    let a0 = n.v[2] * 180.0;
+    let a1 = n.v[3] * 180.0;
+    paint.kind = PaintKind.Sweep;
+    paint.startX = n.v[0];
+    paint.startY = 0.0 - n.v[1];
+    paint.angle0 = a0 + (a1 - a0) * s0;
+    paint.angleSpan = (a1 - a0) * (s1 - s0);
+    if (paint.angleSpan.abs() < 0.0001) {
+        paint.angleSpan = 0.0001;
+    }
+    return paint;
+}
+
+/// Fills the whole of the current clip with `paint` (a fill not under any glyph).
+fn fillClip(r: borrow mut Raster, paint: Paint) {
+    let back = match (r.currentTransform().inverse()) {
+        Some(m) => m,
+        null => { return; }
+    };
+    let c = r.currentClip();
+    r.pushTransform(back);
+    beginPath(mut r);
+    let x0 = round<f32>(c.x0);
+    let y0 = round<f32>(c.y0);
+    let x1 = round<f32>(c.x1);
+    let y1 = round<f32>(c.y1);
+    moveTo(mut r, x0, y0);
+    lineTo(mut r, x1, y0);
+    lineTo(mut r, x1, y1);
+    lineTo(mut r, x0, y1);
+    fillPath(mut r, paint, FillTarget.Layer);
+    beginPath(mut r);
+    r.popTransform();
+}
+
+/// Clips to the path just built (a glyph's outline), as a coverage mask over its bounds; popClip ends it.
+fn pushClipPath(r: borrow mut Raster) {
+    let parent = r.currentClip();
+    let limit = r.currentLimit();
+    var minX: f32 = 0.0;
+    var minY: f32 = 0.0;
+    var maxX: f32 = 0.0;
+    var maxY: f32 = 0.0;
+    for (i in 0..r.pointCount) {
+        let p = r.points[i];
+        if (i == 0) {
+            minX = p.x;
+            minY = p.y;
+            maxX = p.x;
+            maxY = p.y;
+        } else {
+            minX = minX.min(p.x);
+            minY = minY.min(p.y);
+            maxX = maxX.max(p.x);
+            maxY = maxY.max(p.y);
+        }
+    }
+    let x0 = imax(imax(truncate<i32>(Math.clamp(minX.floor(), -1.0, 100000.0)), parent.x0), limit.x0);
+    let y0 = imax(imax(truncate<i32>(Math.clamp(minY.floor(), -1.0, 100000.0)), parent.y0), limit.y0);
+    let x1 = imax(imin(imin(truncate<i32>(Math.clamp(maxX.ceil(), -1.0, 100000.0)), parent.x1), limit.x1), x0);
+    let y1 = imax(imin(imin(truncate<i32>(Math.clamp(maxY.ceil(), -1.0, 100000.0)), parent.y1), limit.y1), y0);
+    let w = idx(x1 - x0);
+    let h = idx(y1 - y0);
+    let saved = r.maskTop;
+    if (r.pointCount < 3 || r.maskTop + w * h > r.masks.length) {
+        // Nothing to clip to (or no room for its mask): an empty clip, so nothing under it shows.
+        if (r.pointCount >= 3) {
+            r.overflowed = true;
+        }
+        r.clips.push(ClipState { x0: x0, y0: y0, x1: x0, y1: y0, hasMask: false, maskOffset: 0, maskTop: saved });
+        return;
+    }
+    let offset = r.maskTop;
+    for (i in 0..w * h) {
+        r.masks[offset + i] = 0;
+    }
+    r.maskTop += w * h;
+    fillPath(mut r, solidPaint(Color.hex(WHITE)), FillTarget.Mask(offset, x0, y0, x1 - x0));
+    beginPath(mut r);
+    r.clips.push(ClipState { x0: x0, y0: y0, x1: x1, y1: y1, hasMask: true, maskOffset: offset, maskTop: saved });
+}
+
+/// Clips to box `b` (font units, under the current transform): a plain rectangle of its device bounds, or, inside
+/// a masked clip, a mask.
+fn pushClipBox(r: borrow mut Raster, b: Rect) {
+    let parent = r.currentClip();
+    if (parent.hasMask) {
+        pushClipShape(mut r, b, Corners.all(0.0));
+        return;
+    }
+    let bounds = r.currentTransform().bounds(b);
+    let x0 = imax(truncate<i32>(Math.clamp(bounds.x.floor(), -1.0, 100000.0)), parent.x0);
+    let y0 = imax(truncate<i32>(Math.clamp(bounds.y.floor(), -1.0, 100000.0)), parent.y0);
+    let x1 = imax(imin(truncate<i32>(Math.clamp((bounds.x + bounds.w).ceil(), -1.0, 100000.0)), parent.x1), x0);
+    let y1 = imax(imin(truncate<i32>(Math.clamp((bounds.y + bounds.h).ceil(), -1.0, 100000.0)), parent.y1), y0);
+    r.clips.push(ClipState { x0: x0, y0: y0, x1: x1, y1: y1, hasMask: false, maskOffset: 0, maskTop: r.maskTop });
+}
+
+/// Builds the path of glyph `glyph`'s outline (its outline kept off the recursion's stack) and reads the paint at
+/// `child`, under it.
+fn glyphPath(r: borrow mut Raster, slot: usize, glyph: u32, child: usize) -> PaintNode? {
+    let fs = r.fonts.get(slot);
+    var outline = emptyOutline();
+    var under: PaintNode? = null;
+    {
+        let d = r.fontPool[fs.offset..fs.offset + fs.size];
+        let decoded = decodeGlyph(d, fs.info, glyph, 0.0, 0.0, 1, mut outline);
+        under = readPaint(d, child);
+    }
+    beginPath(mut r);
+    appendOutline(mut r, outline, 0.0, 0.0, 1.0);
+    return under;
+}
+
+/// Paints COLR version 1 paint `at` of font slot `slot`; `budget` counts down the paints a glyph may still visit.
+fn drawColrPaint(r: borrow mut Raster, slot: usize, at: usize, foreground: Color, depth: u32, budget: borrow mut u32) {
+    if (depth >= COLR_DEPTH || budget == 0) {
+        return;
+    }
+    budget -= 1;
+    let fs = r.fonts.get(slot);
+    let n = match (readPaint(r.fontPool[fs.offset..fs.offset + fs.size], at)) {
+        Some(p) => p,
+        null => { return; }
+    };
+    if (fillsArea(n.format)) {
+        match (colrFill(r, slot, n, foreground)) {
+            Some(p) => { fillClip(mut r, p); }
+            null => {}
+        }
+        return;
+    }
+    if (n.format == 1) {
+        // Layers, bottom first, from the LayerList.
+        for (k in 0..n.index) {
+            var layer: usize = 0;
+            {
+                let d = r.fontPool[fs.offset..fs.offset + fs.size];
+                let c = fs.info.colr;
+                let listAt = u32at(d, c + 18) as usize;
+                let i = (n.first as usize) + (k as usize);
+                if (listAt != 0 && valid(d, c + listAt, 4) && i < (u32at(d, c + listAt) as usize) &&
+                    valid(d, c + listAt + 4 + i * 4, 4)) {
+                    layer = c + listAt + (u32at(d, c + listAt + 4 + i * 4) as usize);
+                }
+            }
+            if (layer != 0) {
+                drawColrPaint(mut r, slot, layer, foreground, depth + 1, mut budget);
+            }
+        }
+        return;
+    }
+    if (n.format == 10) {
+        let under = glyphPath(mut r, slot, n.index, n.child);
+        // The common case, a fill straight under the glyph: its outline filled with it.
+        match (under) {
+            Some(u) => {
+                if (fillsArea(u.format) && budget > 0) {
+                    budget -= 1;
+                    match (colrFill(r, slot, u, foreground)) {
+                        Some(p) => { fillPath(mut r, p, FillTarget.Layer); }
+                        null => {}
+                    }
+                    beginPath(mut r);
+                    return;
+                }
+            }
+            null => {
+                beginPath(mut r);
+                return;
+            }
+        }
+        pushClipPath(mut r);
+        drawColrPaint(mut r, slot, n.child, foreground, depth + 1, mut budget);
+        r.popClip();
+        return;
+    }
+    if (n.format == 11) {
+        let root = colrV1Paint(r.fontPool[fs.offset..fs.offset + fs.size], fs.info, n.index);
+        match (root) {
+            Some(p) => { drawColrPaint(mut r, slot, p, foreground, depth + 1, mut budget); }
+            null => {}
+        }
+        return;
+    }
+    if (n.format == 32) {
+        // The backdrop in a group, then the source in a layer of its own put onto it by the mode.
+        r.pushLayer(LayerKind.Opacity(1.0));
+        drawColrPaint(mut r, slot, n.other, foreground, depth + 1, mut budget);
+        r.pushLayer(LayerKind.Composite(n.first));
+        drawColrPaint(mut r, slot, n.child, foreground, depth + 1, mut budget);
+        r.popLayer();
+        r.popLayer();
+        return;
+    }
+    // A transform of what is under it.
+    r.pushTransform(n.m);
+    drawColrPaint(mut r, slot, n.child, foreground, depth + 1, mut budget);
+    r.popTransform();
+}
+
+/// Draws COLR glyph `glyph` of font slot `slot` (version 1's paints if it has them, else version 0's layers), its
+/// origin at (`x`, `baseline`), `scale` pixels per font unit, `foreground` where the font asks for the text's own
+/// colour. False when it is no COLR glyph.
+fn drawColrGlyph(
+    r: borrow mut Raster,
+    slot: usize,
+    glyph: u32,
+    x: f32,
+    baseline: f32,
+    scale: f32,
+    foreground: Color,
+) -> bool {
+    let fs = r.fonts.get(slot);
+    var root: usize? = null;
+    var layers: [usize; 2]? = null;
+    var box: Rect? = null;
+    var advance: f32 = 0.0;
+    {
+        let d = r.fontPool[fs.offset..fs.offset + fs.size];
+        root = colrV1Paint(d, fs.info, glyph);
+        if (root == null) {
+            layers = colrLayers(d, fs.info, glyph);
+        } else {
+            box = colrClipBox(d, fs.info, glyph);
+            advance = glyphAdvance(d, fs.info, glyph);
+        }
+    }
+    match (root) {
+        Some(at) => {
+            r.pushTransform(Affine2.translation(x, baseline).after(Affine2.scaling(scale, scale)));
+            // Its ClipBox, or else a generous cell, bounds what it draws (and the layers its composites take).
+            let em = fs.info.unitsPerEm;
+            let cell = Rect {
+                x: 0.0 - em * 0.5,
+                y: 0.0 - fs.info.ascent - em * 0.5,
+                w: advance + em,
+                h: fs.info.ascent - fs.info.descent + em,
+            };
+            pushClipBox(mut r, match (box) {
+                Some(b) => b,
+                null => cell,
+            });
+            var budget = COLR_BUDGET;
+            drawColrPaint(mut r, slot, at, foreground, 0, mut budget);
+            r.popClip();
+            r.popTransform();
+            return true;
+        }
+        null => {}
+    }
+    match (layers) {
+        Some(l) => {
+            fillColrLayers(mut r, slot, l, x, baseline, scale, foreground);
+            return true;
+        }
+        null => { return false; }
+    }
+}
+
+/// Whether glyph `glyph` is a COLR glyph of either version.
+fn isColr(d: Slice<u8>, f: FontInfo, glyph: u32) -> bool =>
+    colrV1Paint(d, f, glyph) != null || colrLayers(d, f, glyph) != null;
+
+// ---- compositing -----------------------------------------------------------------------------------------------
+
+/// `src` put onto `dst` (both premultiplied) by COLR CompositeMode `mode`: Porter-Duff operators 0 to 12, then the
+/// blend modes 13 to 27 as the W3C's Compositing and Blending defines them.
+fn colrComposite(src: u32, dst: u32, mode: u32) -> u32 {
+    let sr = chan(src, 0);
+    let sg = chan(src, 8);
+    let sb = chan(src, 16);
+    let sa = chan(src, 24);
+    let dr = chan(dst, 0);
+    let dg = chan(dst, 8);
+    let db = chan(dst, 16);
+    let da = chan(dst, 24);
+    if (mode <= 12) {
+        let fa = match (mode) {
+            0 => 0.0,
+            2 => 0.0,
+            4 => 1.0 - da,
+            5 => da,
+            6 => 0.0,
+            7 => 1.0 - da,
+            8 => 0.0,
+            9 => da,
+            10 => 1.0 - da,
+            11 => 1.0 - da,
+            _ => 1.0,
+        };
+        let fb = match (mode) {
+            0 => 0.0,
+            1 => 0.0,
+            3 => 1.0 - sa,
+            5 => 0.0,
+            6 => sa,
+            7 => 0.0,
+            8 => 1.0 - sa,
+            9 => 1.0 - sa,
+            10 => sa,
+            11 => 1.0 - sa,
+            _ => 1.0,
+        };
+        return pack(sr * fa + dr * fb, sg * fa + dg * fb, sb * fa + db * fb, (sa * fa + da * fb).min(1.0));
+    }
+    if (sa <= 0.0) {
+        return dst;
+    }
+    // Straight colours for B, then co = cs (1 - ab) + cb (1 - as) + as ab B(Cb, Cs).
+    let cs = [sr / sa, sg / sa, sb / sa];
+    let cb = if (da > 0.0) [dr / da, dg / da, db / da] else [0.0f32, 0.0, 0.0];
+    let blended = blendColors(mode, cb, cs);
+    let both = sa * da;
+    return pack(
+        sr * (1.0 - da) + dr * (1.0 - sa) + both * blended[0],
+        sg * (1.0 - da) + dg * (1.0 - sa) + both * blended[1],
+        sb * (1.0 - da) + db * (1.0 - sa) + both * blended[2],
+        sa + da - both,
+    );
+}
+
+/// B(Cb, Cs) of blend mode `mode` (13 to 27) on straight colours.
+fn blendColors(mode: u32, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
+    if (mode >= 24) {
+        return match (mode) {
+            24 => setLum(setSat(cs, sat(cb)), lum(cb)),
+            25 => setLum(setSat(cb, sat(cs)), lum(cb)),
+            26 => setLum(cs, lum(cb)),
+            _ => setLum(cb, lum(cs)),
+        };
+    }
+    return [blendChannelF(mode, cb[0], cs[0]), blendChannelF(mode, cb[1], cs[1]), blendChannelF(mode, cb[2], cs[2])];
+}
+
+fn hardLight(b: f32, s: f32) -> f32 => if (s <= 0.5) b * 2.0 * s else screenF(b, 2.0 * s - 1.0);
+fn screenF(b: f32, s: f32) -> f32 => b + s - b * s;
+
+fn blendChannelF(mode: u32, b: f32, s: f32) -> f32 {
+    return match (mode) {
+        13 => screenF(b, s),
+        14 => hardLight(s, b),
+        15 => b.min(s),
+        16 => b.max(s),
+        17 => if (b <= 0.0) 0.0 else if (s >= 1.0) 1.0 else (b / (1.0 - s)).min(1.0),
+        18 => if (b >= 1.0) 1.0 else if (s <= 0.0) 0.0 else 1.0 - ((1.0 - b) / s).min(1.0),
+        19 => hardLight(b, s),
+        20 => softLight(b, s),
+        21 => (b - s).abs(),
+        22 => b + s - 2.0 * b * s,
+        _ => b * s,
+    };
+}
+
+fn softLight(b: f32, s: f32) -> f32 {
+    if (s <= 0.5) {
+        return b - (1.0 - 2.0 * s) * b * (1.0 - b);
+    }
+    let dd = if (b <= 0.25) ((16.0 * b - 12.0) * b + 4.0) * b else b.sqrt();
+    return b + (2.0 * s - 1.0) * (dd - b);
+}
+
+fn lum(c: [f32; 3]) -> f32 => 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
+
+fn sat(c: [f32; 3]) -> f32 => c[0].max(c[1]).max(c[2]) - c[0].min(c[1]).min(c[2]);
+
+fn setLum(c: [f32; 3], l: f32) -> [f32; 3] {
+    let d = l - lum(c);
+    let v = [c[0] + d, c[1] + d, c[2] + d];
+    // ClipColor.
+    let ll = lum(v);
+    let lo = v[0].min(v[1]).min(v[2]);
+    let hi = v[0].max(v[1]).max(v[2]);
+    var out = v;
+    if (lo < 0.0 && ll - lo > 0.0) {
+        for (k in 0usize..3) {
+            out[k] = ll + (out[k] - ll) * ll / (ll - lo);
+        }
+    }
+    if (hi > 1.0 && hi - ll > 0.0) {
+        for (k in 0usize..3) {
+            out[k] = ll + (out[k] - ll) * (1.0 - ll) / (hi - ll);
+        }
+    }
+    return out;
+}
+
+fn setSat(c: [f32; 3], s: f32) -> [f32; 3] {
+    var lo: usize = 0;
+    var mid: usize = 1;
+    var hi: usize = 2;
+    if (c[lo] > c[mid]) {
+        let t = lo;
+        lo = mid;
+        mid = t;
+    }
+    if (c[mid] > c[hi]) {
+        let t = mid;
+        mid = hi;
+        hi = t;
+    }
+    if (c[lo] > c[mid]) {
+        let t = lo;
+        lo = mid;
+        mid = t;
+    }
+    var out = [0.0f32, 0.0, 0.0];
+    if (c[hi] > c[lo]) {
+        out[mid] = (c[mid] - c[lo]) * s / (c[hi] - c[lo]);
+        out[hi] = s;
+    }
+    return out;
+}

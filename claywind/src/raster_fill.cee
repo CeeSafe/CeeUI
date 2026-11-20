@@ -15,6 +15,12 @@ enum PaintKind {
     Linear,
     Radial,
     Image,
+    /// Two circles, as COLR's radial gradient (and canvas createRadialGradient): t is the largest for which point p
+    /// lies on the circle centred start + t dir with radius radius + t dr (that radius not negative).
+    Conical,
+    /// Around (startX, startY), counter-clockwise from the +x axis with y up, as COLR's sweep gradient: t is the angle
+    /// past angle0 over angleSpan (degrees).
+    Sweep,
 }
 
 struct RGBAf {
@@ -37,7 +43,12 @@ struct Paint {
     dirY: f32;
     len2: f32;
     radius: f32;
-    stops: [GradientStop; 4];
+    /// Conical: how the radius grows with t.
+    dr: f32;
+    /// Sweep: the angle t = 0 is at, and how far on t = 1 is, in degrees.
+    angle0: f32;
+    angleSpan: f32;
+    stops: [GradientStop; 16];
     stopCount: usize;
     spread: GradientSpread;
     // Image.
@@ -68,7 +79,10 @@ fn solidPaint(c: Color) -> Paint {
         dirY: 0.0,
         len2: 1.0,
         radius: 1.0,
-        stops: [stop, stop, stop, stop],
+        dr: 0.0,
+        angle0: 0.0,
+        angleSpan: 360.0,
+        stops: [stop; 16],
         stopCount: 0,
         spread: GradientSpread.Pad,
         image: 0,
@@ -519,7 +533,53 @@ fn evaluatePaint(r: borrow Raster, paint: borrow Paint, x: f32, y: f32) -> RGBAf
             let p = paint.inverse.apply(Vec2 { x: x, y: y });
             return sampleImage(r, paint, p.x, p.y);
         }
+        PaintKind.Conical => {
+            let p = paint.inverse.apply(Vec2 { x: x, y: y });
+            return match (conicalT(paint, p.x - paint.startX, p.y - paint.startY)) {
+                Some(t) => gradientColor(paint, t),
+                null => RGBAf { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
+            };
+        }
+        PaintKind.Sweep => {
+            let p = paint.inverse.apply(Vec2 { x: x, y: y });
+            var angle = Math.degrees(Math.atan2(paint.startY - p.y, p.x - paint.startX));
+            if (angle < 0.0) {
+                angle += 360.0;
+            }
+            return gradientColor(paint, (angle - paint.angle0) / paint.angleSpan);
+        }
     }
+}
+
+/// The t of a two-circle gradient at (px, py) from its first centre: the larger root of
+/// |p - t dir|^2 = (radius + t dr)^2 whose radius is not negative, or null where no circle passes.
+fn conicalT(paint: borrow Paint, px: f32, py: f32) -> f32? {
+    let a = paint.dirX * paint.dirX + paint.dirY * paint.dirY - paint.dr * paint.dr;
+    let b = px * paint.dirX + py * paint.dirY + paint.radius * paint.dr;
+    let c = px * px + py * py - paint.radius * paint.radius;
+    if (a.abs() < 0.000001) {
+        if (b.abs() < 0.000001) {
+            return null;
+        }
+        let t = c / (2.0 * b);
+        return if (paint.radius + t * paint.dr >= 0.0) t else null;
+    }
+    let disc = b * b - a * c;
+    if (disc < 0.0) {
+        return null;
+    }
+    let s = disc.sqrt();
+    let t1 = (b + s) / a;
+    let t2 = (b - s) / a;
+    let hi = t1.max(t2);
+    let lo = t1.min(t2);
+    if (paint.radius + hi * paint.dr >= 0.0) {
+        return hi;
+    }
+    if (paint.radius + lo * paint.dr >= 0.0) {
+        return lo;
+    }
+    return null;
 }
 
 fn spreadT(spread: GradientSpread, t: f32) -> f32 {

@@ -5,8 +5,9 @@
 //   Raster, as they are most of a big file. The host (claywind-fonts) loads the face without them, names its strikes
 //   (setBitmapStrikes), and supplies the PNG of each glyph a frame draws, from the strike it is drawn at
 //   (addColorBitmap). Each is kept as an image and drawn scaled to the text's size.
-// - A COLR face (version 0, as Segoe UI Emoji) draws a glyph as layers of outlines, each in a colour of its CPAL
-//   palette. drawText fills them; a GPU host asks for the glyph as an image (colorGlyphImage).
+// - A COLR face draws a glyph as layers of outlines, each in a colour of its CPAL palette (version 0), or as a graph
+//   of paints: gradients, transforms, composites (version 1, raster_colr.cee; Segoe UI Emoji has both, and version
+//   1 is drawn). drawText draws them; a GPU host asks for the glyph as an image (colorGlyphImage).
 
 /// The first image handle a colour glyph takes; a program's own images use handles below it.
 const COLOR_HANDLE_BASE: u32 = 0xC0000000;
@@ -316,7 +317,7 @@ impl<region r> Raster<r> {
             return false;
         }
         let slot = this.fonts.get(k);
-        return colrLayers(this.fontPool[slot.offset..slot.offset + slot.size], slot.info, glyph) != null;
+        return isColr(this.fontPool[slot.offset..slot.offset + slot.size], slot.info, glyph);
     }
 
     /// COLR glyph `glyph` of loaded font `font` drawn at `size` pixels per em into an image, kept for later frames
@@ -345,17 +346,39 @@ impl<region r> Raster<r> {
             }
             null => {}
         }
-        let layers = match (colrLayers(this.fontPool[slot.offset..slot.offset + slot.size], slot.info, glyph)) {
-            Some(l) => l,
-            null => { return null; }
-        };
-        // A cell an advance wide and ascent to descent tall, with a margin for what spills past them.
-        let d = this.fontPool[slot.offset..slot.offset + slot.size];
-        let pad = (size * 0.25).ceil() + 1.0;
-        let advance = glyphAdvance(d, slot.info, glyph) * scale;
-        let w = idx(truncate<i32>((advance + 2.0 * pad).ceil()));
-        let ascent = (slot.info.ascent * scale).ceil();
-        let h = idx(truncate<i32>((ascent - slot.info.descent * scale + 2.0 * pad).ceil()));
+        // A cell an advance wide and ascent to descent tall, with a margin for what spills past them; or a version 1
+        // glyph's ClipBox.
+        var box: Rect? = null;
+        var advance: f32 = 0.0;
+        {
+            let d = this.fontPool[slot.offset..slot.offset + slot.size];
+            if (!isColr(d, slot.info, glyph)) {
+                return null;
+            }
+            box = colrClipBox(d, slot.info, glyph);
+            advance = glyphAdvance(d, slot.info, glyph) * scale;
+        }
+        var left: f32 = 0.0;
+        var top: f32 = 0.0;
+        var wf: f32 = 0.0;
+        var hf: f32 = 0.0;
+        match (box) {
+            Some(b) => {
+                left = (b.x * scale).floor() - 1.0;
+                top = (0.0 - b.y * scale).ceil() + 1.0;
+                wf = ((b.x + b.w) * scale).ceil() + 1.0 - left;
+                hf = top + ((b.y + b.h) * scale).ceil() + 1.0;
+            }
+            null => {
+                let pad = (size * 0.25).ceil() + 1.0;
+                left = 0.0 - pad;
+                top = (slot.info.ascent * scale).ceil() + pad;
+                wf = advance + 2.0 * pad;
+                hf = top - slot.info.descent * scale + pad;
+            }
+        }
+        let w = idx(truncate<i32>(wf.ceil()));
+        let h = idx(truncate<i32>(hf.ceil()));
         if (w == 0 || h == 0) {
             return null;
         }
@@ -368,7 +391,7 @@ impl<region r> Raster<r> {
         }
         this.ratio = 1.0;
         this.begin(Color.rgba(0, 0, 0, 0));
-        fillColrLayers(mut this, k, layers, pad, pad + ascent, scale, Color.rgba(0, 0, 0, 255));
+        let drawn = drawColrGlyph(mut this, k, glyph, 0.0 - left, top, scale, Color.rgba(0, 0, 0, 255));
         this.finish();
         match (this.imageIndex(handle)) {
             Some(i) => {
@@ -389,8 +412,8 @@ impl<region r> Raster<r> {
             strike: key,
             handle: handle,
             ppem: 0,
-            left: 0.0 - pad,
-            top: pad + ascent,
+            left: left,
+            top: top,
             w: w,
             h: h,
         };

@@ -42,12 +42,13 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   post-base forms, conjuncts, and decomposition of two-part vowels. Across 8,080 randomized and real words in ten
   fonts (Noto Sans Malayalam among them), every glyph and position matches HarfBuzz's (`claywind-tests`' shaping test, with cases from
   `tools/shaping/hb_cases.py`).
-- **Colour emoji:** bitmap emoji fonts (sbix, as Apple Color Emoji; CBDT, as Noto Color Emoji) and layered ones
-  (COLR version 0 with CPAL, as Segoe UI Emoji) draw in their own colours, in Raster and on the GPU (as images). A
+- **Colour emoji:** bitmap emoji fonts (sbix, as Apple Color Emoji; CBDT, as Noto Color Emoji) and COLR ones
+  draw in their own colours, in Raster and on the GPU (as images). COLR version 1 (Windows 11's Segoe UI Emoji)
+  draws its paint graph: linear, two-circle and sweep gradients, transforms, glyph clips, layers, and composites by
+  every Porter-Duff operator and blend mode, at the font's default instance; version 0's layers draw too. A
   bitmap face is loaded without its bitmaps, which are most of its file: `claywind-fonts` reads the PNG of each
   glyph a frame draws from the strike nearest its size (`SystemFonts.supplyFrame`). Emoji sequences (ZWJ families,
-  skin tones, flags, keycaps, VS16) form through the font's GSUB or, for Apple's, its AAT `morx` table. Not yet:
-  COLR version 1.
+  skin tones, flags, keycaps, VS16) form through the font's GSUB or, for Apple's, its AAT `morx` table.
 - **System fonts as fallbacks:** `claywind-fonts` (hosted; `SystemFonts.supply`) finds, among the OS's own fonts, a
   face for each character the loaded ones lack, and loads it into the fallback chain. Its catalog (each face's
   coverage, weight and style, read from its cmap and OS/2 tables) is built the first time a character is missing.
