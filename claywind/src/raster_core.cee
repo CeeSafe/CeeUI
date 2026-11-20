@@ -25,6 +25,17 @@ public struct RasterCapacity {
     /// Bytes for loaded fonts (default 4 MB: about five Latin TrueType faces).
     public fontBytes: usize;
 
+    /// At most the bytes `Raster.create` takes from its allocator for this capacity: what to give it, and no more
+    /// (each array at its element's 64-bit size, with room to align it; the text buffers' 120 KiB as 256 KiB).
+    public fn bytes(this) -> usize {
+        let frame = this.width * this.height;
+        let side = this.width.max(this.height);
+        let arrays: usize = 12 * 16; // alignment
+        return (frame + this.layerPixels) * 4 + (this.width + 3) * (this.height + 1) * 4 + side * 4 + this.maskBytes +
+            this.pathPoints * 8 + (this.pathPoints / 2 + 1) * 8 + 32 * 64 + 64 * 64 + 64 * 24 + this.images * 40 +
+            this.imagePixels * 4 + this.fontBytes + 262144 + arrays;
+    }
+
     public fn of(width: usize, height: usize) -> RasterCapacity => RasterCapacity {
         width: width,
         height: height,

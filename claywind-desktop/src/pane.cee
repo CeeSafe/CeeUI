@@ -58,6 +58,30 @@ public fn desktopRasterCapacity() -> RasterCapacity {
     return capacity;
 }
 
+/// Whether `window` is a phone's (iOS, Android): a screen of its own, and a phone's memory.
+public fn onPhone(window: borrow Window) -> bool => match (window.nativeHandle()) {
+    WindowHandle.UIKit(_, _) => true,
+    WindowHandle.Android(_, _) => true,
+    _ => false,
+};
+
+/// The fallback fonts' room on a phone (a CJK face is about 20 MB): a phone has a tenth of a desktop's memory, or less.
+const PHONE_FONT_BYTES: usize = 41943040;
+
+/// A Raster capacity for `window`: on a desktop, desktopRasterCapacity's; on a phone (iOS, Android), its screen's pixels
+/// either way up, as a phone turns, and less room for fallback fonts, so that an app fits a phone of 1 GB. Give the
+/// Raster `capacity.bytes()` of memory.
+public fn rasterCapacityFor(window: borrow Window) -> RasterCapacity {
+    if (!onPhone(window)) {
+        return desktopRasterCapacity();
+    }
+    let px = pixelsFor(window.size(), window.scale());
+    let side = px[0].max(px[1]);
+    var capacity = RasterCapacity.of(side, side);
+    capacity.fontBytes = PHONE_FONT_BYTES;
+    return capacity;
+}
+
 /// What the panes sharing one Raster know of it: which pane's frame it holds, and how many windows are open.
 public struct RasterShare {
     owner: u32;

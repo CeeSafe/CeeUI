@@ -153,13 +153,15 @@ fn main() -> i32 {
             return 1;
         }
     };
-    var mainStorage = zeros(67108864);
-    var inspectorStorage = zeros(33554432);
-    var rasterStorage = zeros(301989888);
+    // Memory for the window's size: a phone's frames are its screen's, and it has a tenth of a desktop's memory.
+    let capacity = rasterCapacityFor(window);
+    var mainStorage = zeros(if (phone) 33554432 else 67108864);
+    var inspectorStorage = zeros(if (phone) 8388608 else 33554432);
+    var rasterStorage = zeros(capacity.bytes());
     let mainMemory = FixedBufferAllocator.over(mut mainStorage.viewMut());
     let inspectorMemory = FixedBufferAllocator.over(mut inspectorStorage.viewMut());
     let rasterMemory = FixedBufferAllocator.over(mut rasterStorage.viewMut());
-    let full = MAX_PIXELS_WIDTH * MAX_PIXELS_HEIGHT;
+    let full = capacity.width * capacity.height;
     var main = match (Pane.create(mainMemory, 1, 4096, 16384, full, window.size())) {
         Ok(p) => p,
         Err(_) => {
@@ -175,7 +177,7 @@ fn main() -> i32 {
             return 1;
         }
     };
-    var raster = match (Raster.create(rasterMemory, desktopRasterCapacity())) {
+    var raster = match (Raster.create(rasterMemory, capacity)) {
         Ok(r) => r,
         Err(_) => {
             Console.writeErrorLine("desktop: not enough memory for the renderer");
