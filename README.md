@@ -70,7 +70,10 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   `Ui.wantsTextInput`, `Ui.textInputArea`).
 - **Long text:** `indexLines` indexes a document's lines once, and `Controls.textView` shows it a screenful at a time,
   with optional line numbers: only the lines in view become elements, so a 100,000-line document lays out in the
-  time a page does. Not yet: wrapping, editing and selection in it.
+  time a page does. `Controls.selectableTextView` is the same view with a caret and a selection: the pointer selects
+  (a double click a word, a triple click a line), the arrows, Up, Down, Home, End and the page keys move the caret
+  across lines, Shift extends, Copy and Select All act on it, and the view scrolls to the caret. Not yet: wrapping and
+  editing in it.
 - **Retina output.** `Raster.setPixelRatio` draws at the display's pixel ratio while layout stays in points.
 - **Incremental rendering.** `Damage` works out what changed between frames, and the raster redraws only those
   boxes. The result is byte-identical to a full redraw.

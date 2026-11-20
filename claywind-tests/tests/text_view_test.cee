@@ -1,0 +1,164 @@
+// SPDX-License-Identifier: MIT
+// A long text that can be selected: Controls.selectableTextView, driven by a scripted platform over the
+// mixed-direction fake font (10 points a character; see bidi_edit_test), its lines 20 points tall.
+
+import claywind;
+
+struct Doc {
+    text: Vector<u8>;
+    starts: [u32; 1100];
+    count: usize;
+    edit: TextEdit;
+    /// An edit command the host gives in the next frame (after begin, as a host does).
+    command: EditCommand?;
+}
+
+fn docOf(text: StringView) -> Doc {
+    var d = Doc { text: Vector<u8>.create(), starts: [0u32; 1100], count: 0, edit: TextEdit.at(0), command: null };
+    for (b in text.bytes()) {
+        d.text.push(b)!;
+    }
+    d.count = indexLines(d.text.view(), mut d.starts[..]) ?? 0;
+    return d;
+}
+
+fn viewFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow mut Doc) -> Result<void, TestFailure> {
+    let metrics = MixedAdvance { unused: 0 };
+    ui.begin(mut platform);
+    match (doc.command) {
+        Some(c) => { ui.editCommand(c); }
+        null => {}
+    }
+    doc.command = null;
+    ui.open(Style.column().w(Size.fixed(300.0)).h(Size.fixed(200.0)));
+    let look = Text.of().size(14.0).leading(20.0);
+    Controls.selectableTextView(
+        mut ui,
+        metrics,
+        "doc",
+        doc.text.view(),
+        doc.starts[..],
+        doc.count,
+        look,
+        false,
+        mut doc.edit,
+    );
+    ui.close();
+    let ok = finish(mut ui, mut platform);
+    platform.pressed = 0;
+    platform.pointerState.pressed = false;
+    platform.pointerState.released = false;
+    return ok;
+}
+
+/// A press and release at (x, y) in the view's text (from its top left, before any scroll).
+fn clickDoc(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow mut Doc, x: f32, y: f32) -> Result<void, TestFailure> {
+    let box = ui.boxOf("doc")!;
+    platform.pointerState.position = Vec2 { x: box.x + x, y: box.y + y };
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    viewFrame(mut ui, mut platform, mut doc)?;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    return viewFrame(mut ui, mut platform, mut doc);
+}
+
+fn key(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow mut Doc, k: Key) -> Result<usize, TestFailure> {
+    platform.pressed = 1u64 << (keyIndex(k) as u64);
+    viewFrame(mut ui, mut platform, mut doc)?;
+    return Ok(doc.edit.caret);
+}
+
+@test
+fn aTextViewIsSelectedWithThePointer() -> Result<void, TestFailure> {
+    var storage = heap(2097152);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    // Lines start at bytes 0 ("first line"), 11 ("second") and 18 ("third one").
+    var doc = docOf("first line\nsecond\nthird one");
+    viewFrame(mut ui, mut platform, mut doc)?;
+    // A click on the second line, after "sec": the caret at byte 14, and the view has the focus.
+    clickDoc(mut ui, mut platform, mut doc, 31.0, 30.0)?;
+    Check.isTrue(ui.hasFocusNamed("doc"), "the view has the focus")?;
+    Check.equalU64(14, doc.edit.caret as u64)?;
+    // A drag to the third line, after "thi": the selection runs across the newline.
+    let box = ui.boxOf("doc")!;
+    platform.pointerState.position = Vec2 { x: box.x + 9.0, y: box.y + 10.0 };
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    viewFrame(mut ui, mut platform, mut doc)?;
+    platform.pointerState.position = Vec2 { x: box.x + 31.0, y: box.y + 50.0 };
+    viewFrame(mut ui, mut platform, mut doc)?;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    viewFrame(mut ui, mut platform, mut doc)?;
+    Check.isTrue(doc.edit.anchor == 1 && doc.edit.caret == 21, "from after f to after thi")?;
+    doc.command = Some(EditCommand.Copy);
+    viewFrame(mut ui, mut platform, mut doc)?;
+    let copied = ui.copiedText()!;
+    Check.isTrue(copied.length == 20 && copied[9] == '\n', "Copy takes the text across both newlines")?;
+    // A triple click selects the line, its newline too.
+    for (k in 0..3) {
+        let _ = k;
+        clickDoc(mut ui, mut platform, mut doc, 15.0, 30.0)?;
+    }
+    return Check.isTrue(doc.edit.from() == 11 && doc.edit.to() == 18, "the second line and its newline");
+}
+
+@test
+fn aTextViewsCaretMovesWithTheKeys() -> Result<void, TestFailure> {
+    var storage = heap(2097152);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var doc = docOf("first line\nsecond\nthird one");
+    viewFrame(mut ui, mut platform, mut doc)?;
+    clickDoc(mut ui, mut platform, mut doc, 101.0, 10.0)?;
+    Check.equalU64(10, doc.edit.caret as u64)?; // the end of the first line
+    // Right at a line's end goes on to the next line's start; Left back to the end before.
+    Check.equalU64(11, key(mut ui, mut platform, mut doc, Key.Right)? as u64)?;
+    Check.equalU64(10, key(mut ui, mut platform, mut doc, Key.Left)? as u64)?;
+    // Down keeps the caret's place across: from x 100 on the first line to the second's end (x 60), then x 60 on
+    // the third ("third " ends at 60).
+    Check.equalU64(17, key(mut ui, mut platform, mut doc, Key.Down)? as u64)?;
+    Check.equalU64(24, key(mut ui, mut platform, mut doc, Key.Down)? as u64)?;
+    Check.equalU64(18, key(mut ui, mut platform, mut doc, Key.Home)? as u64)?;
+    Check.equalU64(27, key(mut ui, mut platform, mut doc, Key.End)? as u64)?;
+    // Shift extends: Up from the end of the text selects back to the second line.
+    platform.down = 1u64 << (keyIndex(Key.LeftShift) as u64);
+    key(mut ui, mut platform, mut doc, Key.Up)?;
+    platform.down = 0;
+    return Check.isTrue(doc.edit.anchor == 27 && doc.edit.caret == 17, "Shift-Up selected from the end back");
+}
+
+@test
+fn aTextViewScrollsToItsCaret() -> Result<void, TestFailure> {
+    var storage = heap(4194304);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    // 1000 lines of "line"; the view shows ten (200 points of 20).
+    var text = String.create();
+    for (k in 0..1000) {
+        let _ = k;
+        text.append("line\n")!;
+    }
+    var doc = docOf(text.view());
+    viewFrame(mut ui, mut platform, mut doc)?;
+    clickDoc(mut ui, mut platform, mut doc, 5.0, 5.0)?;
+    Check.equalU64(0, doc.edit.caret as u64)?;
+    // Three Page Downs: the caret is 30 lines down, and the view scrolled so that its line shows.
+    for (k in 0..3) {
+        let _ = k;
+        key(mut ui, mut platform, mut doc, Key.PageDown)?;
+    }
+    Check.equalU64(150, doc.edit.caret as u64)?;
+    viewFrame(mut ui, mut platform, mut doc)?;
+    let y = ui.scrollOffset("doc").y;
+    Check.isTrue(y <= -420.0 && y >= -600.0, "line 30 (600 to 620) is in the view")?;
+    // Select All takes the whole text.
+    doc.command = Some(EditCommand.SelectAll);
+    viewFrame(mut ui, mut platform, mut doc)?;
+    return Check.isTrue(doc.edit.from() == 0 && doc.edit.to() == 5000, "everything is selected");
+}

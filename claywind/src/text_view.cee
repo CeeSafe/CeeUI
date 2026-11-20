@@ -113,3 +113,291 @@ impl Controls {
         ui.close();
     }
 }
+
+/// The end of line `k` (before its newline, or a CR before that), as a byte offset into the text.
+fn lineEnd(text: Slice<u8>, starts: Slice<u32>, count: usize, k: usize) -> usize =>
+    (starts[k] as usize) + lineOf(text, starts, count, k).length;
+
+/// The grapheme boundary of `line` whose caret is the next one to the right (`right`) or left of the caret at
+/// `at`, as drawn in `config`; `at` when none is (the line's edge). As a text field's arrows (visualStep).
+fn lineStep<M: TextMetrics>(metrics: borrow M, line: Slice<u8>, config: TextConfig, at: usize, right: bool) -> usize {
+    let here = metrics.caretX(line, config, at);
+    var best = at;
+    var bestAhead: f32 = 0.0;
+    var b: usize = 0;
+    loop {
+        if (b != at) {
+            let x = metrics.caretX(line, config, b);
+            let ahead = if (right) x - here else here - x;
+            if (ahead > 0.25) {
+                let nearer = (if (b > at) b - at else at - b) < (if (best > at) best - at else at - best);
+                if (best == at || ahead < bestAhead - 0.25 || ((ahead - bestAhead).abs() <= 0.25 && nearer)) {
+                    best = b;
+                    bestAhead = ahead;
+                }
+            }
+        }
+        if (b >= line.length) {
+            return best;
+        }
+        b = graphemeEnd(line, b);
+    }
+}
+
+/// The view's measures: its line height and the gutter's width (0 without one).
+fn viewMeasures(config: TextConfig, count: usize, gutter: bool) -> [f32; 2] {
+    let size = if (config.fontSize > 0.0) config.fontSize else 16.0;
+    let lineH = if (config.lineHeight > 0.0) config.lineHeight else size * 1.4;
+    let digits = if (count >= 100000) 6 else if (count >= 10000) 5 else if (count >= 1000) 4 else 3;
+    let gutterW = if (gutter) round<f32>(digits) * size * 0.62 + 12.0 else 0.0;
+    return [lineH, gutterW];
+}
+
+impl Controls {
+    /// A text view (as textView: a long text indexed by `starts` and `count`, laid out a screenful at a time) whose
+    /// text can be selected and copied, but not changed. `edit`'s caret and anchor are byte offsets into `text`.
+    /// The pointer places the caret and a drag selects (a double click a word, a triple click a line; Shift
+    /// extends); with the focus, the arrows move the caret as the text is drawn and across lines, Up and Down keep
+    /// its place across, Home and End go to the line's ends, Page Up and Page Down move a view's height, the word
+    /// modifier (Option on macOS, Control elsewhere) moves by words, Shift extends, and Copy and Select All act on
+    /// the selection. The view scrolls to keep the caret in sight. It measures text to place the caret, so it takes
+    /// the text metrics.
+    public fn selectableTextView<M: TextMetrics>(
+        ui: borrow mut Ui,
+        metrics: borrow M,
+        id: StringView,
+        text: Slice<u8>,
+        starts: Slice<u32>,
+        count: usize,
+        look: Text,
+        gutter: bool,
+        edit: borrow mut TextEdit,
+    ) {
+        let h = hashId(id);
+        ui.registerFocusable(h);
+        let config0 = look.config();
+        let measures = viewMeasures(config0, count, gutter);
+        let lineH = measures[0];
+        let gutterW = measures[1];
+        let line = look.wrap(TextWrap.None).leading(lineH);
+        let config = line.config();
+        edit.caret = edit.caret.min(text.length);
+        edit.anchor = edit.anchor.min(text.length);
+        let box = ui.boxOfHash(h);
+        let scroll = ui.scrollOffset(id);
+        // Where a point in the view lands: its line (clamped to the text's), then the nearest caret in it.
+        let p = ui.pointer();
+        var pointed: usize? = null;
+        match (box) {
+            Some(b) => {
+                if (count > 0) {
+                    let contentY = p.position.y - b.y - scroll.y;
+                    let k = truncate<usize>((contentY / lineH).floor().max(0.0)).min(count - 1);
+                    let x = p.position.x - b.x - scroll.x - gutterW;
+                    let lineText = lineOf(text, starts, count, k);
+                    pointed = Some((starts[k] as usize) + offsetAtIn(metrics, lineText, config, x));
+                }
+            }
+            null => {}
+        }
+        var moved = false;
+        if (ui.pressedOn(h)) {
+            ui.setFocus(h);
+            ui.capture(h);
+            match (pointed) {
+                Some(at) => {
+                    edit.caret = at;
+                    if (!ui.shiftDown()) {
+                        edit.anchor = at;
+                    }
+                    if (ui.pressCount() == 2) {
+                        let w = wordAround(text, at);
+                        edit.anchor = w[0];
+                        edit.caret = w[1];
+                    } else if (ui.pressCount() >= 3) {
+                        let k = lineAt(starts, count, at);
+                        edit.anchor = starts[k] as usize;
+                        edit.caret = if (k + 1 < count) starts[k + 1] as usize else text.length;
+                    }
+                }
+                null => {}
+            }
+        } else if (ui.hasFocus(h) && ui.releasedOutside(h)) {
+            ui.leaveFocus(h);
+        } else if (ui.captured() == h && p.down && ui.pressCount() < 2) {
+            match (pointed) {
+                Some(at) => {
+                    edit.caret = at;
+                    moved = true;
+                }
+                null => {}
+            }
+        }
+        if (p.released && ui.captured() == h) {
+            ui.capture(0);
+        }
+        let viewH = match (box) {
+            Some(b) => b.h,
+            null => ui.screenSize().h,
+        };
+        if (ui.hasFocus(h) && count > 0) {
+            if (ui.commanded(EditCommand.SelectAll)) {
+                edit.anchor = 0;
+                edit.caret = text.length;
+            }
+            if (ui.commanded(EditCommand.Copy) && edit.selects()) {
+                ui.copyText(text[edit.from()..edit.to()]);
+            }
+            let shift = ui.shiftDown();
+            let k = lineAt(starts, count, edit.caret);
+            let lineStart = starts[k] as usize;
+            let lineText = lineOf(text, starts, count, k);
+            let local = (edit.caret - lineStart).min(lineText.length);
+            var target: usize? = null;
+            for (right in [false, true]) {
+                if (!ui.keyHit(if (right) Key.Right else Key.Left)) {
+                    continue;
+                }
+                if (ui.wordModifierDown()) {
+                    let forward = right != bidiParagraphRtl(lineText);
+                    target = Some(if (forward) wordForward(text, edit.caret) else wordBackward(text, edit.caret));
+                } else if (!shift && edit.selects()) {
+                    target = Some(if (right) edit.to() else edit.from());
+                } else {
+                    let step = lineStep(metrics, lineText, config, local, right);
+                    if (step != local) {
+                        target = Some(lineStart + step);
+                    } else {
+                        // At the line's edge: on to the next line's start, or back to the end of the one before,
+                        // as the line reads.
+                        let forward = right != bidiParagraphRtl(lineText);
+                        if (forward && k + 1 < count) {
+                            target = Some(starts[k + 1] as usize);
+                        } else if (!forward && k > 0) {
+                            target = Some(lineEnd(text, starts, count, k - 1));
+                        }
+                    }
+                }
+            }
+            // Up, Down, Page Up and Page Down keep the caret's place across the line.
+            let page = truncate<usize>((viewH / lineH).floor().max(1.0));
+            var rows: usize = 0;
+            var down = false;
+            if (ui.keyHit(Key.Up)) {
+                rows = 1;
+            } else if (ui.keyHit(Key.Down)) {
+                rows = 1;
+                down = true;
+            } else if (ui.keyHit(Key.PageUp)) {
+                rows = page;
+            } else if (ui.keyHit(Key.PageDown)) {
+                rows = page;
+                down = true;
+            }
+            if (rows > 0) {
+                let x = metrics.caretX(lineText, config, local);
+                let kk = if (down) (k + rows).min(count - 1) else (if (k > rows) k - rows else 0);
+                let other = lineOf(text, starts, count, kk);
+                target = Some((starts[kk] as usize) + offsetAtIn(metrics, other, config, x));
+            }
+            if (ui.keyPressed(Key.Home)) {
+                target = Some(lineStart);
+            }
+            if (ui.keyPressed(Key.End)) {
+                target = Some(lineStart + lineText.length);
+            }
+            match (target) {
+                Some(t) => {
+                    edit.caret = t;
+                    if (!shift) {
+                        edit.anchor = t;
+                    }
+                    moved = true;
+                }
+                null => {}
+            }
+        }
+        // The caret moved: the view scrolls just enough to show its line and place.
+        match (box) {
+            Some(b) => {
+                if (moved && count > 0) {
+                    let k = lineAt(starts, count, edit.caret);
+                    let top = round<f32>(k) * lineH;
+                    let shownTop = -scroll.y;
+                    var dy: f32 = 0.0;
+                    if (top < shownTop) {
+                        dy = shownTop - top;
+                    } else if (top + lineH > shownTop + b.h) {
+                        dy = shownTop + b.h - (top + lineH);
+                    }
+                    let lineText = lineOf(text, starts, count, k);
+                    let x = gutterW + metrics.caretX(lineText, config, edit.caret - (starts[k] as usize));
+                    let shownLeft = -scroll.x;
+                    var dx: f32 = 0.0;
+                    if (x < shownLeft + gutterW) {
+                        dx = shownLeft + gutterW - x;
+                    } else if (x + 2.0 > shownLeft + b.w) {
+                        dx = shownLeft + b.w - (x + 2.0);
+                    }
+                    if (dx != 0.0 || dy != 0.0) {
+                        ui.scrollBy(id, dx, dy);
+                    }
+                }
+            }
+            null => {}
+        }
+        let lines = visibleLines(ui.scrollOffset(id).y, viewH, lineH, count, 4);
+        let focused = ui.hasFocus(h);
+        let caretLine = if (count > 0) lineAt(starts, count, edit.caret) else 0;
+        let blink = (truncate<u64>((ui.time() * 2.0).floor()) & 1) == 0;
+        ui.open(Style.column().id(id).w(Size.grow()).h(Size.grow()).scroll(ScrollAxis.Both).bg(SLATE_900));
+        ui.open(Style.box().w(Size.fixed(1.0)).h(Size.fixed(round<f32>(lines[0]) * lineH)));
+        ui.close();
+        for (k in lines[0]..lines[1]) {
+            let lineStart = starts[k] as usize;
+            let lineText = lineOf(text, starts, count, k);
+            let lineStop = lineStart + lineText.length;
+            ui.open(Style.row().h(Size.fixed(lineH)).alignXY(AxisAlign.Start, AxisAlign.Center));
+            if (gutter) {
+                var number = [0u8; 12];
+                var w = TextWriter.create(mut number[..]);
+                w.decimal((k + 1) as u64);
+                ui.open(Style.box().w(Size.fixed(gutterW)).pr(12.0).alignXY(AxisAlign.End, AxisAlign.Center));
+                ui.labelBytes(w.written(), line.color(SLATE_500));
+                ui.close();
+            }
+            ui.open(Style.box().h(Size.fixed(lineH)).alignXY(AxisAlign.Start, AxisAlign.Center));
+            // The selection on this line, behind its text: where its characters are drawn, and the newline after
+            // them as a narrow box when the selection runs on.
+            if (edit.selects() && edit.from() <= lineStop && edit.to() > lineStart) {
+                var spans = [TextSpan { left: 0.0, right: 0.0 }; 8];
+                let a = edit.from().max(lineStart) - lineStart;
+                let b = edit.to().min(lineStop) - lineStart;
+                var n = metrics.spans(lineText, config, a, b, mut spans[..]);
+                if (edit.to() > lineStop) {
+                    let end = metrics.measure(lineText, config).w;
+                    let size = if (config.fontSize > 0.0) config.fontSize else 16.0;
+                    n = addTextSpan(mut spans[..], n, end, end + size * 0.4);
+                }
+                for (s in 0..n) {
+                    let span = spans[s];
+                    ui.open(Style.box().absolute().passthrough().left(span.left).top(0.0)
+                        .w(Size.fixed(span.right - span.left)).h(Size.fixed(lineH)).bg(0x3B82F666));
+                    ui.close();
+                }
+            }
+            ui.labelBytes(lineText, line);
+            if (focused && k == caretLine && blink) {
+                let x = metrics.caretX(lineText, config, edit.caret - lineStart);
+                ui.open(Style.box().absolute().passthrough().left(x).top(0.0).w(Size.fixed(2.0))
+                    .h(Size.fixed(lineH)).bg(SLATE_200));
+                ui.close();
+            }
+            ui.close();
+            ui.close();
+        }
+        ui.open(Style.box().w(Size.fixed(1.0)).h(Size.fixed(round<f32>(count - lines[1]) * lineH)));
+        ui.close();
+        ui.close();
+    }
+}

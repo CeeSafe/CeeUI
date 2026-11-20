@@ -25,8 +25,11 @@ const FIELD_TEXT: f32 = 18.0;
 
 /// The grapheme boundary of `text` whose caret is nearest `x` points from its left edge (in right-to-left text the
 /// carets run the other way, so every boundary is tried).
-fn offsetAt<M: TextMetrics>(metrics: borrow M, text: Slice<u8>, x: f32) -> usize {
-    let config = TextConfig.of(FIELD_TEXT);
+fn offsetAt<M: TextMetrics>(metrics: borrow M, text: Slice<u8>, x: f32) -> usize =>
+    offsetAtIn(metrics, text, TextConfig.of(FIELD_TEXT), x);
+
+/// offsetAt for text set in `config`.
+fn offsetAtIn<M: TextMetrics>(metrics: borrow M, text: Slice<u8>, config: TextConfig, x: f32) -> usize {
     var best: usize = 0;
     var bestDistance = (metrics.caretX(text, config, 0) - x).abs();
     var at: usize = 0;
