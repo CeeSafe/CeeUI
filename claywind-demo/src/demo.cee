@@ -1581,10 +1581,17 @@ fn editorPage<M: TextMetrics>(ui: borrow mut Ui, app: borrow mut DemoApp, metric
     doc.goalX = app.editorGoal;
     ui.open(Style.column().id("editorPage").w(Size.grow()).h(Size.grow()).p(space(6.0)).gap(space(3.0)));
     ui.label("Editor", Text.of().font(TEXT_XL).color(inkCol(ui)));
-    ui.label(
-        "Lines wrap; Arabic and Hebrew read right to left; Undo with the platform's shortcut.",
-        Text.of().color(SLATE_400),
-    );
+    // One paragraph in several styles (Ui.richLabel).
+    let intro = "Lines wrap; Arabic and Hebrew read right to left; Undo with the platform's shortcut.";
+    let styles = [
+        TextStyle.of(12, Text.of().color(SLATE_400)),
+        TextStyle.of(6, Text.of().bold().color(SKY_400)),
+        TextStyle.of(5, Text.of().color(SLATE_400)),
+        TextStyle.of(6, Text.of().bold().color(SKY_400)),
+        TextStyle.of(21, Text.of().color(SLATE_400)),
+        TextStyle.of(4, Text.of().font(FONT_MONO).color(AMBER_400)),
+    ];
+    ui.richLabel(intro.bytes(), Text.of().color(SLATE_400), styles[..]);
     ui.open(Style.column().w(Size.grow()).h(Size.grow()).rounded(Radius.Md).clip());
     let _ = Controls.textEditor(mut ui, metrics, "editor", mut doc, Text.of().color(SLATE_100), true);
     ui.close();

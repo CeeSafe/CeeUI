@@ -94,6 +94,19 @@ struct Word {
     newline: bool;
 }
 
+/// A run of a rich text element's bytes in one style: `length` bytes from where the run before ended.
+public struct StyleSpan {
+    public length: usize;
+    public config: TextConfig;
+}
+
+/// A style run as the frame keeps it: bytes [start, start + length) of the frame's text buffer.
+struct StyleRun {
+    start: usize;
+    length: usize;
+    config: TextConfig;
+}
+
 /// One line of wrapped text, as a byte range of the frame's text buffer.
 struct TextLine {
     start: usize;
@@ -110,6 +123,9 @@ struct Node {
     text: TextConfig;
     textStart: usize;
     textLength: usize;
+    /// A rich text element's style runs (`LayoutTree.styles`); none for text in one style.
+    stylesStart: usize;
+    stylesCount: usize;
     preferred: Dims;
     minWord: f32;
     containsNewlines: bool;
@@ -211,6 +227,8 @@ public struct LayoutCapacity {
     public words: usize;
     public lines: usize;
     public commands: usize;
+    /// Style runs of rich text (`LayoutTree.richText`), all elements' together.
+    public styles: usize;
 
     /// Room for `elements` elements with typical text and effects.
     public fn of(elements: usize) -> LayoutCapacity => LayoutCapacity {
@@ -219,6 +237,7 @@ public struct LayoutCapacity {
         words: elements * 16,
         lines: elements * 4,
         commands: elements * 6,
+        styles: elements,
     };
 }
 
@@ -234,6 +253,7 @@ public struct LayoutTree<region r> {
     roots: FixedList<r, TreeRoot>;
     bytes: FixedList<r, u8>;
     words: FixedList<r, Word>;
+    styles: FixedList<r, StyleRun>;
     /// The line breaker's output and working room for one text element (unicode.cee's lineBreaks).
     breakMarks: SliceMut<r, u8>;
     breakScratch: SliceMut<r, u32>;
@@ -265,6 +285,7 @@ public struct LayoutTree<region r> {
         let roots = memory.allocArray(n, TreeRoot { index: 0, parentIndex: null, clipIndex: null, zIndex: 0 })?;
         let text = memory.allocArray(capacity.textBytes, 0u8)?;
         let words = memory.allocArray(capacity.words, Word { start: 0, length: 0, width: 0.0, newline: false })?;
+        let styles = memory.allocArray(capacity.styles, StyleRun { start: 0, length: 0, config: TextConfig.of(16.0) })?;
         let breakMarks = memory.allocArray(capacity.textBytes, 0u8)?;
         let breakScratch = memory.allocArray(capacity.textBytes * 2, 0u32)?;
         let lines = memory.allocArray(capacity.lines, TextLine { start: 0, length: 0, width: 0.0, height: 0.0 })?;
@@ -284,6 +305,7 @@ public struct LayoutTree<region r> {
             roots: FixedList<TreeRoot>.over(roots),
             bytes: FixedList<u8>.over(text),
             words: FixedList<Word>.over(words),
+            styles: FixedList<StyleRun>.over(styles),
             breakMarks: breakMarks,
             breakScratch: breakScratch,
             lines: FixedList<TextLine>.over(lines),
@@ -318,6 +340,7 @@ public struct LayoutTree<region r> {
         this.roots.clear();
         this.bytes.clear();
         this.words.clear();
+        this.styles.clear();
         this.lines.clear();
         this.commands.clear();
         this.failed = false;
@@ -454,6 +477,35 @@ public struct LayoutTree<region r> {
             return;
         }
         this.nodes.items[parent].childCount += 1;
+    }
+
+    /// A rich text leaf: `utf8` in the styles of `spans`, one after another (bytes past the last span are in
+    /// `base`). The paragraph's own settings (alignment, wrapping, line height, line clamp) are `base`'s; each span
+    /// gives its bytes their font, size, colour and spacing. Runs wrap together as one paragraph and share a
+    /// baseline on each line.
+    public fn richText(borrow mut this, utf8: Slice<u8>, base: TextConfig, spans: Slice<StyleSpan>) {
+        let first = this.styles.length();
+        let start = this.bytes.length();
+        this.text(utf8, base);
+        if (this.failed) {
+            return;
+        }
+        var at = start;
+        let end = start + utf8.length;
+        for (span in spans) {
+            if (at >= end) {
+                break;
+            }
+            let length = span.length.min(end - at);
+            if (length > 0 && !this.styles.push(StyleRun { start: at, length: length, config: span.config })) {
+                this.failed = true;
+                return;
+            }
+            at += length;
+        }
+        let index = this.nodes.length() - 1;
+        this.nodes.items[index].stylesStart = first;
+        this.nodes.items[index].stylesCount = this.styles.length() - first;
     }
 
     // ---- results ---------------------------------------------------------------------------------------------------
@@ -685,6 +737,8 @@ fn emptyNode() -> Node => Node {
     text: TextConfig.of(16.0),
     textStart: 0,
     textLength: 0,
+    stylesStart: 0,
+    stylesCount: 0,
     preferred: Dims { w: 0.0, h: 0.0 },
     minWord: 0.0,
     containsNewlines: false,
@@ -743,6 +797,50 @@ fn floatEqual(a: f32, b: f32) -> bool {
 }
 
 /// Measures every text element's words (Clay__MeasureTextCached) and its unwrapped size.
+/// The style of byte `at` of text element `node`: its style run's, or the element's own.
+fn styleAt(l: borrow LayoutTree, node: Node, at: usize) -> TextConfig {
+    for (k in node.stylesStart..node.stylesStart + node.stylesCount) {
+        let run = l.styles.items[k];
+        if (at >= run.start && at < run.start + run.length) {
+            return run.config;
+        }
+    }
+    return node.text;
+}
+
+/// Where the style of text element `node` next changes after byte `at`, at most `end`.
+fn styleEnd(l: borrow LayoutTree, node: Node, at: usize, end: usize) -> usize {
+    var next = end;
+    for (k in node.stylesStart..node.stylesStart + node.stylesCount) {
+        let run = l.styles.items[k];
+        if (at >= run.start && at < run.start + run.length) {
+            return next.min(run.start + run.length);
+        }
+        if (run.start > at) {
+            next = next.min(run.start);
+        }
+    }
+    return next;
+}
+
+/// Bytes [from, to) of the frame's text in text element `node`, measured a style run at a time: the widths added,
+/// the tallest height.
+fn measureStyled<M: TextMetrics>(l: borrow LayoutTree, node: Node, from: usize, to: usize, metrics: borrow M) -> Dims {
+    if (node.stylesCount == 0) {
+        return metrics.measure(l.bytes.items[from..to], node.text);
+    }
+    var d = Dims { w: 0.0, h: 0.0 };
+    var at = from;
+    while (at < to) {
+        let end = styleEnd(l, node, at, to);
+        let piece = metrics.measure(l.bytes.items[at..end], styleAt(l, node, at));
+        d.w += piece.w;
+        d.h = d.h.max(piece.h);
+        at = end;
+    }
+    return d;
+}
+
 fn measureAllText<M: TextMetrics>(l: borrow mut LayoutTree, metrics: borrow M) -> bool {
     for (index in 0..l.nodes.length()) {
         if (!l.nodes.items[index].isText) {
@@ -791,21 +889,30 @@ fn measureAllText<M: TextMetrics>(l: borrow mut LayoutTree, metrics: borrow M) -
             let length = spacesStart - pos;
             var d = Dims { w: 0.0, h: 0.0 };
             if (length > 0) {
-                d = metrics.measure(l.bytes.items[base + pos..base + spacesStart], config);
+                d = measureStyled(l, node, base + pos, base + spacesStart, metrics);
             }
             minWord = minWord.max(d.w);
             measuredHeight = measuredHeight.max(d.h);
             if (spacesStart < contentEnd) {
-                let w = d.w + spaceWidth;
+                // A rich text's spaces are as wide as their own style's.
+                let gap = if (node.stylesCount == 0) spaceWidth else metrics.measure(
+                    space[..],
+                    styleAt(l, node, base + spacesStart),
+                ).w;
+                let w = d.w + gap;
                 if (!l.words.push(Word { start: base + pos, length: length + 1, width: w, newline: false })) {
                     return false;
                 }
                 lineWidth += w;
                 for (extra in spacesStart + 1..contentEnd) {
-                    if (!l.words.push(Word { start: base + extra, length: 1, width: spaceWidth, newline: false })) {
+                    let gapExtra = if (node.stylesCount == 0) spaceWidth else metrics.measure(
+                        space[..],
+                        styleAt(l, node, base + extra),
+                    ).w;
+                    if (!l.words.push(Word { start: base + extra, length: 1, width: gapExtra, newline: false })) {
                         return false;
                     }
-                    lineWidth += spaceWidth;
+                    lineWidth += gapExtra;
                 }
             } else if (length > 0) {
                 if (!l.words.push(Word { start: base + pos, length: length, width: d.w, newline: false })) {

@@ -131,7 +131,7 @@ fn placeRoot<M: TextMetrics>(l: borrow mut LayoutTree, root: TreeRoot, metrics: 
 }
 
 /// Places a text element: one Text command per wrapped line.
-fn placeText(l: borrow mut LayoutTree, index: usize, area: Rect) -> bool {
+fn placeText<M: TextMetrics>(l: borrow mut LayoutTree, index: usize, area: Rect, metrics: borrow M) -> bool {
     let node = l.nodes.items[index];
     l.nodes.items[index].area = area;
     l.nodes.items[index].placed = true;
@@ -159,6 +159,16 @@ fn placeText(l: borrow mut LayoutTree, index: usize, area: Rect) -> bool {
             TextAlign.Center => (area.w - line.width) / 2.0,
             TextAlign.Right => area.w - line.width,
         };
+        if (node.stylesCount > 0) {
+            if (!placeStyledLine(mut l, node, line, Vec2 { x: area.x + offset, y: area.y + y }, metrics)) {
+                return false;
+            }
+            y += lineHeight;
+            if (l.cullingEnabled && area.y + y > l.screen.h) {
+                break;
+            }
+            continue;
+        }
         let run = TextRun {
             start: line.start,
             length: line.length,
@@ -182,12 +192,62 @@ fn placeText(l: borrow mut LayoutTree, index: usize, area: Rect) -> bool {
     return true;
 }
 
+/// A line of rich text element `node` at `at` (its left edge and top): a text command for each style run on it,
+/// side by side (from the right in a right-to-left paragraph), their baselines on the line's.
+fn placeStyledLine<M: TextMetrics>(
+    l: borrow mut LayoutTree,
+    node: Node,
+    line: TextLine,
+    at: Vec2,
+    metrics: borrow M,
+) -> bool {
+    let end = line.start + line.length;
+    var lineBase: f32 = 0.0;
+    var from = line.start;
+    while (from < end) {
+        let to = styleEnd(l, node, from, end);
+        lineBase = lineBase.max(metrics.baseline(styleAt(l, node, from)));
+        from = to;
+    }
+    let rtl = paragraphRtl(l, node.textStart, node.textStart + node.textLength, line.start);
+    var x = if (rtl) at.x + line.width else at.x;
+    from = line.start;
+    while (from < end) {
+        let to = styleEnd(l, node, from, end);
+        let config = styleAt(l, node, from);
+        let w = metrics.measure(l.bytes.items[from..to], config).w;
+        let base = metrics.baseline(config);
+        let dy = if (base >= 0.0) lineBase - base else 0.0;
+        var px = x;
+        if (rtl) {
+            x -= w;
+            px = x;
+        } else {
+            x += w;
+        }
+        let run = TextRun {
+            start: from,
+            length: to - from,
+            color: config.color,
+            fontId: config.fontId,
+            fontSize: config.fontSize,
+            letterSpacing: config.letterSpacing,
+            lineHeight: config.lineHeight,
+        };
+        if (!emit(mut l, Command.Text(Rect { x: px, y: at.y + dy, w: w, h: line.height }, run))) {
+            return false;
+        }
+        from = to;
+    }
+    return true;
+}
+
 /// Places one element and (recursively) its children; emits its commands.
 fn placeElement<M: TextMetrics>(l: borrow mut LayoutTree, index: usize, position: Vec2, metrics: borrow M) -> bool {
     let dims = l.nodes.items[index].dims;
     var area = Rect { x: position.x, y: position.y, w: dims.w, h: dims.h };
     if (l.nodes.items[index].isText) {
-        return placeText(mut l, index, area);
+        return placeText(mut l, index, area, metrics);
     }
     // Clamp the corner radii the CSS way so adjacent pairs fit their side (rounded-full may be any large value).
     l.nodes.items[index].decl.cornerRadius = l.nodes.items[index].decl.cornerRadius.fitted(area.w, area.h);

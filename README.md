@@ -93,6 +93,10 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   follows the rows sideways. Pressing a title sorts by its column (`GridSort`; the grid says when, and the program
   sorts its rows), and dragging a title's edge resizes its column (the program keeps the widths). Cells
   (`Controls.gridCell`) hold anything and clip what does not fit. The demo's Data page shows 10,000 orders.
+- **Rich text:** `Ui.richLabel` lays out one paragraph in several styles (`TextStyle`: a run of bytes in a `Text`
+  look, its font, size, colour and spacing): the runs wrap together as one paragraph, measured a run at a time, and
+  share a baseline on each line; in a right-to-left paragraph they run from the right. `LayoutTree.richText` is the
+  same for a layout used directly.
 - **Charts:** `Controls.chart` draws line, area and bar charts of one or more series as vector paths, over a grid
   on round values (1, 2 or 5 times a power of ten, taking in 0). The pointer over the plot highlights the nearest
   label and shows its values; a screen reader hears the chart's name and size.

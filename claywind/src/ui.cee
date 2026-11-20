@@ -484,6 +484,25 @@ public struct Ui<region r> {
         this.tree.text(text.bytes(), look.config());
     }
 
+    /// A paragraph of rich text: `utf8` in the looks of `styles`, one run after another (bytes past the last run, or
+    /// past the 64th, in `look`). Alignment, wrapping, line height and line clamp are `look`'s; each run gives its
+    /// bytes their font, size, colour and spacing. The runs wrap together and share a baseline on each line.
+    public fn richLabel(borrow mut this, utf8: Slice<u8>, look: Text, styles: Slice<TextStyle>) {
+        let base = look.config();
+        var spans = [StyleSpan { length: 0, config: base }; 64];
+        let n = styles.length.min(64);
+        for (k in 0..n) {
+            var c = styles[k].look.config();
+            // The paragraph's settings stay the paragraph's.
+            c.align = base.align;
+            c.wrap = base.wrap;
+            c.lineClamp = base.lineClamp;
+            spans[k] = StyleSpan { length: styles[k].length, config: c };
+        }
+        this.accessText(this.tree.idFor(0), utf8);
+        this.tree.richText(utf8, base, spans[0..n]);
+    }
+
     /// An element styled by `style` that draws a vector path in its box, clipped to it: `encoded` is a
     /// `PathBuilder`'s bytes, in the box's points from its top-left (or in `look`'s view box).
     public fn path(borrow mut this, style: Style, encoded: Slice<u8>, look: PathLook) {

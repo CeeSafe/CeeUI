@@ -93,10 +93,14 @@ fn wrapText<M: TextMetrics>(l: borrow mut LayoutTree, index: usize, metrics: bor
         } else if (word.newline || lineWidth + word.width > width) {
             let lastIndex = if (lineStart + lineLength > 0) lineStart + lineLength - 1 else 0;
             let finalSpace = lineLength > 0 && l.bytes.items[lastIndex] == ' ';
+            let finalWidth = if (!finalSpace) 0.0 else if (node.stylesCount == 0) spaceWidth else metrics.measure(
+                space[..],
+                styleAt(l, node, lastIndex),
+            ).w;
             if (!l.lines.push(TextLine {
                 start: lineStart,
                 length: if (finalSpace) lineLength - 1 else lineLength,
-                width: lineWidth - (if (finalSpace) spaceWidth else 0.0),
+                width: lineWidth - finalWidth,
                 height: lineHeight,
             })) {
                 return false;
@@ -138,7 +142,7 @@ fn wrapText<M: TextMetrics>(l: borrow mut LayoutTree, index: usize, metrics: bor
         // Trimmed a grapheme cluster at a time (a byte at a time for ASCII), never inside a character.
         var keep = last.length;
         while (keep > 0) {
-            let measured = metrics.measure(l.bytes.items[last.start..last.start + keep], config).w;
+            let measured = measureStyled(l, node, last.start, last.start + keep, metrics).w;
             if (measured + ellipsisWidth <= width) {
                 break;
             }

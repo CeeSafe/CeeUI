@@ -1275,6 +1275,14 @@ public const TEXT_XL: u32 = 2;
 public const TEXT_2XL: u32 = 3;
 
 /// renderer.h's TextOptions as a builder (`Text.of().font(TEXT_XL).color(SLATE_100).bold()`).
+/// A run of a rich label (Ui.richLabel): `length` bytes in `look`.
+public struct TextStyle {
+    public length: usize;
+    public look: Text;
+
+    public fn of(length: usize, look: Text) -> TextStyle => TextStyle { length: length, look: look };
+}
+
 public struct Text {
     textColor: Color?;
     fontPreset: u32;
