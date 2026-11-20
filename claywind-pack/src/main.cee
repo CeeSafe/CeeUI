@@ -610,6 +610,12 @@ fn androidTriple(abi: StringView) -> StringView => if (abi == "arm64-v8a") "aarc
     else if (abi == "x86") "i686-linux-android"
     else "";
 
+/// ceesafec's `--arch` for an Android ABI (CeeSafe ADR 0187): the 32-bit ones lay types out for 4-byte pointers.
+fn androidArch(abi: StringView) -> StringView => if (abi == "arm64-v8a") "arm64"
+    else if (abi == "x86_64") "x86_64"
+    else if (abi == "armeabi-v7a") "armv7"
+    else "x86";
+
 fn androidManifest(o: borrow Options) -> String {
     var m = String.create();
     m.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")!;
@@ -617,7 +623,7 @@ fn androidManifest(o: borrow Options) -> String {
     m.append(xml(o.id.view()).view())!;
     m.append("\"\n          android:versionCode=\"1\" android:versionName=\"")!;
     m.append(xml(o.version.view()).view())!;
-    m.append("\">\n  <uses-sdk android:minSdkVersion=\"28\" android:targetSdkVersion=\"36\"/>\n")!;
+    m.append("\">\n  <uses-sdk android:minSdkVersion=\"25\" android:targetSdkVersion=\"36\"/>\n")!;
     if (o.network.view().length > 0) {
         m.append("  <uses-permission android:name=\"android.permission.INTERNET\"/>\n")!;
     }
@@ -696,7 +702,8 @@ fn packAndroid(o: borrow Options) -> i32 {
         if (triple.length == 0) {
             return fail2("not an Android ABI: ", abi);
         }
-        let cc = cat([bin.view(), "/", triple, "28-clang"]);
+        // API level 25 (Android 7.1) is CeeSafe's floor (its ADR 0188).
+        let cc = cat([bin.view(), "/", triple, "25-clang"]);
         let lib = cat([stage, "/lib/", abi]);
         if (!run("mkdir", ["-p", lib.view()])) {
             return fail("could not make the library's directory");
@@ -704,7 +711,9 @@ fn packAndroid(o: borrow Options) -> i32 {
         let so = cat([lib.view(), "/libmain.so"]);
         // A shared library may have undefined symbols, and then the app cannot load on the phone: the link refuses
         // them here, where it can be seen (a dependency's library that was not built for Android, say).
-        let flags: [StringView; 14] = [
+        let flags: [StringView; 16] = [
+            "--arch",
+            androidArch(abi),
             "--cc",
             cc.view(),
             "--cflag",
