@@ -173,6 +173,23 @@ impl Controls {
         gutter: bool,
         edit: borrow mut TextEdit,
     ) {
+        Controls.textViewOf(mut ui, metrics, id, text, starts, count, look, gutter, mut edit, false);
+    }
+
+    /// selectableTextView's work; an `editable` one also reports its caret to the host (the input method and a
+    /// phone's keyboard follow it).
+    fn textViewOf<M: TextMetrics>(
+        ui: borrow mut Ui,
+        metrics: borrow M,
+        id: StringView,
+        text: Slice<u8>,
+        starts: Slice<u32>,
+        count: usize,
+        look: Text,
+        gutter: bool,
+        edit: borrow mut TextEdit,
+        editable: bool,
+    ) {
         let h = hashId(id);
         ui.registerFocusable(h);
         let config0 = look.config();
@@ -387,11 +404,27 @@ impl Controls {
                 }
             }
             ui.labelBytes(lineText, line);
-            if (focused && k == caretLine && blink) {
+            if (focused && k == caretLine) {
                 let x = metrics.caretX(lineText, config, edit.caret - lineStart);
-                ui.open(Style.box().absolute().passthrough().left(x).top(0.0).w(Size.fixed(2.0))
-                    .h(Size.fixed(lineH)).bg(SLATE_200));
-                ui.close();
+                if (blink) {
+                    ui.open(Style.box().absolute().passthrough().left(x).top(0.0).w(Size.fixed(2.0))
+                        .h(Size.fixed(lineH)).bg(SLATE_200));
+                    ui.close();
+                }
+                match (box) {
+                    Some(b) => {
+                        if (editable) {
+                            let shown = ui.scrollOffset(id);
+                            ui.reportCaret(Rect {
+                                x: b.x + shown.x + gutterW + x,
+                                y: b.y + shown.y + round<f32>(k) * lineH,
+                                w: 2.0,
+                                h: lineH,
+                            });
+                        }
+                    }
+                    null => {}
+                }
             }
             ui.close();
             ui.close();
@@ -400,4 +433,193 @@ impl Controls {
         ui.close();
         ui.close();
     }
+}
+
+/// Replaces bytes [`from`, `to`) of `buf[0..len]` with `insert`, the tail moved once. False when it does not fit
+/// `buf` (nothing changes then).
+fn spliceBytes(buf: SliceMut<u8>, len: borrow mut usize, from: usize, to: usize, insert: Slice<u8>) -> bool {
+    let removed = to - from;
+    let n: usize = len;
+    if (n - removed + insert.length > buf.length) {
+        return false;
+    }
+    if (insert.length > removed) {
+        let grow = insert.length - removed;
+        var i = n;
+        while (i > to) {
+            i -= 1;
+            buf[i + grow] = buf[i];
+        }
+    } else if (insert.length < removed) {
+        let shrink = removed - insert.length;
+        for (i in to..n) {
+            buf[i - shrink] = buf[i];
+        }
+    }
+    for (i in 0..insert.length) {
+        buf[from + i] = insert[i];
+    }
+    len = n - removed + insert.length;
+    return true;
+}
+
+/// Indexes the lines of `text` into `starts` again from line `first` on (the lines before it unchanged), as
+/// indexLines does: the number of lines, or null when `starts` has no room for them all.
+public fn reindexLines(text: Slice<u8>, starts: SliceMut<u32>, first: usize) -> usize? {
+    if (starts.length == 0) {
+        return null;
+    }
+    if (first == 0) {
+        return indexLines(text, starts);
+    }
+    var n = first;
+    let from = starts[first - 1] as usize;
+    for (i in from..text.length) {
+        if (text[i] == '\n') {
+            if (n >= starts.length) {
+                return null;
+            }
+            starts[n] = truncate<u32>(i + 1);
+            n += 1;
+        }
+    }
+    return n;
+}
+
+/// How many line breaks `bytes` holds.
+fn newlines(bytes: Slice<u8>) -> usize {
+    var n: usize = 0;
+    for (b in bytes) {
+        if (b == '\n') {
+            n += 1;
+        }
+    }
+    return n;
+}
+
+impl Controls {
+    /// A text view that edits its text: a selectableTextView (the caret, the selection, the keys and the pointer as
+    /// there) over `buf[0..len]`, with its line index `starts[0..count]` (indexLines), both caller-owned and
+    /// changed here. Typing and Paste replace the selection, Enter starts a new line, Backspace and Delete take the
+    /// selection or a grapheme cluster (at a line's edge, the line break, joining the lines), and Cut takes the
+    /// selection; the index follows each change. An edit that `buf` or `starts` has no room for is not made.
+    /// Whether the text changed.
+    public fn textEditor<M: TextMetrics>(
+        ui: borrow mut Ui,
+        metrics: borrow M,
+        id: StringView,
+        buf: SliceMut<u8>,
+        len: borrow mut usize,
+        starts: SliceMut<u32>,
+        count: borrow mut usize,
+        look: Text,
+        gutter: bool,
+        edit: borrow mut TextEdit,
+    ) -> bool {
+        let h = hashId(id);
+        len = len.min(buf.length);
+        if (count == 0 || count > starts.length) {
+            count = indexLines(buf[0..len], starts) ?? 0;
+        }
+        edit.caret = edit.caret.min(len);
+        edit.anchor = edit.anchor.min(len);
+        var changed = false;
+        if (ui.hasFocus(h) && count > 0) {
+            if (ui.commanded(EditCommand.Cut) && edit.selects()) {
+                ui.copyText(buf[edit.from()..edit.to()]);
+                changed = replaceIn(buf, mut len, starts, mut count, mut edit, "".bytes()) || changed;
+            }
+            if (ui.commanded(EditCommand.Paste)) {
+                var pasted = [0u8; 4096];
+                let text = ui.pastedText();
+                let n = text.length.min(4096);
+                for (i in 0..n) {
+                    pasted[i] = text[i];
+                }
+                changed = replaceIn(buf, mut len, starts, mut count, mut edit, pasted[0..n]) || changed;
+            }
+            loop {
+                let c = ui.nextChar();
+                if (c == 0) {
+                    break;
+                }
+                if (!typeable(c)) {
+                    continue;
+                }
+                var bytes = [0u8; 4];
+                let n = encodeUtf8(c, mut bytes);
+                changed = replaceIn(buf, mut len, starts, mut count, mut edit, bytes[0..n]) || changed;
+            }
+            if (ui.keyHit(Key.Enter)) {
+                changed = replaceIn(buf, mut len, starts, mut count, mut edit, "\n".bytes()) || changed;
+            }
+            if (ui.keyHit(Key.Backspace) && (edit.selects() || edit.caret > 0)) {
+                if (!edit.selects()) {
+                    edit.anchor = stepBack(buf[0..len], starts[0..count], edit.caret);
+                }
+                changed = replaceIn(buf, mut len, starts, mut count, mut edit, "".bytes()) || changed;
+            }
+            if (ui.keyHit(Key.Delete) && (edit.selects() || edit.caret < len)) {
+                if (!edit.selects()) {
+                    edit.anchor = stepOn(buf[0..len], starts[0..count], edit.caret);
+                }
+                changed = replaceIn(buf, mut len, starts, mut count, mut edit, "".bytes()) || changed;
+            }
+        }
+        Controls.textViewOf(mut ui, metrics, id, buf[0..len], starts[0..count], count, look, gutter, mut edit, true);
+        return changed;
+    }
+}
+
+/// The selection of `buf[0..len]` replaced by `insert`, the caret after it and nothing selected, the index
+/// following; whether anything changed (false too when the text or its index has no room for it).
+fn replaceIn(
+    buf: SliceMut<u8>,
+    len: borrow mut usize,
+    starts: SliceMut<u32>,
+    count: borrow mut usize,
+    edit: borrow mut TextEdit,
+    insert: Slice<u8>,
+) -> bool {
+    let from = edit.from();
+    let to = edit.to();
+    if (from == to && insert.length == 0) {
+        return false;
+    }
+    let lines = count - newlines(buf[from..to]) + newlines(insert);
+    if (lines > starts.length || !spliceBytes(buf, mut len, from, to, insert)) {
+        return false;
+    }
+    let first = lineAt(starts[0..count], count, from) + 1;
+    count = reindexLines(buf[0..len], starts, first) ?? count;
+    edit.caret = from + insert.length;
+    edit.anchor = edit.caret;
+    return true;
+}
+/// Where Backspace takes the text back to from byte `at`: the start of the grapheme cluster before it in its line,
+/// or at a line's start the line break before (a CR LF whole).
+fn stepBack(text: Slice<u8>, starts: Slice<u32>, at: usize) -> usize {
+    let k = lineAt(starts, starts.length, at);
+    let lineStart = starts[k] as usize;
+    if (at > lineStart) {
+        return lineStart + graphemeBefore(text[lineStart..at], at - lineStart);
+    }
+    if (at >= 2 && text[at - 1] == '\n' && text[at - 2] == '\r') {
+        return at - 2;
+    }
+    return at - 1;
+}
+
+/// Where Delete takes the text on to from byte `at`: the end of the grapheme cluster after it in its line, or at a
+/// line's end past the line break (a CR LF whole).
+fn stepOn(text: Slice<u8>, starts: Slice<u32>, at: usize) -> usize {
+    let k = lineAt(starts, starts.length, at);
+    let stop = lineEnd(text, starts, starts.length, k);
+    if (at < stop) {
+        return (at + graphemeEnd(text[at..stop], 0)).min(stop);
+    }
+    if (text[at] == '\r' && at + 1 < text.length && text[at + 1] == '\n') {
+        return at + 2;
+    }
+    return at + 1;
 }
