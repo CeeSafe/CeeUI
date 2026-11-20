@@ -9,3 +9,4 @@ claywind = { path = "../claywind" }
 claywind_demo = { path = "../claywind-demo" }
 claywind_fonts = { path = "../claywind-fonts" }
 claywind_tasks = { path = "../claywind-tasks" }
+claywind_capi = { path = "../claywind-capi" }

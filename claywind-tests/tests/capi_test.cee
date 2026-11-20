@@ -1,0 +1,104 @@
+// SPDX-License-Identifier: MIT
+// claywind-capi's recorded frames (frame.cee): a host's calls recorded into a Frame and replayed into a Ui, driven by a
+// scripted platform. The host here is CeeSafe code making the calls a C frame function makes through claywind.h.
+
+import claywind;
+import claywind_capi;
+
+/// The host's state, as a C program keeps it.
+struct Host {
+    count: i32;
+    dark: bool;
+    /// What the controls' calls returned in the last frame.
+    added: bool;
+    flipped: bool;
+    /// How many times the checkbox's call reported a change.
+    flips: i32;
+}
+
+/// The host's frame function: a heading, a counter's button, a theme checkbox, and a panel it forgets to end.
+fn hostFrame(f: borrow mut Frame, host: borrow mut Host) {
+    f.heading("Counter".bytes());
+    f.row(8.0);
+    host.added = f.button("add".bytes(), "Add one".bytes());
+    if (host.added) {
+        host.count += 1;
+    }
+    host.flipped = f.checkbox("dark".bytes(), "Dark".bytes(), mut host.dark);
+    if (host.flipped) {
+        host.flips += 1;
+    }
+    f.end();
+    f.panel();
+    f.label("left open: replay closes it".bytes());
+}
+
+/// One frame: the host's calls recorded, replayed into the Ui, laid out; then the input's one-frame edges consumed.
+fn frameOnce(ui: borrow mut Ui, platform: borrow mut FakePlatform, f: borrow mut Frame, host: borrow mut Host)
+    -> Result<void, TestFailure> {
+    f.begin(ui.isDarkMode());
+    hostFrame(mut f, mut host);
+    ui.begin(mut platform);
+    ui.open(Style.column().id("page").w(Size.grow()).h(Size.grow()).p(space(4.0)).gap(space(3.0)));
+    replay(mut ui, mut f);
+    ui.close();
+    let metrics = FixedAdvance { unused: 0 };
+    let ok = match (ui.endFrame(mut platform, metrics)) {
+        Ok() => true,
+        Err(_) => false,
+    };
+    platform.pointerState.pressed = false;
+    platform.pointerState.released = false;
+    platform.clock += 1.0 / 60.0;
+    return Check.isTrue(ok, "frame fits");
+}
+
+/// A press and release at the centre of `name`'s box, a frame each.
+fn clickOn(ui: borrow mut Ui, platform: borrow mut FakePlatform, f: borrow mut Frame, host: borrow mut Host,
+    name: StringView) -> Result<void, TestFailure> {
+    let b = ui.boxOf(name)!;
+    platform.pointerState.position = Vec2 { x: b.x + b.w / 2.0, y: b.y + b.h / 2.0 };
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    frameOnce(mut ui, mut platform, mut f, mut host)?;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    return frameOnce(mut ui, mut platform, mut f, mut host);
+}
+
+@test
+fn capiFramesReplayAndReportControls() -> Result<void, TestFailure> {
+    var storage = [0u8; 1048576];
+    let memory = FixedBufferAllocator.over(mut storage);
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(800.0, 600.0, -1.0, -1.0);
+    var f = Frame.create();
+    var host = Host { count: 0, dark: false, added: false, flipped: false, flips: 0 };
+
+    // The first frame lays the controls out; nothing was done with them yet.
+    frameOnce(mut ui, mut platform, mut f, mut host)?;
+    Check.isTrue(ui.boxOf("add")!.w > 0.0 && ui.boxOf("dark")!.w > 0.0, "the host's controls are laid out")?;
+    Check.isTrue(!host.added && !host.flipped && host.count == 0, "no control fired before any input")?;
+    Check.isTrue(f.count() == 7 && !f.isFull(), "the frame recorded the host's seven calls")?;
+
+    // A click on the button: the replay sees it, asks for a frame, and the host's next call returns true, once.
+    clickOn(mut ui, mut platform, mut f, mut host, "add")?;
+    Check.isTrue(ui.needsFrame(), "a control that fired asks for the next frame")?;
+    frameOnce(mut ui, mut platform, mut f, mut host)?;
+    Check.isTrue(host.added && host.count == 1, "the button's call returned true in the next frame")?;
+    frameOnce(mut ui, mut platform, mut f, mut host)?;
+    Check.isTrue(!host.added && host.count == 1, "and only in that frame")?;
+
+    // A click on the checkbox (which flips on the press): the host's bool takes the new state, and the call says it
+    // changed, once.
+    clickOn(mut ui, mut platform, mut f, mut host, "dark")?;
+    frameOnce(mut ui, mut platform, mut f, mut host)?;
+    frameOnce(mut ui, mut platform, mut f, mut host)?;
+    Check.isTrue(host.dark, "the checkbox set the host's bool")?;
+    Check.isTrue(host.flips == 1, "the checkbox's call reported the change once")?;
+    // And back.
+    clickOn(mut ui, mut platform, mut f, mut host, "dark")?;
+    frameOnce(mut ui, mut platform, mut f, mut host)?;
+    Check.isTrue(!host.dark && host.flips == 2, "a second click turns it off")?;
+    return Ok();
+}

@@ -1,0 +1,44 @@
+# claywind-capi: ClayWind for C
+
+ClayWind's C API, for programs in C and in languages that call C: Swift, Kotlin (through JNI) and Rust. It is the
+first step of the roadmap's bindings (P6). The C API is `include/claywind.h`; `examples/counter.c` uses all of it.
+
+```sh
+cd claywind-capi
+./examples/build.sh   # ceesafec build --emit lib, then the example compiled and linked
+./out/counter
+```
+
+![The C example](../docs/capi-counter.png)
+
+## How it works
+
+A host calls `claywind_run` with a frame function. ClayWind opens a window, and for each frame calls that function
+with a `claywind_frame`. The function lays out the whole window from the program's state: columns, rows, panels,
+labels, buttons and checkboxes. ClayWind then lays the frame out, draws it and waits for input.
+
+The calls are recorded and replayed. ClayWind's `Ui` borrows its memory, and CeeSafe gives C no pointer to a value
+that holds loans. So the frame function's calls are recorded into a `Frame` of plain data (`src/frame.cee`), and
+ClayWind replays them into the `Ui` when the function returns. A consequence for the host is that a control's result
+arrives in the next frame. A button is true in the frame after it was pressed, and a checkbox's new state arrives
+the same way. ClayWind asks for that frame at once, so the delay is about one screen refresh.
+`CEESAFE-FINDINGS.md` Q1 records the gap.
+
+## Linking
+
+`ceesafec build --emit lib` writes `out/claywind_capi.a`, which holds CeeSafe's runtime, and `out/ceesafe/embed.h`.
+A host:
+
+1. includes `claywind.h` and `ceesafe/embed.h` (`-Iinclude -Iout`);
+2. calls `ceesafe_init` once with a config whose `size` is `sizeof(ceesafe_config)` (NULL is refused), on the thread
+   that will run the window: the main thread on macOS;
+3. links `out/claywind_capi.a`. On macOS it also links `-framework AppKit -framework QuartzCore -framework CoreText
+   -framework CoreGraphics`.
+
+## Status
+
+- Checked on macOS: the example builds, opens its window and draws it. `claywind-tests/tests/capi_test.cee` drives
+  recorded frames with a scripted platform: a button press and a checkbox's changes reach the host's next frame,
+  once.
+- Linux: `examples/build.sh` has a link line, but it has not been run. Windows: no build script yet.
+- Next: a text field; Swift, Kotlin and Rust bindings over this header; an iOS and Android host.

@@ -5,8 +5,16 @@ name = "claywind"
 source = "path+../claywind"
 
 [[package]]
+name = "claywind_capi"
+source = "path+../claywind-capi"
+
+[[package]]
 name = "claywind_demo"
 source = "path+../claywind-demo"
+
+[[package]]
+name = "claywind_desktop"
+source = "path+../claywind-desktop"
 
 [[package]]
 name = "claywind_fonts"

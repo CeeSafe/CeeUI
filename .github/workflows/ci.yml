@@ -66,13 +66,18 @@ jobs:
       - name: Check and format
         run: |
           set -e
-          for p in claywind claywind-demo claywind-demo-tasks claywind-desktop claywind-dev claywind-fonts \
+          for p in claywind claywind-capi claywind-demo claywind-demo-tasks claywind-desktop claywind-dev claywind-fonts \
                    claywind-tasks claywind-web claywind-pack claywind-tests claywind-hosts/headless \
                    claywind-hosts/desktop claywind-hosts/gpu claywind-hosts/terminal claywind-hosts/browser \
                    claywind-hosts/web; do
             echo "== $p"
             (cd "$p" && ceesafec check && ceesafec fmt --check)
           done
+
+      - name: The C API's example, built and linked (macOS)
+        if: runner.os == 'macOS'
+        working-directory: claywind-capi
+        run: ./examples/build.sh
 
       - name: Tests
         working-directory: claywind-tests

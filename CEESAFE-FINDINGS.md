@@ -451,3 +451,18 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   `~x`; the parser rejects `~` ("expected expression") and `!x` on a `u32` is N0205 (`!` is for `bool` only). Written as
   `x ^ 0xFFFFFFFF`, which says less and needs the width spelt out. Bitwise operators are defined on unsigned types
   (type-system.md §6), so a unary `~` there would complete the set without the signed cases M1 avoids.
+
+## Q. Found while writing claywind-capi, ClayWind's C API (roadmap P6, 2026-11-20, ceesafec 0.81.0)
+
+- **Q1 (open). A host's callback cannot be given a value that holds loans, even for the length of the call.**
+  claywind_run calls the host's frame function, which should build the frame by calling exports with a handle to the
+  running `Ui`. `Ui` borrows its memory (a `FixedBufferAllocator` over the pane's storage), so `*mut Ui` is N0281
+  ("a raw pointer cannot point to 'claywind.Ui', which holds loans"), and there is no `static` region for memory
+  allocated at run time (a static region holds only data that was static to begin with; no `Box.leak`-like way to
+  make one). claywind-capi works around it by recording the host's calls into plain data (`Frame`) and replaying them
+  into the `Ui` after the callback returns: a control's result reaches the host one frame late (a frame is asked for
+  at once, so about a screen refresh). What would remove the indirection: a scoped handle to a loan-holding value,
+  valid only during one call into C (the callback's frame), or a way to give memory a `static` region for good.
+- **Q2 (doc). `ceesafe_init(NULL)` is refused (`CEESAFE_INIT_SIZE`).** embed.h says so, but the obvious first call
+  in a host fails silently unless its result is checked; tooling.md §8.3 and type-system.md §28.6 do not show a
+  minimal config. claywind.h's example fills one (`.size = sizeof(ceesafe_config)`).
