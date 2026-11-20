@@ -46,6 +46,9 @@ public enum EditCommand {
     Cut,
     Paste,
     SelectAll,
+    /// Undo the last edit, and Redo it again (a text editor's history).
+    Undo,
+    Redo,
 }
 
 fn commandBit(c: EditCommand) -> u32 => match (c) {
@@ -53,6 +56,8 @@ fn commandBit(c: EditCommand) -> u32 => match (c) {
     EditCommand.Cut => 2,
     EditCommand.Paste => 4,
     EditCommand.SelectAll => 8,
+    EditCommand.Undo => 16,
+    EditCommand.Redo => 32,
 };
 
 impl<region r> Ui<r> {

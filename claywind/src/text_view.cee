@@ -525,6 +525,118 @@ fn newlines(bytes: Slice<u8>) -> usize {
     return n;
 }
 
+/// A text editor's undo history (textEditorWithUndo), kept in a caller-owned buffer of records: each edit's place,
+/// the bytes it removed and inserted, and the caret before it. The records before `used` can be undone; those from
+/// `used` to `end` were undone and can be redone, until the next edit. A run of typing is one record, ended by a
+/// space, a line break or a move of the caret, so Undo takes back a word. When the buffer is full the oldest records
+/// go.
+public struct TextHistory {
+    used: usize;
+    end: usize;
+    /// Where the caret is after the record being typed (it may be joined), or none.
+    typingAt: usize?;
+
+    public fn create() -> TextHistory => TextHistory { used: 0, end: 0, typingAt: null };
+
+    /// Whether there is an edit to undo, or one to redo.
+    public fn canUndo(borrow this) -> bool => this.used > 0;
+    public fn canRedo(borrow this) -> bool => this.end > this.used;
+}
+
+/// A record's header: from, removed length, inserted length, caret before, anchor before (u32 each), then the
+/// removed and inserted bytes, then the record's whole length (u32), so records are walked back from the end.
+const RECORD_HEAD: usize = 20;
+
+fn putU32(store: SliceMut<u8>, at: usize, v: usize) {
+    let x = truncate<u32>(v);
+    store[at] = truncate<u8>(x);
+    store[at + 1] = truncate<u8>(x >> 8);
+    store[at + 2] = truncate<u8>(x >> 16);
+    store[at + 3] = truncate<u8>(x >> 24);
+}
+
+fn getU32(store: Slice<u8>, at: usize) -> usize =>
+    ((store[at] as u32) |
+        ((store[at + 1] as u32) << 8) | ((store[at + 2] as u32) << 16) | ((store[at + 3] as u32) << 24)) as usize;
+
+/// Drops the oldest record of `store`, moving the rest down.
+fn dropOldest(store: SliceMut<u8>, state: borrow mut TextHistory) {
+    if (state.end == 0) {
+        return;
+    }
+    let size = RECORD_HEAD + getU32(store, 4) + getU32(store, 8) + 4;
+    for (i in size..state.end) {
+        store[i - size] = store[i];
+    }
+    state.end -= size;
+    state.used = if (state.used >= size) state.used - size else 0;
+}
+
+/// Records an edit about to be made: bytes [`from`, `from + removed.length`) become `inserted`, the selection
+/// before it `caret` and `anchor`. A typed character right after the record being typed joins it.
+fn record(
+    store: SliceMut<u8>,
+    state: borrow mut TextHistory,
+    from: usize,
+    removed: Slice<u8>,
+    inserted: Slice<u8>,
+    caret: usize,
+    anchor: usize,
+    typed: bool,
+) {
+    if (store.length == 0) {
+        return;
+    }
+    // A run of typing goes on until a space or a line break, which ends it.
+    let ends = inserted.length == 1 && (inserted[0] == ' ' || inserted[0] == '\n');
+    state.end = state.used; // what was undone cannot be redone after a new edit
+    let joins = typed && removed.length == 0 && state.typingAt == Some(from) && state.used >= RECORD_HEAD + 4;
+    if (joins) {
+        let size = getU32(store, state.used - 4);
+        let start = state.used - size;
+        if (state.used + inserted.length <= store.length) {
+            // Over the old trailer: the new bytes, then the trailer again.
+            let at = state.used - 4;
+            for (i in 0..inserted.length) {
+                store[at + i] = inserted[i];
+            }
+            putU32(store, start + 8, getU32(store, start + 8) + inserted.length);
+            putU32(store, at + inserted.length, size + inserted.length);
+            state.used += inserted.length;
+            state.end = state.used;
+            state.typingAt = if (ends) null else Some(from + inserted.length);
+            return;
+        }
+    }
+    let size = RECORD_HEAD + removed.length + inserted.length + 4;
+    if (size > store.length) {
+        // An edit larger than the whole history: nothing before it can be undone across it.
+        state.used = 0;
+        state.end = 0;
+        state.typingAt = null;
+        return;
+    }
+    while (state.used + size > store.length) {
+        dropOldest(store, mut state);
+    }
+    let at = state.used;
+    putU32(store, at, from);
+    putU32(store, at + 4, removed.length);
+    putU32(store, at + 8, inserted.length);
+    putU32(store, at + 12, caret);
+    putU32(store, at + 16, anchor);
+    for (i in 0..removed.length) {
+        store[at + RECORD_HEAD + i] = removed[i];
+    }
+    for (i in 0..inserted.length) {
+        store[at + RECORD_HEAD + removed.length + i] = inserted[i];
+    }
+    putU32(store, at + size - 4, size);
+    state.used += size;
+    state.end = state.used;
+    state.typingAt = if (typed && removed.length == 0 && !ends) Some(from + inserted.length) else null;
+}
+
 impl Controls {
     /// A text view that edits its text: a selectableTextView (the caret, the selection, the keys and the pointer as
     /// there) over `buf[0..len]`, with its line index `starts[0..count]` (indexLines), both caller-owned and
@@ -544,6 +656,41 @@ impl Controls {
         gutter: bool,
         edit: borrow mut TextEdit,
     ) -> bool {
+        var none = [0u8; 1];
+        var state = TextHistory.create();
+        return Controls.textEditorWithUndo(
+            mut ui,
+            metrics,
+            id,
+            buf,
+            mut len,
+            starts,
+            mut count,
+            look,
+            gutter,
+            mut edit,
+            mut none[0..0],
+            mut state,
+        );
+    }
+
+    /// textEditor with an undo history: `history` (caller-owned, its size the history's) and `state` keep the
+    /// edits, and the Undo and Redo edit commands (secondary-Z, secondary-Shift-Z, Control-Y by default) take them
+    /// back and make them again. Whether the text changed.
+    public fn textEditorWithUndo<M: TextMetrics>(
+        ui: borrow mut Ui,
+        metrics: borrow M,
+        id: StringView,
+        buf: SliceMut<u8>,
+        len: borrow mut usize,
+        starts: SliceMut<u32>,
+        count: borrow mut usize,
+        look: Text,
+        gutter: bool,
+        edit: borrow mut TextEdit,
+        history: SliceMut<u8>,
+        state: borrow mut TextHistory,
+    ) -> bool {
         let h = hashId(id);
         len = len.min(buf.length);
         if (count == 0 || count > starts.length) {
@@ -551,11 +698,20 @@ impl Controls {
         }
         edit.caret = edit.caret.min(len);
         edit.anchor = edit.anchor.min(len);
+        state.used = state.used.min(history.length);
+        state.end = state.end.min(history.length).max(state.used);
         var changed = false;
         if (ui.hasFocus(h) && count > 0) {
+            if (ui.commanded(EditCommand.Undo)) {
+                changed = undoIn(buf, mut len, starts, mut count, mut edit, history, mut state) || changed;
+            }
+            if (ui.commanded(EditCommand.Redo)) {
+                changed = redoIn(buf, mut len, starts, mut count, mut edit, history, mut state) || changed;
+            }
             if (ui.commanded(EditCommand.Cut) && edit.selects()) {
                 ui.copyText(buf[edit.from()..edit.to()]);
-                changed = replaceIn(buf, mut len, starts, mut count, mut edit, "".bytes()) || changed;
+                changed = replaceIn(buf, mut len, starts, mut count, mut edit, "".bytes(), history, mut state, false) ||
+                    changed;
             }
             if (ui.commanded(EditCommand.Paste)) {
                 var pasted = [0u8; 4096];
@@ -564,7 +720,18 @@ impl Controls {
                 for (i in 0..n) {
                     pasted[i] = text[i];
                 }
-                changed = replaceIn(buf, mut len, starts, mut count, mut edit, pasted[0..n]) || changed;
+                changed = replaceIn(
+                    buf,
+                    mut len,
+                    starts,
+                    mut count,
+                    mut edit,
+                    pasted[0..n],
+                    history,
+                    mut state,
+                    false,
+                ) ||
+                    changed;
             }
             loop {
                 let c = ui.nextChar();
@@ -576,22 +743,36 @@ impl Controls {
                 }
                 var bytes = [0u8; 4];
                 let n = encodeUtf8(c, mut bytes);
-                changed = replaceIn(buf, mut len, starts, mut count, mut edit, bytes[0..n]) || changed;
+                changed = replaceIn(buf, mut len, starts, mut count, mut edit, bytes[0..n], history, mut state, true) ||
+                    changed;
             }
             if (ui.keyHit(Key.Enter)) {
-                changed = replaceIn(buf, mut len, starts, mut count, mut edit, "\n".bytes()) || changed;
+                changed = replaceIn(
+                    buf,
+                    mut len,
+                    starts,
+                    mut count,
+                    mut edit,
+                    "\n".bytes(),
+                    history,
+                    mut state,
+                    true,
+                ) ||
+                    changed;
             }
             if (ui.keyHit(Key.Backspace) && (edit.selects() || edit.caret > 0)) {
                 if (!edit.selects()) {
                     edit.anchor = stepBack(buf[0..len], starts[0..count], edit.caret);
                 }
-                changed = replaceIn(buf, mut len, starts, mut count, mut edit, "".bytes()) || changed;
+                changed = replaceIn(buf, mut len, starts, mut count, mut edit, "".bytes(), history, mut state, false) ||
+                    changed;
             }
             if (ui.keyHit(Key.Delete) && (edit.selects() || edit.caret < len)) {
                 if (!edit.selects()) {
                     edit.anchor = stepOn(buf[0..len], starts[0..count], edit.caret);
                 }
-                changed = replaceIn(buf, mut len, starts, mut count, mut edit, "".bytes()) || changed;
+                changed = replaceIn(buf, mut len, starts, mut count, mut edit, "".bytes(), history, mut state, false) ||
+                    changed;
             }
         }
         Controls.textViewOf(mut ui, metrics, id, buf[0..len], starts[0..count], count, look, gutter, mut edit, true);
@@ -600,7 +781,8 @@ impl Controls {
 }
 
 /// The selection of `buf[0..len]` replaced by `insert`, the caret after it and nothing selected, the index
-/// following; whether anything changed (false too when the text or its index has no room for it).
+/// following, the edit recorded in `history` (`typed`: a typed character, which may join a run of typing); whether
+/// anything changed (false too when the text or its index has no room for it).
 fn replaceIn(
     buf: SliceMut<u8>,
     len: borrow mut usize,
@@ -608,6 +790,9 @@ fn replaceIn(
     count: borrow mut usize,
     edit: borrow mut TextEdit,
     insert: Slice<u8>,
+    history: SliceMut<u8>,
+    state: borrow mut TextHistory,
+    typed: bool,
 ) -> bool {
     let from = edit.from();
     let to = edit.to();
@@ -615,15 +800,82 @@ fn replaceIn(
         return false;
     }
     let lines = count - newlines(buf[from..to]) + newlines(insert);
-    if (lines > starts.length || !spliceBytes(buf, mut len, from, to, insert)) {
+    if (lines > starts.length || len - (to - from) + insert.length > buf.length) {
         return false;
     }
+    record(history, mut state, from, buf[from..to], insert, edit.caret, edit.anchor, typed);
+    let _ = spliceBytes(buf, mut len, from, to, insert);
     let first = lineAt(starts[0..count], count, from) + 1;
     count = reindexLines(buf[0..len], starts, first) ?? count;
     edit.caret = from + insert.length;
     edit.anchor = edit.caret;
     return true;
 }
+
+/// Undoes the last edit of `history`: its inserted bytes become the removed ones again, and the selection is as it
+/// was before it. False when there is none, or no room to put the text back.
+fn undoIn(
+    buf: SliceMut<u8>,
+    len: borrow mut usize,
+    starts: SliceMut<u32>,
+    count: borrow mut usize,
+    edit: borrow mut TextEdit,
+    history: SliceMut<u8>,
+    state: borrow mut TextHistory,
+) -> bool {
+    if (state.used < RECORD_HEAD + 4) {
+        return false;
+    }
+    let size = getU32(history, state.used - 4);
+    let at = state.used - size;
+    let from = getU32(history, at);
+    let removed = getU32(history, at + 4);
+    let inserted = getU32(history, at + 8);
+    let back = history[at + RECORD_HEAD..at + RECORD_HEAD + removed];
+    let lines = count - newlines(buf[from..from + inserted]) + newlines(back);
+    if (from + inserted > len || lines > starts.length || !spliceBytes(buf, mut len, from, from + inserted, back)) {
+        return false;
+    }
+    let first = lineAt(starts[0..count], count, from) + 1;
+    count = reindexLines(buf[0..len], starts, first) ?? count;
+    edit.caret = getU32(history, at + 12).min(len);
+    edit.anchor = getU32(history, at + 16).min(len);
+    state.used = at;
+    state.typingAt = null;
+    return true;
+}
+
+/// Makes the edit after `history`'s undone ones again. False when there is none, or no room for it.
+fn redoIn(
+    buf: SliceMut<u8>,
+    len: borrow mut usize,
+    starts: SliceMut<u32>,
+    count: borrow mut usize,
+    edit: borrow mut TextEdit,
+    history: SliceMut<u8>,
+    state: borrow mut TextHistory,
+) -> bool {
+    if (state.end < state.used + RECORD_HEAD + 4) {
+        return false;
+    }
+    let at = state.used;
+    let from = getU32(history, at);
+    let removed = getU32(history, at + 4);
+    let inserted = getU32(history, at + 8);
+    let again = history[at + RECORD_HEAD + removed..at + RECORD_HEAD + removed + inserted];
+    let lines = count - newlines(buf[from..from + removed]) + newlines(again);
+    if (from + removed > len || lines > starts.length || !spliceBytes(buf, mut len, from, from + removed, again)) {
+        return false;
+    }
+    let first = lineAt(starts[0..count], count, from) + 1;
+    count = reindexLines(buf[0..len], starts, first) ?? count;
+    edit.caret = from + inserted;
+    edit.anchor = edit.caret;
+    state.used = at + RECORD_HEAD + removed + inserted + 4;
+    state.typingAt = null;
+    return true;
+}
+
 /// Where Backspace takes the text back to from byte `at`: the start of the grapheme cluster before it in its line,
 /// or at a line's start the line break before (a CR LF whole).
 fn stepBack(text: Slice<u8>, starts: Slice<u32>, at: usize) -> usize {

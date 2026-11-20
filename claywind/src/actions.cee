@@ -3,8 +3,8 @@
 // "ctrl-alt-left", "f5", "escape") to a named action, globally or in a key context, a name an element gives its
 // subtree (Ui.keyContext). Each frame's keystrokes are resolved through the contexts around the focused element,
 // innermost first, then the global bindings; a frame asks `ui.action("palette")` whether one was triggered. Copy,
-// Cut, Paste and Select All are bound by default ("secondary-c" to "copy" and so on) and become the Ui's edit
-// commands, which an app may bind elsewhere.
+// Cut, Paste, Select All, Undo and Redo are bound by default ("secondary-c" to "copy", "secondary-z" to "undo" and
+// so on) and become the Ui's edit commands, which an app may bind elsewhere.
 //
 //     ui.bind("secondary-shift-p", "palette", "");          // once
 //     ui.open(Style.column().id("editor")); ui.keyContext("editor"); ...
@@ -158,6 +158,12 @@ fn builtinCommand(action: u32) -> EditCommand? {
     }
     if (action == hashId("select-all")) {
         return EditCommand.SelectAll;
+    }
+    if (action == hashId("undo")) {
+        return EditCommand.Undo;
+    }
+    if (action == hashId("redo")) {
+        return EditCommand.Redo;
     }
     return null;
 }
@@ -336,11 +342,15 @@ impl<region r> Ui<r> {
         }
     }
 
-    /// The default bindings: Copy, Cut, Paste and Select All on the platform's shortcut.
+    /// The default bindings: Copy, Cut, Paste, Select All, Undo and Redo on the platform's shortcuts (Redo also
+    /// Control-Y, as on Windows).
     fn bindDefaults(borrow mut this) {
         let a = this.bind("secondary-c", "copy", "");
         let b = this.bind("secondary-x", "cut", "");
         let c = this.bind("secondary-v", "paste", "");
         let d = this.bind("secondary-a", "select-all", "");
+        let e = this.bind("secondary-z", "undo", "");
+        let f = this.bind("secondary-shift-z", "redo", "");
+        let g = this.bind("ctrl-y", "redo", "");
     }
 }

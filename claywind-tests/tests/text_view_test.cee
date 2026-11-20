@@ -173,10 +173,12 @@ struct EditorDoc {
     paste: bool;
     /// An input method composing "にほ" (its caret after both) in the next frames.
     composing: bool;
+    history: [u8; 256];
+    state: TextHistory;
 }
 
 fn editorOf(text: StringView) -> EditorDoc {
-    var d = EditorDoc { buf: [0u8; 64], len: 0, starts: [0u32; 8], count: 0, edit: TextEdit.at(0), command: null, paste: false, composing: false };
+    var d = EditorDoc { buf: [0u8; 64], len: 0, starts: [0u32; 8], count: 0, edit: TextEdit.at(0), command: null, paste: false, composing: false, history: [0u8; 256], state: TextHistory.create() };
     let b = text.bytes();
     for (i in 0..b.length) {
         d.buf[i] = b[i];
@@ -202,7 +204,7 @@ fn editorFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow
     }
     ui.open(Style.column().w(Size.fixed(300.0)).h(Size.fixed(200.0)));
     let look = Text.of().size(14.0).leading(20.0);
-    let changed = Controls.textEditor(
+    let changed = Controls.textEditorWithUndo(
         mut ui,
         metrics,
         "ed",
@@ -213,6 +215,8 @@ fn editorFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow
         look,
         false,
         mut doc.edit,
+        mut doc.history[..],
+        mut doc.state,
     );
     ui.close();
     finish(mut ui, mut platform)?;
@@ -362,4 +366,98 @@ fn anEditorShowsTheInputMethodsComposition() -> Result<void, TestFailure> {
     let area = ui.textInputArea();
     let box = ui.boxOf("ed")!;
     return expect("the caret after the composition", area.x - box.x, 80.0);
+}
+
+fn command(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow mut EditorDoc, c: EditCommand) -> Result<bool, TestFailure> {
+    doc.command = Some(c);
+    return editorFrame(mut ui, mut platform, mut doc);
+}
+
+@test
+fn anEditorUndoesAWordAtATime() -> Result<void, TestFailure> {
+    var storage = heap(2097152);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var doc = focusedEditor(mut ui, mut platform, "")?;
+    typeChars(mut platform, "hello ");
+    editorFrame(mut ui, mut platform, mut doc)?;
+    typeChars(mut platform, "world");
+    editorFrame(mut ui, mut platform, mut doc)?;
+    Check.isTrue(isText(doc, "hello world"), "typed")?;
+    // A run of typing is one edit, ended by its space: Undo takes back "world", then "hello ".
+    command(mut ui, mut platform, mut doc, EditCommand.Undo)?;
+    Check.isTrue(isText(doc, "hello ") && doc.edit.caret == 6, "Undo took back world")?;
+    command(mut ui, mut platform, mut doc, EditCommand.Undo)?;
+    Check.isTrue(isText(doc, "") && !doc.state.canUndo(), "and hello")?;
+    Check.isTrue(!command(mut ui, mut platform, mut doc, EditCommand.Undo)?, "nothing more to undo")?;
+    // Redo makes them again.
+    command(mut ui, mut platform, mut doc, EditCommand.Redo)?;
+    command(mut ui, mut platform, mut doc, EditCommand.Redo)?;
+    Check.isTrue(isText(doc, "hello world") && doc.edit.caret == 11 && !doc.state.canRedo(), "Redo twice")?;
+    // An edit after an Undo ends what could be redone.
+    command(mut ui, mut platform, mut doc, EditCommand.Undo)?;
+    typeChars(mut platform, "there");
+    editorFrame(mut ui, mut platform, mut doc)?;
+    Check.isTrue(isText(doc, "hello there") && !doc.state.canRedo(), "no Redo after a new edit")?;
+    // Control-Z (the default binding off macOS) undoes too.
+    platform.strokes[0] = Keystroke {
+        key: null,
+        character: 'z',
+        modifiers: Modifiers { shift: false, control: true, alt: false, command: false },
+    };
+    platform.strokeCount = 1;
+    platform.strokeRead = 0;
+    editorFrame(mut ui, mut platform, mut doc)?;
+    platform.strokeCount = 0;
+    platform.strokeRead = 0;
+    return Check.isTrue(isText(doc, "hello "), "Control-Z undid there");
+}
+
+@test
+fn anEditorUndoesDeletesAndPastesWithTheirSelection() -> Result<void, TestFailure> {
+    var storage = heap(2097152);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var doc = focusedEditor(mut ui, mut platform, "one\ntwo")?;
+    // Backspace at the second line's start joins the lines; Undo splits them again, the caret where it was.
+    doc.edit = TextEdit.at(4);
+    editKey(mut ui, mut platform, mut doc, Key.Backspace)?;
+    Check.isTrue(isText(doc, "onetwo") && doc.count == 1, "joined")?;
+    command(mut ui, mut platform, mut doc, EditCommand.Undo)?;
+    Check.isTrue(isText(doc, "one\ntwo") && doc.count == 2 && doc.edit.caret == 4, "split again")?;
+    // A paste over a selection: Undo brings the selection back, selected.
+    doc.edit = TextEdit { anchor: 1, caret: 6 };
+    doc.paste = true;
+    editorFrame(mut ui, mut platform, mut doc)?;
+    Check.isTrue(isText(doc, "ox\nyo"), "pasted")?;
+    command(mut ui, mut platform, mut doc, EditCommand.Undo)?;
+    return Check.isTrue(isText(doc, "one\ntwo") && doc.edit.anchor == 1 && doc.edit.caret == 6, "the selection is back");
+}
+
+@test
+fn aSmallHistoryKeepsTheLatestEdits() -> Result<void, TestFailure> {
+    var storage = heap(2097152);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var doc = focusedEditor(mut ui, mut platform, "")?;
+    // Twelve words, each its own record of 29 bytes (24 of head and trail, "abcd " typed into it): 256 bytes keep
+    // the last eight.
+    for (k in 0..12) {
+        let _ = k;
+        typeChars(mut platform, "abcd ");
+        editorFrame(mut ui, mut platform, mut doc)?;
+    }
+    Check.equalU64(60, doc.len as u64)?;
+    var undone: u64 = 0;
+    loop {
+        if (!command(mut ui, mut platform, mut doc, EditCommand.Undo)?) {
+            break;
+        }
+        undone += 1;
+    }
+    Check.equalU64(8, undone)?;
+    return Check.equalU64(20, doc.len as u64);
 }
