@@ -74,8 +74,8 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   (a double click a word, a triple click a line), the arrows, Up, Down, Home, End and the page keys move the caret
   across lines, Shift extends, Copy and Select All act on it, and the view scrolls to the caret. `Controls.textEditor`
   edits such a text in a caller-owned buffer and line index (`reindexLines` keeps it): typing, Enter, Backspace and
-  Delete (joining lines at their edges), Cut and Paste across lines; an edit with no room is refused. Not yet: wrapping,
-  undo, and an input method's composition shown in it (committed text arrives).
+  Delete (joining lines at their edges), Cut and Paste across lines; an edit with no room is refused. An input
+  method's composition shows underlined at the caret, as in a text field. Not yet: wrapping and undo.
 - **Retina output.** `Raster.setPixelRatio` draws at the display's pixel ratio while layout stays in points.
 - **Incremental rendering.** `Damage` works out what changed between frames, and the raster redraws only those
   boxes. The result is byte-identical to a full redraw.

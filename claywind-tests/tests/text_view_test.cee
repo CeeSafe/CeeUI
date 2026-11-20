@@ -171,10 +171,12 @@ struct EditorDoc {
     edit: TextEdit;
     command: EditCommand?;
     paste: bool;
+    /// An input method composing "にほ" (its caret after both) in the next frames.
+    composing: bool;
 }
 
 fn editorOf(text: StringView) -> EditorDoc {
-    var d = EditorDoc { buf: [0u8; 64], len: 0, starts: [0u32; 8], count: 0, edit: TextEdit.at(0), command: null, paste: false };
+    var d = EditorDoc { buf: [0u8; 64], len: 0, starts: [0u32; 8], count: 0, edit: TextEdit.at(0), command: null, paste: false, composing: false };
     let b = text.bytes();
     for (i in 0..b.length) {
         d.buf[i] = b[i];
@@ -194,6 +196,9 @@ fn editorFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow
     if (doc.paste) {
         ui.paste("x\ny".bytes());
         doc.paste = false;
+    }
+    if (doc.composing) {
+        ui.setComposition("\u{306B}\u{307B}".bytes(), 6);
     }
     ui.open(Style.column().w(Size.fixed(300.0)).h(Size.fixed(200.0)));
     let look = Text.of().size(14.0).leading(20.0);
@@ -325,4 +330,36 @@ fn anEditorRefusesWhatHasNoRoom() -> Result<void, TestFailure> {
         editorFrame(mut ui, mut platform, mut doc)?;
     }
     return Check.equalU64(64, doc.len as u64);
+}
+
+@test
+fn anEditorShowsTheInputMethodsComposition() -> Result<void, TestFailure> {
+    var storage = heap(2097152);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var doc = focusedEditor(mut ui, mut platform, "abcd\nef")?;
+    doc.edit = TextEdit.at(2);
+    doc.composing = true;
+    editorFrame(mut ui, mut platform, mut doc)?;
+    // The caret's line is drawn with the composition spliced in at the caret; the text itself is unchanged.
+    var shown = false;
+    for (k in 0..ui.commandCount()) {
+        let command = ui.commandAt(k);
+        match (command) {
+            Command.Text(_, _) => {
+                let t = ui.textOf(command);
+                if (t.length == 10 && t[0] == 'a' && t[2] == 0xE3 && t[8] == 'c') {
+                    shown = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    Check.isTrue(shown, "ab, the composition, cd")?;
+    Check.isTrue(isText(doc, "abcd\nef"), "nothing is typed until the input method commits")?;
+    // The caret reported to the input method is after the composition: x 2 + 6 bytes of 10 points in the fake font.
+    let area = ui.textInputArea();
+    let box = ui.boxOf("ed")!;
+    return expect("the caret after the composition", area.x - box.x, 80.0);
 }

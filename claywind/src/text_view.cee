@@ -403,10 +403,38 @@ impl Controls {
                     ui.close();
                 }
             }
-            ui.labelBytes(lineText, line);
+            // An editable view's caret line shows the input method's composition at the caret while it composes:
+            // spliced into the line, underlined, the caret where the input method has it.
+            let composing = editable && focused && k == caretLine && ui.composition().length > 0;
+            var spliced = [0u8; 4096];
+            var shownText = lineText;
+            var caretAt = if (k == caretLine && edit.caret >= lineStart) edit.caret - lineStart else 0;
+            if (composing) {
+                let comp = ui.composition();
+                let before = (edit.caret - lineStart).min(4096);
+                let n = comp.length.min(4096 - before);
+                let after = (lineText.length - before).min(4096 - before - n);
+                for (i in 0..before) {
+                    spliced[i] = lineText[i];
+                }
+                for (i in 0..n) {
+                    spliced[before + i] = comp[i];
+                }
+                for (i in 0..after) {
+                    spliced[before + n + i] = lineText[before + i];
+                }
+                shownText = spliced[0..before + n + after];
+                let u0 = metrics.caretX(shownText, config, before);
+                let u1 = metrics.caretX(shownText, config, before + n);
+                ui.open(Style.box().absolute().passthrough().left(u0.min(u1)).top(lineH - 2.0)
+                    .w(Size.fixed((u1 - u0).abs())).h(Size.fixed(1.0)).bg(SLATE_100));
+                ui.close();
+                caretAt = before + ui.compositionCaret().min(n);
+            }
+            ui.labelBytes(shownText, line);
             if (focused && k == caretLine) {
-                let x = metrics.caretX(lineText, config, edit.caret - lineStart);
-                if (blink) {
+                let x = metrics.caretX(shownText, config, caretAt);
+                if (blink || composing) {
                     ui.open(Style.box().absolute().passthrough().left(x).top(0.0).w(Size.fixed(2.0))
                         .h(Size.fixed(lineH)).bg(SLATE_200));
                     ui.close();
