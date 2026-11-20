@@ -311,8 +311,10 @@ runs the system's tools. The name, identifier and version default to the package
 - **iOS device**: signed with the first "Apple Development" identity in the keychain (`--identity`) and the newest
   provisioning profile on the Mac that fits the identifier and has not expired, an exact one before a wildcard
   (`--profile`); Xcode makes both the first time it builds an app for the device. It does not make a profile.
-- **Android**: the NDK, build-tools and platform are the newest under `ANDROID_HOME` (`ANDROID_NDK_HOME`);
-  `--abi arm64-v8a,x86_64` builds a library for each; signed with `~/.android/debug.keystore` (`--keystore`,
+- **Android**: from Android 7.1 (API level 25; CeeSafe ADR 0188). The NDK, build-tools and platform are the newest
+  under `ANDROID_HOME` (`ANDROID_NDK_HOME`); `--abi arm64-v8a,x86_64` builds a library for each, and the 32-bit
+  `armeabi-v7a` and `x86` too (ceesafec's `--arch`, CeeSafe ADR 0192, 0.84.0 and later): a Sunmi V2 is armeabi-v7a;
+  signed with `~/.android/debug.keystore` (`--keystore`,
   `--keystore-pass`), so it installs but is not a store build.
 - **macOS**: signed ad hoc, for this Mac; no Developer ID, notarization or icon yet.
 - **`--network WHY`**, for an app that uses the network: Android's `INTERNET` permission, and on iOS the

@@ -610,7 +610,7 @@ fn androidTriple(abi: StringView) -> StringView => if (abi == "arm64-v8a") "aarc
     else if (abi == "x86") "i686-linux-android"
     else "";
 
-/// ceesafec's `--arch` for an Android ABI (CeeSafe ADR 0191): the 32-bit ones lay types out for 4-byte pointers.
+/// ceesafec's `--arch` for an Android ABI (CeeSafe ADR 0192): the 32-bit ones lay types out for 4-byte pointers.
 fn androidArch(abi: StringView) -> StringView => if (abi == "arm64-v8a") "arm64"
     else if (abi == "x86_64") "x86_64"
     else if (abi == "armeabi-v7a") "armv7"
