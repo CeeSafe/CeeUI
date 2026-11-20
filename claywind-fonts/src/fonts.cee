@@ -574,13 +574,16 @@ impl SystemFonts {
             Some(d) => { this.walk(d, 0); }
             null => {}
         }
-        let fixed: [StringView; 6] = [
+        // Android keeps its fonts in /system/fonts (and, from Android 10, some in /product/fonts).
+        let fixed: [StringView; 8] = [
             "/System/Library/Fonts",
             "/Library/Fonts",
             "C:/Windows/Fonts",
             "/usr/share/fonts",
             "/usr/local/share/fonts",
             "/usr/X11R6/lib/X11/fonts",
+            "/system/fonts",
+            "/product/fonts",
         ];
         for (d in fixed) {
             this.walk(d, 0);
