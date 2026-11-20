@@ -349,6 +349,7 @@ impl Controls {
     ) {
         var none = [0u16; 1];
         var width: f32 = 0.0;
+        var goal: f32 = -1.0;
         Controls.textViewOf(
             mut ui,
             metrics,
@@ -362,6 +363,7 @@ impl Controls {
             false,
             mut none[0..0],
             mut width,
+            mut goal,
         );
     }
 
@@ -382,6 +384,7 @@ impl Controls {
         editable: bool,
         rows: SliceMut<u16>,
         wrapWidth: borrow mut f32,
+        goalX: borrow mut f32,
     ) {
         let h = hashId(id);
         ui.registerFocusable(h);
@@ -459,6 +462,7 @@ impl Controls {
         if (ui.pressedOn(h)) {
             ui.setFocus(h);
             ui.capture(h);
+            goalX = -1.0;
             match (pointed) {
                 Some(at) => {
                     edit.caret = at;
@@ -561,7 +565,8 @@ impl Controls {
                 down = true;
             }
             if (steps > 0) {
-                let x = rowShift(
+                // The place across that Up and Down keep: the one they started from, through shorter rows.
+                let here = rowShift(
                     metrics,
                     config,
                     lineText,
@@ -569,6 +574,9 @@ impl Controls {
                     wrap,
                     width,
                 ) + metrics.caretX(rowText, config, inRow);
+                let goal: f32 = goalX;
+                let x = if (goal >= 0.0) goal else here;
+                goalX = x;
                 var kk = k;
                 var rr = row;
                 var rowsHere = r.count;
@@ -633,6 +641,9 @@ impl Controls {
                         edit.anchor = t;
                     }
                     moved = true;
+                    if (steps == 0) {
+                        goalX = -1.0; // another move: Up and Down start again from where the caret is
+                    }
                 }
                 null => {}
             }
@@ -1004,6 +1015,9 @@ public struct TextDocument<region r> {
     /// The width the rows were counted at (the editor keeps it; a program that makes its document again each frame
     /// over the same memory carries it over, with `len`, `count`, `edit` and `undo`).
     public wrapWidth: f32;
+    /// The place across (from the view's text edge) that Up and Down keep while they move the caret through
+    /// shorter lines; negative when there is none (any other move forgets it). Carried over as `wrapWidth` is.
+    public goalX: f32;
 
     /// A document of `buf`'s first `len` bytes, its lines indexed into `starts`.
     public fn over(
@@ -1025,6 +1039,7 @@ public struct TextDocument<region r> {
             history: history,
             undo: TextHistory.create(),
             wrapWidth: 0.0,
+            goalX: -1.0,
         };
     }
 
@@ -1143,6 +1158,9 @@ impl Controls {
                 ) || changed;
             }
         }
+        if (changed) {
+            doc.goalX = -1.0;
+        }
         // An edit moves the lines after it: their rows are counted again (the line count may have changed).
         if (changed && doc.rows.length > 0) {
             let first = if (countBefore != doc.count) 0 else lineAt(
@@ -1167,6 +1185,7 @@ impl Controls {
             true,
             doc.rows,
             mut doc.wrapWidth,
+            mut doc.goalX,
         );
         return changed;
     }

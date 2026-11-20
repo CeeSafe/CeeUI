@@ -180,10 +180,12 @@ struct EditorDoc {
     nowrap: bool;
     /// Whether the editor's parent clips (and so leaves an overflowing child as it is).
     clipped: bool;
+    /// The document's place across for Up and Down, carried from frame to frame.
+    goal: f32;
 }
 
 fn editorOf(text: StringView) -> EditorDoc {
-    var d = EditorDoc { buf: [0u8; 128], len: 0, starts: [0u32; 8], count: 0, edit: TextEdit.at(0), command: null, paste: false, composing: false, history: [0u8; 256], state: TextHistory.create(), rows: [0u16; 8], nowrap: false, clipped: false };
+    var d = EditorDoc { buf: [0u8; 128], len: 0, starts: [0u32; 8], count: 0, edit: TextEdit.at(0), command: null, paste: false, composing: false, history: [0u8; 256], state: TextHistory.create(), rows: [0u16; 8], nowrap: false, clipped: false, goal: -1.0 };
     let b = text.bytes();
     for (i in 0..b.length) {
         d.buf[i] = b[i];
@@ -214,11 +216,13 @@ fn editorFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow
     var d = TextDocument.over(mut doc.buf[..], doc.len, mut doc.starts[..], mut doc.rows[..], mut doc.history[..]);
     d.edit = doc.edit;
     d.undo = doc.state;
+    d.goalX = doc.goal;
     let changed = Controls.textEditor(mut ui, metrics, "ed", mut d, look, false);
     doc.len = d.len;
     doc.count = d.count;
     doc.edit = d.edit;
     doc.state = d.undo;
+    doc.goal = d.goalX;
     ui.close();
     finish(mut ui, mut platform)?;
     platform.pressed = 0;
@@ -566,4 +570,24 @@ fn anEditorInAClippingParentWrapsAtItsWidth() -> Result<void, TestFailure> {
     }
     Check.isTrue(ui.boxOf("ed")!.w <= 300.0, "the editor is no wider than its parent")?;
     return Check.isTrue(doc.rows[0] == 3, "the long line wraps into three rows");
+}
+
+@test
+fn upAndDownKeepTheCaretsPlaceThroughShortLines() -> Result<void, TestFailure> {
+    var storage = heap(2097152);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    // Lines at 0 ("long line here"), 15 ("ab") and 18 ("another longer").
+    var doc = focusedEditor(mut ui, mut platform, "long line here\nab\nanother longer")?;
+    doc.edit = TextEdit.at(12);
+    // Down through "ab" (the caret at its end, 17) and on to the third line at the place it started from (x 120).
+    Check.equalU64(17, editCaret(mut ui, mut platform, mut doc, Key.Down)? as u64)?;
+    Check.equalU64(30, editCaret(mut ui, mut platform, mut doc, Key.Down)? as u64)?;
+    Check.equalU64(17, editCaret(mut ui, mut platform, mut doc, Key.Up)? as u64)?;
+    Check.equalU64(12, editCaret(mut ui, mut platform, mut doc, Key.Up)? as u64)?;
+    // Another move forgets the place: from "ab"'s start, Down goes to the third line's start.
+    doc.edit = TextEdit.at(15);
+    editKey(mut ui, mut platform, mut doc, Key.Home)?;
+    return Check.equalU64(18, editCaret(mut ui, mut platform, mut doc, Key.Down)? as u64);
 }

@@ -230,6 +230,7 @@ public struct DemoApp {
     editorEdit: TextEdit;
     editorUndo: TextHistory;
     editorWrap: f32;
+    editorGoal: f32;
     editorLoaded: bool;
 
     /// main.c's initial state (and `ClayWind_darkMode = true`, which the host sets on the Ui).
@@ -289,6 +290,7 @@ public struct DemoApp {
         editorEdit: TextEdit.at(0),
         editorUndo: TextHistory.create(),
         editorWrap: 0.0,
+        editorGoal: -1.0,
         editorLoaded: false,
     };
 
@@ -1558,6 +1560,7 @@ fn editorPage<M: TextMetrics>(ui: borrow mut Ui, app: borrow mut DemoApp, metric
     doc.edit = app.editorEdit;
     doc.undo = app.editorUndo;
     doc.wrapWidth = app.editorWrap;
+    doc.goalX = app.editorGoal;
     ui.open(Style.column().id("editorPage").w(Size.grow()).h(Size.grow()).p(space(6.0)).gap(space(3.0)));
     ui.label("Editor", Text.of().font(TEXT_XL).color(inkCol(ui)));
     ui.label(
@@ -1572,6 +1575,7 @@ fn editorPage<M: TextMetrics>(ui: borrow mut Ui, app: borrow mut DemoApp, metric
     app.editorEdit = doc.edit;
     app.editorUndo = doc.undo;
     app.editorWrap = doc.wrapWidth;
+    app.editorGoal = doc.goalX;
 }
 
 fn effectsPage(ui: borrow mut Ui, app: borrow DemoApp) {
