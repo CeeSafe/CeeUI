@@ -18,8 +18,9 @@ public const NAV_COUNT: usize = 6;
 public const DEMO_STATE_VERSION: u32 = 1;
 const NAV_CONTROLS: usize = 1;
 const NAV_EFFECTS: usize = 2;
+const NAV_EDITOR: usize = 3;
 
-static NAV_ITEMS: [StringView; 6] = ["Dashboard", "Controls", "Effects", "Projects", "Activity", "Settings"];
+static NAV_ITEMS: [StringView; 6] = ["Dashboard", "Controls", "Effects", "Editor", "Activity", "Settings"];
 static PRIO_ITEMS: [StringView; 3] = ["Low", "Medium", "High"];
 static FILE_ITEMS: [StringView; 6] = ["README.md", "main.c", "clay.h", "renderer.h", "controls.h", "PARITY.md"];
 static THEME_ITEMS: [StringView; 3] = ["System", "Light", "Dark"];
@@ -219,6 +220,17 @@ public struct DemoApp {
     droppedNames: [u8; 240];
     droppedLen: usize;
     droppedCount: u32;
+    // The Editor page's document (Controls.textEditor over a TextDocument made each frame over this memory): its
+    // text, line index, rows per line and undo history, and what the editor keeps between frames.
+    editorBuf: [u8; 16384];
+    editorLen: usize;
+    editorStarts: [u32; 1024];
+    editorRows: [u16; 1024];
+    editorHistory: [u8; 4096];
+    editorEdit: TextEdit;
+    editorUndo: TextHistory;
+    editorWrap: f32;
+    editorLoaded: bool;
 
     /// main.c's initial state (and `ClayWind_darkMode = true`, which the host sets on the Ui).
     public fn create() -> DemoApp => DemoApp {
@@ -269,6 +281,15 @@ public struct DemoApp {
         droppedNames: [0u8; 240],
         droppedLen: 0,
         droppedCount: 0,
+        editorBuf: [0u8; 16384],
+        editorLen: 0,
+        editorStarts: [0u32; 1024],
+        editorRows: [0u16; 1024],
+        editorHistory: [0u8; 4096],
+        editorEdit: TextEdit.at(0),
+        editorUndo: TextHistory.create(),
+        editorWrap: 0.0,
+        editorLoaded: false,
     };
 
     /// Writes what the demo shows into a snapshot (hot reload: the rebuilt demo reads it back on start).
@@ -541,6 +562,8 @@ public fn demoFrameWith<M: TextMetrics, J: DemoJobs>(
         controlsPage(mut ui, mut app, metrics, mut jobs);
     } else if (app.activeNav == NAV_EFFECTS) {
         effectsPage(mut ui, app);
+    } else if (app.activeNav == NAV_EDITOR) {
+        editorPage(mut ui, mut app, metrics);
     } else {
         dashboard(mut ui, app);
     }
@@ -1507,6 +1530,48 @@ fn clipSection(ui: borrow mut Ui) {
     ui.label("overflow-y-auto rounded-2xl", Text.of().color(muteCol(ui)));
     ui.close();
     ui.close();
+}
+
+/// The Editor page's text when it first opens: paragraphs that wrap, and lines in Arabic, Hebrew, both directions
+/// and Japanese, to edit, select and undo.
+static EDITOR_SAMPLE: StringView =
+    "ClayWind's text editor: a TextDocument in the program's own memory, edited with Controls.textEditor.\n\nType anywhere, select with the pointer (a double click selects a word, a triple click a line) or with Shift and the arrows, and move by words with Option on macOS or Control elsewhere. Undo and Redo take back a word of typing at a time. This paragraph is long, so it wraps at the view's width: Up and Down move by the rows you see, and Page Up and Page Down by a view's height.\n\n\u{645}\u{631}\u{62D}\u{628}\u{627} \u{628}\u{627}\u{644}\u{639}\u{627}\u{644}\u{645}: \u{647}\u{630}\u{627} \u{633}\u{637}\u{631} \u{639}\u{631}\u{628}\u{64A} \u{64A}\u{628}\u{62F}\u{623} \u{645}\u{646} \u{627}\u{644}\u{64A}\u{645}\u{64A}\u{646}.\n\u{5E9}\u{5DC}\u{5D5}\u{5DD} \u{5E2}\u{5D5}\u{5DC}\u{5DD}: \u{5E9}\u{5D5}\u{5E8}\u{5D4} \u{5D1}\u{5E2}\u{5D1}\u{5E8}\u{5D9}\u{5EA}.\nInvoice 1024 \u{644}\u{644}\u{639}\u{645}\u{64A}\u{644} \u{645}\u{62D}\u{645}\u{62F}, paid in full.\n\u{3053}\u{3093}\u{306B}\u{3061}\u{306F}\u{3001}\u{4E16}\u{754C}\u{3002}\u{65E5}\u{672C}\u{8A9E}\u{306E}\u{5165}\u{529B}\u{3082}\u{3067}\u{304D}\u{307E}\u{3059}\u{3002}\n";
+
+/// The Editor page: Controls.textEditor over the demo's document, with line numbers.
+fn editorPage<M: TextMetrics>(ui: borrow mut Ui, app: borrow mut DemoApp, metrics: borrow M) {
+    if (!app.editorLoaded) {
+        let sample = EDITOR_SAMPLE.bytes();
+        let n = sample.length.min(app.editorBuf.length);
+        for (i in 0..n) {
+            app.editorBuf[i] = sample[i];
+        }
+        app.editorLen = n;
+        app.editorLoaded = true;
+    }
+    var doc = TextDocument.over(
+        mut app.editorBuf[..],
+        app.editorLen,
+        mut app.editorStarts[..],
+        mut app.editorRows[..],
+        mut app.editorHistory[..],
+    );
+    doc.edit = app.editorEdit;
+    doc.undo = app.editorUndo;
+    doc.wrapWidth = app.editorWrap;
+    ui.open(Style.column().id("editorPage").w(Size.grow()).h(Size.grow()).p(space(6.0)).gap(space(3.0)));
+    ui.label("Editor", Text.of().font(TEXT_XL).color(inkCol(ui)));
+    ui.label(
+        "Lines wrap; Arabic and Hebrew read right to left; Undo with the platform's shortcut.",
+        Text.of().color(SLATE_400),
+    );
+    ui.open(Style.column().w(Size.grow()).h(Size.grow()).rounded(Radius.Md).clip());
+    let _ = Controls.textEditor(mut ui, metrics, "editor", mut doc, Text.of().color(SLATE_100), true);
+    ui.close();
+    ui.close();
+    app.editorLen = doc.len;
+    app.editorEdit = doc.edit;
+    app.editorUndo = doc.undo;
+    app.editorWrap = doc.wrapWidth;
 }
 
 fn effectsPage(ui: borrow mut Ui, app: borrow DemoApp) {

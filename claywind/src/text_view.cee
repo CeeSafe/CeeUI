@@ -293,6 +293,22 @@ fn layRows<M: TextMetrics>(
     return r;
 }
 
+/// How far right a row of a wrapped line sits: a right-to-left line's rows meet at the right (UAX #9 P2, the line
+/// being the paragraph), as a text field's text does; 0 otherwise, and for lines that do not wrap.
+fn rowShift<M: TextMetrics>(
+    metrics: borrow M,
+    config: TextConfig,
+    line: Slice<u8>,
+    row: Slice<u8>,
+    wrap: bool,
+    width: f32,
+) -> f32 {
+    if (!wrap || !bidiParagraphRtl(line)) {
+        return 0.0;
+    }
+    return (width - metrics.measure(row, config).w).max(0.0);
+}
+
 /// The row of `r` that byte `local` of its line is in: a caret at a row's start is in that row.
 fn rowOf(r: borrow LineRows, local: usize) -> usize {
     var row: usize = 0;
@@ -430,8 +446,10 @@ impl Controls {
                     let lineText = lineOf(text, starts, count, k);
                     let r = layRows(metrics, config, lineText, wrap, width, mut rows[0..limit], k);
                     let range = rowRange(r, lineText, at[1].min(r.count - 1));
-                    let x = p.position.x - b.x - scroll.x - gutterW;
-                    let inRow = offsetAtIn(metrics, lineText[range[0]..range[1]], config, x);
+                    let rowText = lineText[range[0]..range[1]];
+                    let shift = rowShift(metrics, config, lineText, rowText, wrap, width);
+                    let x = p.position.x - b.x - scroll.x - gutterW - shift;
+                    let inRow = offsetAtIn(metrics, rowText, config, x);
                     pointed = Some((starts[k] as usize) + range[0] + inRow);
                 }
             }
@@ -543,7 +561,14 @@ impl Controls {
                 down = true;
             }
             if (steps > 0) {
-                let x = metrics.caretX(rowText, config, inRow);
+                let x = rowShift(
+                    metrics,
+                    config,
+                    lineText,
+                    rowText,
+                    wrap,
+                    width,
+                ) + metrics.caretX(rowText, config, inRow);
                 var kk = k;
                 var rr = row;
                 var rowsHere = r.count;
@@ -586,7 +611,9 @@ impl Controls {
                 let other = lineOf(text, starts, count, kk);
                 let lr = layRows(metrics, config, other, wrap, width, mut rows[0..limit], kk);
                 let span = rowRange(lr, other, rr.min(lr.count - 1));
-                var landed = span[0] + offsetAtIn(metrics, other[span[0]..span[1]], config, x);
+                let otherRow = other[span[0]..span[1]];
+                let otherShift = rowShift(metrics, config, other, otherRow, wrap, width);
+                var landed = span[0] + offsetAtIn(metrics, otherRow, config, x - otherShift);
                 // Not past a wrapped row's end: that place is the next row's start.
                 if (rr + 1 < lr.count && landed >= span[1] && span[1] > span[0]) {
                     landed = span[0] + graphemeBefore(other[span[0]..span[1]], span[1] - span[0]);
@@ -636,7 +663,9 @@ impl Controls {
                     let r = layRows(metrics, config, lineText, wrap, width, mut rows[0..limit], caretLine);
                     let range = rowRange(r, lineText, caretRow);
                     let local = edit.caret - (starts[caretLine] as usize);
-                    let x = gutterW + metrics.caretX(lineText[range[0]..range[1]], config, local - range[0]);
+                    let rowText = lineText[range[0]..range[1]];
+                    let shift = rowShift(metrics, config, lineText, rowText, wrap, width);
+                    let x = gutterW + shift + metrics.caretX(rowText, config, local - range[0]);
                     let shownLeft = -scroll.x;
                     var dx: f32 = 0.0;
                     if (x < shownLeft + gutterW) {
@@ -659,12 +688,9 @@ impl Controls {
         let start = if (count > 0) lineOfRow(rows[0..limit], count, fromRow)[0] else 0;
         let focused = ui.hasFocus(h);
         let blink = (truncate<u64>((ui.time() * 2.0).floor()) & 1) == 0;
-        ui.open(
-            Style.column().id(id).w(Size.grow()).h(Size.grow()).scroll(
-                if (wrap) ScrollAxis.Vertical else ScrollAxis.Both,
-            )
-                .bg(SLATE_900),
-        );
+        // Clipped both ways, so that no row's width can widen the view (wrapped rows fit it, and the view stays as
+        // wide as its parent gives it).
+        ui.open(Style.column().id(id).w(Size.grow()).h(Size.grow()).scroll(ScrollAxis.Both).bg(SLATE_900));
         let above = rowsBefore(rows[0..limit], start);
         ui.open(Style.box().w(Size.fixed(1.0)).h(Size.fixed(round<f32>(above) * lineH)));
         ui.close();
@@ -681,7 +707,12 @@ impl Controls {
                 let rowStart = lineStart + range[0];
                 let rowStop = lineStart + range[1];
                 let lastOfLine = row + 1 == r.count;
-                ui.open(Style.row().h(Size.fixed(lineH)).alignXY(AxisAlign.Start, AxisAlign.Center));
+                // A wrapping view's rows are as wide as the view, whatever their text: no row widens it, not even on the
+                // first frame, before it has a width and its lines are unwrapped (a point wide then: a fixed width of 0
+                // is the engine's "no maximum"), so it is as wide as its parent gives it, even inside a clipping parent,
+                // which leaves an overflowing child as it is.
+                let rowStyle = Style.row().h(Size.fixed(lineH)).alignXY(AxisAlign.Start, AxisAlign.Center);
+                ui.open(if (wrap) rowStyle.w(Size.fixed((gutterW + width).max(1.0))) else rowStyle);
                 if (gutter) {
                     ui.open(Style.box().w(Size.fixed(gutterW)).pr(12.0).alignXY(AxisAlign.End, AxisAlign.Center));
                     if (row == 0) {
@@ -692,7 +723,8 @@ impl Controls {
                     }
                     ui.close();
                 }
-                ui.open(Style.box().h(Size.fixed(lineH)).alignXY(AxisAlign.Start, AxisAlign.Center));
+                let shift = rowShift(metrics, config, lineText, rowText, wrap, width);
+                ui.open(Style.box().h(Size.fixed(lineH)).ml(shift).alignXY(AxisAlign.Start, AxisAlign.Center));
                 // The selection on this row, behind its text: where its characters are drawn, and on a line's last
                 // row the line break after them as a narrow box when the selection runs on.
                 if (edit.selects() && edit.from() <= rowStop && edit.to() > rowStart) {
@@ -754,7 +786,7 @@ impl Controls {
                             if (editable) {
                                 let shown = ui.scrollOffset(id);
                                 ui.reportCaret(Rect {
-                                    x: b.x + shown.x + gutterW + x,
+                                    x: b.x + shown.x + gutterW + shift + x,
                                     y: b.y + shown.y + round<f32>(rowAt) * lineH,
                                     w: 2.0,
                                     h: lineH,
@@ -969,8 +1001,9 @@ public struct TextDocument<region r> {
     public edit: TextEdit;
     public history: SliceMut<r, u8>;
     public undo: TextHistory;
-    /// The width the rows were counted at.
-    wrapWidth: f32;
+    /// The width the rows were counted at (the editor keeps it; a program that makes its document again each frame
+    /// over the same memory carries it over, with `len`, `count`, `edit` and `undo`).
+    public wrapWidth: f32;
 
     /// A document of `buf`'s first `len` bytes, its lines indexed into `starts`.
     public fn over(

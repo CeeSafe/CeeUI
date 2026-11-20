@@ -178,10 +178,12 @@ struct EditorDoc {
     rows: [u16; 8];
     /// Whether the editor's lines wrap (its look's wrap), as by default.
     nowrap: bool;
+    /// Whether the editor's parent clips (and so leaves an overflowing child as it is).
+    clipped: bool;
 }
 
 fn editorOf(text: StringView) -> EditorDoc {
-    var d = EditorDoc { buf: [0u8; 128], len: 0, starts: [0u32; 8], count: 0, edit: TextEdit.at(0), command: null, paste: false, composing: false, history: [0u8; 256], state: TextHistory.create(), rows: [0u16; 8], nowrap: false };
+    var d = EditorDoc { buf: [0u8; 128], len: 0, starts: [0u32; 8], count: 0, edit: TextEdit.at(0), command: null, paste: false, composing: false, history: [0u8; 256], state: TextHistory.create(), rows: [0u16; 8], nowrap: false, clipped: false };
     let b = text.bytes();
     for (i in 0..b.length) {
         d.buf[i] = b[i];
@@ -205,7 +207,8 @@ fn editorFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow
     if (doc.composing) {
         ui.setComposition("\u{306B}\u{307B}".bytes(), 6);
     }
-    ui.open(Style.column().w(Size.fixed(300.0)).h(Size.fixed(200.0)));
+    let parent = Style.column().w(Size.fixed(300.0)).h(Size.fixed(200.0));
+    ui.open(if (doc.clipped) parent.clip() else parent);
     let look = if (doc.nowrap) Text.of().size(14.0).leading(20.0).wrap(TextWrap.None) else Text.of().size(14.0).leading(20.0);
     // The document over the test's arrays, its state carried from frame to frame.
     var d = TextDocument.over(mut doc.buf[..], doc.len, mut doc.starts[..], mut doc.rows[..], mut doc.history[..]);
@@ -545,4 +548,22 @@ fn anEditorWithoutWrappingKeepsALineOneRow() -> Result<void, TestFailure> {
 fn editCaret(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow mut EditorDoc, k: Key) -> Result<usize, TestFailure> {
     editKey(mut ui, mut platform, mut doc, k)?;
     return Ok(doc.edit.caret);
+}
+
+@test
+fn anEditorInAClippingParentWrapsAtItsWidth() -> Result<void, TestFailure> {
+    var storage = heap(2097152);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    // A clipping parent leaves an overflowing child as it is: the editor's unwrapped first frame must not make it as
+    // wide as its longest line, or it would wrap at that width ever after.
+    var doc = editorOf(longLine());
+    doc.clipped = true;
+    for (k in 0..4) {
+        let _ = k;
+        editorFrame(mut ui, mut platform, mut doc)?;
+    }
+    Check.isTrue(ui.boxOf("ed")!.w <= 300.0, "the editor is no wider than its parent")?;
+    return Check.isTrue(doc.rows[0] == 3, "the long line wraps into three rows");
 }
