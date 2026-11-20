@@ -188,6 +188,7 @@ public struct Raster<region r> {
             ascent: 0.0,
             descent: 0.0,
             lineGap: 0.0,
+            weight: 400,
             locaFormat: 0,
             numHmtx: 0,
             cmap: 0,

@@ -16,6 +16,8 @@ public struct FontInfo {
     public ascent: f32;
     public descent: f32;
     public lineGap: f32;
+    /// How heavy the face is: OS/2's weight class (400 regular, 700 bold), else 700 or 400 by head's bold bit.
+    public weight: u32;
     locaFormat: u32;
     numHmtx: u32;
     cmap: usize;
@@ -213,8 +215,17 @@ public fn parseFontFace(d: Slice<u8>, face: u32) -> FontInfo? {
         // No outlines: only a colour-bitmap face (its bitmaps come from the host, raster_color.cee) has none.
         return null;
     }
+    let os2 = tableOffset(d, dir, ['O', 'S', '/', '2']);
+    var weight: u32 = if ((u16at(d, head + 44) & 1) != 0) 700 else 400;
+    if (os2 != 0 && valid(d, os2, 6)) {
+        let w = u16at(d, os2 + 4);
+        if (w >= 1 && w <= 1000) {
+            weight = w;
+        }
+    }
     return FontInfo {
         unitsPerEm: round<f32>(u16at(d, head + 18)),
+        weight: weight,
         ascent: round<f32>(i16at(d, hhea + 4)),
         descent: round<f32>(i16at(d, hhea + 6)),
         lineGap: round<f32>(i16at(d, hhea + 8)),

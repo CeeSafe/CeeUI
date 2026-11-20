@@ -179,7 +179,7 @@ impl SystemFonts {
                     this.scan();
                 }
                 var found = false;
-                match (this.choose(before, true)) {
+                match (this.choose(before, true, raster.fontWeight(fontId))) {
                     Some(k) => {
                         if (this.faces[k].color) {
                             let id = FIRST_ID + truncate<u32>(k);
@@ -198,14 +198,50 @@ impl SystemFonts {
             }
             // A private-use character means something else in every font: none is looked for.
             let privateUse = (cp[0] >= 0xE000 && cp[0] <= 0xF8FF) || cp[0] >= 0xF0000;
-            if (cp[0] < 0x80 || privateUse || raster.covers(fontId, cp[0]) || this.isHopeless(cp[0])) {
+            if (cp[0] < 0x80 || privateUse) {
+                continue;
+            }
+            // Drawn already, but from a face of another weight (a bold run's Arabic from a regular face): a face of
+            // the run's weight, when the system has one, loaded too (asked once a character and direction).
+            let want = raster.fontWeight(fontId);
+            match (raster.coveringWeight(fontId, cp[0])) {
+                Some(w) => {
+                    let off = if (w > want) w - want else want - w;
+                    let asked = cp[0] | (if (want > w) 0x40000000u32 else 0x20000000u32);
+                    if (off >= 200 && !this.isHopeless(asked)) {
+                        let ignored = this.hopeless.push(asked);
+                        if (!this.scanned) {
+                            this.scan();
+                        }
+                        match (this.choose(cp[0], false, want)) {
+                            Some(k) => {
+                                let id = FIRST_ID + truncate<u32>(k);
+                                let fw = this.faces[k].weight;
+                                let nearer = (if (fw > want) fw - want else want - fw) < off;
+                                if (nearer && !raster.hasFont(id) && this.load(
+                                    raster,
+                                    k,
+                                    id,
+                                ) && raster.addFallback(id)) {
+                                    added += 1;
+                                    this.loaded += 1;
+                                }
+                            }
+                            null => {}
+                        }
+                    }
+                    continue;
+                }
+                null => {}
+            }
+            if (this.isHopeless(cp[0])) {
                 continue;
             }
             if (!this.scanned) {
                 this.scan();
             }
             var done = false;
-            match (this.choose(cp[0], false)) {
+            match (this.choose(cp[0], false, want)) {
                 Some(k) => {
                     let id = FIRST_ID + truncate<u32>(k);
                     if (this.load(raster, k, id) && raster.addFallback(id)) {
@@ -508,7 +544,8 @@ impl SystemFonts {
 
     /// The face that best covers `cp` (see `better`; a colour face first when `color`), one whose cmap really maps
     /// it.
-    fn choose(borrow mut this, cp: u32, color: bool) -> usize? {
+    /// The catalog face to draw `cp` with: in colour first when `color`, nearest `weight` (a run's font's).
+    fn choose(borrow mut this, cp: u32, color: bool, weight: u32) -> usize? {
         let block = (cp >> 8) as usize;
         if (block >= BLOCKS) {
             return null;
@@ -529,7 +566,7 @@ impl SystemFonts {
                 }
                 match (best) {
                     Some(b) => {
-                        if (better(f, borrow this.faces[b], block, most, emoji)) {
+                        if (better(f, borrow this.faces[b], block, most, emoji, weight)) {
                             best = k;
                         }
                     }
@@ -757,7 +794,7 @@ fn contains(v: borrow Vector<usize>, x: usize) -> bool {
 /// Whether face `a` is a better choice for `block` than face `b`, when the best covers `most` of its code points:
 /// for an emoji, a colour face first; then covering nearly as much as the best (90 %), then sans-serif, then the weight nearer 400, then upright, then the
 /// smaller file, then covering more.
-fn better(a: borrow Face, b: borrow Face, block: usize, most: u32, emoji: bool) -> bool {
+fn better(a: borrow Face, b: borrow Face, block: usize, most: u32, emoji: bool, weight: u32) -> bool {
     if (emoji && a.color != b.color) {
         return a.color;
     }
@@ -771,8 +808,8 @@ fn better(a: borrow Face, b: borrow Face, block: usize, most: u32, emoji: bool) 
     if (a.sans != b.sans) {
         return a.sans;
     }
-    let da = if (a.weight > 400) a.weight - 400 else 400 - a.weight;
-    let db = if (b.weight > 400) b.weight - 400 else 400 - b.weight;
+    let da = if (a.weight > weight) a.weight - weight else weight - a.weight;
+    let db = if (b.weight > weight) b.weight - weight else weight - b.weight;
     if (da != db) {
         return da < db;
     }

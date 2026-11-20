@@ -343,17 +343,58 @@ impl<region r> Raster<r> {
         if (g != 0) {
             return [truncate<u32>(primary), g];
         }
+        // Of the fallbacks that have it, the one nearest the run's font in weight (a bold run's Arabic from a bold
+        // face), the earliest in the chain among equals.
+        let want = this.fonts.get(primary).info.weight;
+        var best: [u32; 2]? = null;
+        var bestDistance: u32 = 0;
         for (f in 0..this.fallbackCount) {
             for (k in 0..this.fonts.length()) {
                 if (this.fonts.get(k).id == this.fallbacks[f] && k != primary) {
                     let fg = this.glyphIn(k, cp);
                     if (fg != 0) {
-                        return [truncate<u32>(k), fg];
+                        let w = this.fonts.get(k).info.weight;
+                        let distance = if (w > want) w - want else want - w;
+                        if (best == null || distance < bestDistance) {
+                            best = Some([truncate<u32>(k), fg]);
+                            bestDistance = distance;
+                        }
                     }
                 }
             }
         }
-        return [truncate<u32>(primary), 0];
+        return best ?? [truncate<u32>(primary), 0];
+    }
+
+    /// Whether a font was loaded as `id` (no stand-in: slotIndex gives font 0's for an id not loaded).
+    public fn hasFont(borrow this, id: u32) -> bool {
+        for (k in 0..this.fonts.length()) {
+            if (this.fonts.get(k).id == id) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// The weight of font `fontId` (FontInfo.weight); 400 when it is not loaded.
+    public fn fontWeight(borrow this, fontId: u32) -> u32 => match (this.slotIndex(fontId)) {
+        Some(k) => this.fonts.get(k).info.weight,
+        null => 400,
+    };
+
+    /// The weight of the font that draws `cp` in a run in font `fontId` (its own or a fallback), or null when none
+    /// has it.
+    public fn coveringWeight(borrow this, fontId: u32, cp: u32) -> u32? {
+        let primary = match (this.slotIndex(fontId)) {
+            Some(k) => k,
+            null => { return null; }
+        };
+        let cur = ShapeCursor { at: 0, pen: 0.0, previousSlot: 0, previousGlyph: 0, hasPrevious: false };
+        let found = this.fontFor(primary, cur, cp);
+        if (found[1] == 0) {
+            return null;
+        }
+        return this.fonts.get(found[0] as usize).info.weight;
     }
 
     /// Shapes one line of `utf8` in a run in font `primary`, in visual order: its directional runs (UAX #9, the line
