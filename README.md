@@ -85,6 +85,10 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   boxes. The result is byte-identical to a full redraw.
 - **Controls:** buttons, checkboxes, text input with a caret, spin input, slider, radio, tabs, dropdown, single- and
   multi-select lists, context menu and tooltip.
+- **Virtual list:** `Controls.virtualList` scrolls any number of rows of one height, of which only those in view
+  become elements (a million rows cost a screenful). The program draws each row's content between
+  `Controls.virtualRow` and `ui.close()`; a press selects a row, and Up, Down, the page keys, Home and End move the
+  selection while the list has the focus, scrolling just enough to show it.
 - **Vector paths.** `PathBuilder` makes a path of lines and quadratic and cubic curves; `Ui.path` draws it in an
   element's box, filled (nonzero or even-odd) or stroked with round joins, optionally from a view box.
 - **Also:** focus cycling with Tab, vector icons, eased transitions, and dark and light themes.

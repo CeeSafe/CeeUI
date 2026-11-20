@@ -1,0 +1,182 @@
+// SPDX-License-Identifier: MIT
+// A virtual list: any number of rows of one height, of which only those in view (and a few either side) become
+// elements, so a list of a million rows costs what a screenful does. The program draws each row's content itself,
+// between virtualRow and ui.close(), so a row can hold anything:
+//
+//     let list = Controls.virtualList(mut ui, "files", files.length, 32.0, Size.grow(), mut selected);
+//     for (i in list.first..list.last) {
+//         Controls.virtualRow(mut ui, list, i, mut selected, names[i]);
+//         ui.label(names[i], Text.of());
+//         ui.close();
+//     }
+//     Controls.endVirtualList(mut ui, list);
+//
+// A press on a row selects it and focuses the list; while it has the focus, Up and Down, Page Up and Page Down,
+// Home and End move the selection, and the list scrolls just enough to show it.
+
+/// A virtual list being built: the rows in view the program draws, `first` to `last` (not included).
+public struct VirtualList {
+    public first: usize;
+    public last: usize;
+    count: usize;
+    rowH: f32;
+    key: u32;
+}
+
+/// The id of row `i` of the list whose id hashes to `key`.
+fn virtualRowId(key: u32, i: usize) -> u32 {
+    var h = key;
+    var v = i as u64;
+    for (k in 0usize..8) {
+        h = (h ^ truncate<u32>(v & 0xFF)).wrappingMul(16777619);
+        v = v >> 8;
+    }
+    return if (h == 0) 1 else h;
+}
+
+/// The row a key moves the selection to from `current` in a list of `count` rows, `page` rows to a screenful;
+/// null when no key moves it.
+fn virtualListKey(ui: borrow Ui, current: usize?, count: usize, page: usize) -> usize? {
+    let last = count - 1;
+    return match (current) {
+        Some(c) => {
+            let at = c.min(last);
+            if (ui.keyHit(Key.Up)) {
+                return if (at > 0) at - 1 else 0;
+            }
+            if (ui.keyHit(Key.Down)) {
+                return (at + 1).min(last);
+            }
+            if (ui.keyHit(Key.PageUp)) {
+                return if (at > page) at - page else 0;
+            }
+            if (ui.keyHit(Key.PageDown)) {
+                return (at + page).min(last);
+            }
+            if (ui.keyHit(Key.Home)) {
+                return 0;
+            }
+            if (ui.keyHit(Key.End)) {
+                return last;
+            }
+            null
+        }
+        null => {
+            // Nothing selected yet: any of them starts at an end.
+            if (ui.keyHit(Key.Down) || ui.keyHit(Key.PageDown) || ui.keyHit(Key.Home)) {
+                return 0;
+            }
+            if (ui.keyHit(Key.Up) || ui.keyHit(Key.PageUp) || ui.keyHit(Key.End)) {
+                return last;
+            }
+            null
+        }
+    };
+}
+
+impl Controls {
+    /// ClayWind_VirtualList: opens a scrolling list of `count` rows each `rowHeight` tall, `height` tall itself, with
+    /// `selected` its selected row (null for none). Draw rows `first` to `last` of what it returns with
+    /// virtualRow, then end it with endVirtualList.
+    public fn virtualList(
+        ui: borrow mut Ui,
+        id: StringView,
+        count: usize,
+        rowHeight: f32,
+        height: SizingAxis,
+        selected: borrow mut (usize?),
+    ) -> VirtualList {
+        let h = hashId(id);
+        let rowH = rowHeight.max(1.0);
+        let box = ui.boxOf(id);
+        let viewH = match (box) {
+            Some(b) => b.h,
+            null => ui.screenSize().h,
+        };
+        if (ui.pressedOn(h)) {
+            ui.setFocus(h);
+        }
+        if (count == 0) {
+            selected = null;
+        } else {
+            match (selected) {
+                Some(s) => {
+                    if (s >= count) {
+                        selected = count - 1;
+                    }
+                }
+                null => {}
+            }
+        }
+        if (ui.hasFocus(h) && count > 0) {
+            let page = truncate<usize>((viewH / rowH).floor().max(2.0)) - 1;
+            match (virtualListKey(ui, selected, count, page)) {
+                Some(target) => {
+                    selected = target;
+                    // Just enough scrolling to show it.
+                    match (box) {
+                        Some(b) => {
+                            let top = round<f32>(target) * rowH;
+                            let shownTop = (0.0 - ui.scrollOffset(id).y).max(0.0);
+                            if (top < shownTop) {
+                                ui.scrollBy(id, 0.0, shownTop - top);
+                            } else if (top + rowH > shownTop + b.h) {
+                                ui.scrollBy(id, 0.0, shownTop + b.h - (top + rowH));
+                            }
+                        }
+                        null => {}
+                    }
+                }
+                null => {}
+            }
+        }
+        let rows = visibleLines(ui.scrollOffset(id).y, viewH, rowH, count, 4);
+        ui.open(
+            Style.column().id(id).w(Size.grow()).h(height).scroll(ScrollAxis.Vertical).bg(SLATE_800).rounded(
+                Radius.Md,
+            ).border(1.0, if (ui.hasFocus(h)) BLUE_500 else SLATE_600),
+        );
+        // The rows above the view, as their height.
+        ui.open(Style.box().w(Size.fixed(1.0)).h(Size.fixed(round<f32>(rows[0]) * rowH)));
+        ui.close();
+        return VirtualList { first: rows[0], last: rows[1], count: count, rowH: rowH, key: h };
+    }
+
+    /// Opens row `i` of `list`, named `name` for a screen reader: a press selects it. The program draws its
+    /// content, then closes it (ui.close()). True when it is the selected row.
+    public fn virtualRow(
+        ui: borrow mut Ui,
+        list: borrow VirtualList,
+        i: usize,
+        selected: borrow mut (usize?),
+        name: StringView,
+    ) -> bool {
+        let row = virtualRowId(list.key, i);
+        if (ui.pressedOn(row)) {
+            selected = i;
+            ui.setFocus(list.key);
+        }
+        let on = match (selected) {
+            Some(s) => s == i,
+            null => false,
+        };
+        var style = Style.row().idHash(row).w(Size.grow()).h(Size.fixed(list.rowH)).px(space(3.0)).alignXY(
+            AxisAlign.Start,
+            AxisAlign.Center,
+        ).gap(space(2.0)).cursor(Cursor.Pointer).bg(if (on) BLUE_600 else NONE);
+        if (!on) {
+            style = style.hover(Style.of().bg(SLATE_700));
+        }
+        ui.open(style);
+        let node = ui.access(row, AccessRole.ListItem, name.bytes());
+        ui.accessFlag(node, ACCESS_SELECTED, on);
+        return on;
+    }
+
+    /// Ends a virtual list: the rows below the view, as their height, and the list itself.
+    public fn endVirtualList(ui: borrow mut Ui, list: borrow VirtualList) {
+        ui.open(Style.box().w(Size.fixed(1.0)).h(Size.fixed(round<f32>(list.count - list.last) * list.rowH)));
+        ui.close();
+        ui.close();
+    }
+}
