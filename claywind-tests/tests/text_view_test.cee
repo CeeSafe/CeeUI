@@ -164,7 +164,7 @@ fn aTextViewScrollsToItsCaret() -> Result<void, TestFailure> {
 }
 
 struct EditorDoc {
-    buf: [u8; 64];
+    buf: [u8; 128];
     len: usize;
     starts: [u32; 8];
     count: usize;
@@ -175,10 +175,13 @@ struct EditorDoc {
     composing: bool;
     history: [u8; 256];
     state: TextHistory;
+    rows: [u16; 8];
+    /// Whether the editor's lines wrap (its look's wrap), as by default.
+    nowrap: bool;
 }
 
 fn editorOf(text: StringView) -> EditorDoc {
-    var d = EditorDoc { buf: [0u8; 64], len: 0, starts: [0u32; 8], count: 0, edit: TextEdit.at(0), command: null, paste: false, composing: false, history: [0u8; 256], state: TextHistory.create() };
+    var d = EditorDoc { buf: [0u8; 128], len: 0, starts: [0u32; 8], count: 0, edit: TextEdit.at(0), command: null, paste: false, composing: false, history: [0u8; 256], state: TextHistory.create(), rows: [0u16; 8], nowrap: false };
     let b = text.bytes();
     for (i in 0..b.length) {
         d.buf[i] = b[i];
@@ -203,21 +206,16 @@ fn editorFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow
         ui.setComposition("\u{306B}\u{307B}".bytes(), 6);
     }
     ui.open(Style.column().w(Size.fixed(300.0)).h(Size.fixed(200.0)));
-    let look = Text.of().size(14.0).leading(20.0);
-    let changed = Controls.textEditorWithUndo(
-        mut ui,
-        metrics,
-        "ed",
-        mut doc.buf[..],
-        mut doc.len,
-        mut doc.starts[..],
-        mut doc.count,
-        look,
-        false,
-        mut doc.edit,
-        mut doc.history[..],
-        mut doc.state,
-    );
+    let look = if (doc.nowrap) Text.of().size(14.0).leading(20.0).wrap(TextWrap.None) else Text.of().size(14.0).leading(20.0);
+    // The document over the test's arrays, its state carried from frame to frame.
+    var d = TextDocument.over(mut doc.buf[..], doc.len, mut doc.starts[..], mut doc.rows[..], mut doc.history[..]);
+    d.edit = doc.edit;
+    d.undo = doc.state;
+    let changed = Controls.textEditor(mut ui, metrics, "ed", mut d, look, false);
+    doc.len = d.len;
+    doc.count = d.count;
+    doc.edit = d.edit;
+    doc.state = d.undo;
     ui.close();
     finish(mut ui, mut platform)?;
     platform.pressed = 0;
@@ -327,13 +325,13 @@ fn anEditorRefusesWhatHasNoRoom() -> Result<void, TestFailure> {
     doc.edit = TextEdit.at(1);
     Check.isTrue(!editKey(mut ui, mut platform, mut doc, Key.Enter)?, "no ninth line")?;
     Check.isTrue(isText(doc, "a\nb\nc\nd\ne\nf\ng\nh"), "the text is as it was")?;
-    // Typing up to the buffer's 64 bytes (16 a frame, as the fake platform holds), and no further.
-    for (k in 0..4) {
+    // Typing up to the buffer's 128 bytes (16 a frame, as the fake platform holds), and no further.
+    for (k in 0..8) {
         let _ = k;
         typeChars(mut platform, "xxxxxxxxxxxxxxxx");
         editorFrame(mut ui, mut platform, mut doc)?;
     }
-    return Check.equalU64(64, doc.len as u64);
+    return Check.equalU64(128, doc.len as u64);
 }
 
 @test
@@ -460,4 +458,91 @@ fn aSmallHistoryKeepsTheLatestEdits() -> Result<void, TestFailure> {
     }
     Check.equalU64(8, undone)?;
     return Check.equalU64(20, doc.len as u64);
+}
+
+/// The y of each Text command whose text starts with `first`, in order.
+fn rowsStarting(ui: borrow Ui, first: u8, out: borrow mut Vector<f32>) {
+    out.clear();
+    for (k in 0..ui.commandCount()) {
+        let command = ui.commandAt(k);
+        match (command) {
+            Command.Text(r, _) => {
+                let t = ui.textOf(command);
+                if (t.length > 0 && t[0] == first) {
+                    out.push(r.y)!;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Thirteen words of four letters: six a row fit the view's 296 points (a word and its space are 50).
+fn longLine() -> StringView => "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk llll mmmm\nshort";
+
+@test
+fn anEditorWrapsLongLinesIntoRows() -> Result<void, TestFailure> {
+    var storage = heap(2097152);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var doc = focusedEditor(mut ui, mut platform, longLine())?;
+    editorFrame(mut ui, mut platform, mut doc)?;
+    // Three rows: aaaa..ffff (bytes 0 to 30), gggg..llll (30 to 60), mmmm; "short" one.
+    Check.isTrue(doc.rows[0] == 3 && doc.rows[1] == 1, "the long line takes three rows")?;
+    var ys = Vector<f32>.create();
+    rowsStarting(ui, 'g', mut ys);
+    Check.equalU64(1, ys.length as u64)?;
+    let second = ys[0];
+    rowsStarting(ui, 'a', mut ys);
+    expect("the second row is a row below the first", second - ys[0], 20.0)?;
+    rowsStarting(ui, 's', mut ys);
+    expect("the next line is under the three rows", ys[0] - second, 40.0)?;
+    // Down and Up move by rows, keeping the caret's place across.
+    doc.edit = TextEdit.at(2);
+    let firstDown = editCaret(mut ui, mut platform, mut doc, Key.Down)?;
+    Console.write(" rows ");
+    Console.write(" focused ");
+    Check.equalU64(32, firstDown as u64)?;
+    Check.equalU64(62, editCaret(mut ui, mut platform, mut doc, Key.Down)? as u64)?;
+    Check.equalU64(67, editCaret(mut ui, mut platform, mut doc, Key.Down)? as u64)?;
+    Check.equalU64(62, editCaret(mut ui, mut platform, mut doc, Key.Up)? as u64)?;
+    Check.equalU64(32, editCaret(mut ui, mut platform, mut doc, Key.Up)? as u64)?;
+    // Right from a row's last character: its end is the next row's start, then on into that row.
+    doc.edit = TextEdit.at(29);
+    Check.equalU64(30, editCaret(mut ui, mut platform, mut doc, Key.Right)? as u64)?;
+    Check.equalU64(31, editCaret(mut ui, mut platform, mut doc, Key.Right)? as u64)?;
+    Check.equalU64(30, editCaret(mut ui, mut platform, mut doc, Key.Left)? as u64)?;
+    Check.equalU64(29, editCaret(mut ui, mut platform, mut doc, Key.Left)? as u64)?;
+    // A click on the second row, 25 points in: between g and g, byte 32 or so of the line.
+    let box = ui.boxOf("ed")!;
+    platform.pointerState.position = Vec2 { x: box.x + 21.0, y: box.y + 30.0 };
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    editorFrame(mut ui, mut platform, mut doc)?;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    editorFrame(mut ui, mut platform, mut doc)?;
+    return Check.equalU64(32, doc.edit.caret as u64);
+}
+
+@test
+fn anEditorWithoutWrappingKeepsALineOneRow() -> Result<void, TestFailure> {
+    var storage = heap(2097152);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var doc = editorOf(longLine());
+    doc.nowrap = true;
+    editorFrame(mut ui, mut platform, mut doc)?;
+    var ys = Vector<f32>.create();
+    rowsStarting(ui, 'a', mut ys);
+    Check.equalU64(1, ys.length as u64)?;
+    rowsStarting(ui, 'g', mut ys);
+    return Check.equalU64(0, ys.length as u64);
+}
+
+fn editCaret(ui: borrow mut Ui, platform: borrow mut FakePlatform, doc: borrow mut EditorDoc, k: Key) -> Result<usize, TestFailure> {
+    editKey(mut ui, mut platform, mut doc, k)?;
+    return Ok(doc.edit.caret);
 }

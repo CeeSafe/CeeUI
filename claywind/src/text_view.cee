@@ -153,6 +153,164 @@ fn viewMeasures(config: TextConfig, count: usize, gutter: bool) -> [f32; 2] {
     return [lineH, gutterW];
 }
 
+/// The most rows a line wraps into; past them, its last row holds the rest.
+const MAX_ROWS: usize = 64;
+
+/// Where line `line`, set in `config`, wraps at `width`: each row's first byte into `out` (`out[0]` is 0); how many
+/// rows (at least one). Rows break at UAX #14's opportunities, as far into the line as fits (spaces at a row's end do
+/// not count); a word wider than a row breaks between grapheme clusters. Without `wrap`, one row.
+fn wrapRows<M: TextMetrics>(
+    metrics: borrow M,
+    config: TextConfig,
+    line: Slice<u8>,
+    wrap: bool,
+    width: f32,
+    out: SliceMut<u32>,
+) -> usize {
+    out[0] = 0;
+    if (!wrap || width <= 0.0 || line.length == 0 || metrics.measure(line, config).w <= width) {
+        return 1;
+    }
+    var breaks = [0u8; 4096];
+    var scratch = [0u32; 8192];
+    let known = line.length <= 4096 && lineBreaks(line, mut breaks[0..line.length], mut scratch[0..line.length * 2]);
+    var rows: usize = 1;
+    var start: usize = 0;
+    while (rows < out.length.min(MAX_ROWS)) {
+        if (metrics.measure(trimEnd(line, start, line.length), config).w <= width) {
+            break;
+        }
+        // The break opportunities after start, in order; the last whose row fits, by halving.
+        var lo = start;
+        var best = start;
+        var hiEnd = line.length;
+        if (known) {
+            // Binary search over byte positions, moved to the nearest opportunity at or before each probe.
+            var a = start + 1;
+            var b = hiEnd;
+            while (a < b) {
+                let mid = a + (b - a) / 2;
+                var at = mid;
+                while (at > start && breaks[at] == BREAK_NONE) {
+                    at -= 1;
+                }
+                if (at <= start) {
+                    a = mid + 1;
+                    continue;
+                }
+                if (metrics.measure(trimEnd(line, start, at), config).w <= width) {
+                    best = best.max(at);
+                    a = mid + 1;
+                } else {
+                    b = at;
+                }
+            }
+            lo = best;
+        }
+        if (lo <= start) {
+            // No opportunity fits: as many grapheme clusters as fit, at least one.
+            var at = graphemeEnd(line, start);
+            loop {
+                let next = graphemeEnd(line, at);
+                if (next >= line.length || next == at || metrics.measure(line[start..next], config).w > width) {
+                    break;
+                }
+                at = next;
+            }
+            lo = at;
+        }
+        if (lo >= line.length) {
+            break;
+        }
+        out[rows] = truncate<u32>(lo);
+        rows += 1;
+        start = lo;
+    }
+    return rows;
+}
+
+/// `line[from..to]` without the spaces at its end.
+fn trimEnd<region a>(line: Slice<a, u8>, from: usize, to: usize) -> Slice<a, u8> {
+    var end = to;
+    while (end > from && (line[end - 1] == ' ' || line[end - 1] == '\t')) {
+        end -= 1;
+    }
+    return line[from..end];
+}
+
+/// The rows line `k` takes as the cache knows it: its count once measured, else one.
+fn cachedRows(rows: Slice<u16>, k: usize) -> usize => if (k < rows.length && rows[k] > 0) rows[k] as usize else 1;
+
+/// The top of line `k`, in rows from the text's top.
+fn rowsBefore(rows: Slice<u16>, k: usize) -> usize {
+    if (rows.length == 0) {
+        return k;
+    }
+    var n: usize = 0;
+    for (j in 0..k.min(rows.length)) {
+        n += cachedRows(rows, j);
+    }
+    return n + k - k.min(rows.length);
+}
+
+/// The line holding row `row` (from the text's top) of `count` lines, and the row within it.
+fn lineOfRow(rows: Slice<u16>, count: usize, row: usize) -> [usize; 2] {
+    if (rows.length == 0) {
+        let k = row.min(if (count > 0) count - 1 else 0);
+        return [k, row - k];
+    }
+    var top: usize = 0;
+    for (k in 0..count) {
+        let n = cachedRows(rows, k);
+        if (row < top + n || k + 1 == count) {
+            return [k, (row - top).min(n - 1)];
+        }
+        top += n;
+    }
+    return [0, 0];
+}
+
+/// A line's rows as laid out now, its count stored in the cache.
+struct LineRows {
+    starts: [u32; 64];
+    count: usize;
+}
+
+fn layRows<M: TextMetrics>(
+    metrics: borrow M,
+    config: TextConfig,
+    line: Slice<u8>,
+    wrap: bool,
+    width: f32,
+    rows: SliceMut<u16>,
+    k: usize,
+) -> LineRows {
+    var r = LineRows { starts: [0u32; 64], count: 0 };
+    r.count = wrapRows(metrics, config, line, wrap, width, mut r.starts[..]);
+    if (k < rows.length) {
+        rows[k] = truncate<u16>(r.count);
+    }
+    return r;
+}
+
+/// The row of `r` that byte `local` of its line is in: a caret at a row's start is in that row.
+fn rowOf(r: borrow LineRows, local: usize) -> usize {
+    var row: usize = 0;
+    for (k in 1..r.count) {
+        if ((r.starts[k] as usize) <= local) {
+            row = k;
+        }
+    }
+    return row;
+}
+
+/// Row `row` of `line` laid out as `r`: its first byte and one past its last.
+fn rowRange(r: borrow LineRows, line: Slice<u8>, row: usize) -> [usize; 2] {
+    let from = r.starts[row] as usize;
+    let to = if (row + 1 < r.count) r.starts[row + 1] as usize else line.length;
+    return [from, to];
+}
+
 impl Controls {
     /// A text view (as textView: a long text indexed by `starts` and `count`, laid out a screenful at a time) whose
     /// text can be selected and copied, but not changed. `edit`'s caret and anchor are byte offsets into `text`.
@@ -160,8 +318,8 @@ impl Controls {
     /// extends); with the focus, the arrows move the caret as the text is drawn and across lines, Up and Down keep
     /// its place across, Home and End go to the line's ends, Page Up and Page Down move a view's height, the word
     /// modifier (Option on macOS, Control elsewhere) moves by words, Shift extends, and Copy and Select All act on
-    /// the selection. The view scrolls to keep the caret in sight. It measures text to place the caret, so it takes
-    /// the text metrics.
+    /// the selection. The view scrolls to keep the caret in sight. Lines do not wrap. It measures text to place the
+    /// caret, so it takes the text metrics.
     public fn selectableTextView<M: TextMetrics>(
         ui: borrow mut Ui,
         metrics: borrow M,
@@ -173,11 +331,28 @@ impl Controls {
         gutter: bool,
         edit: borrow mut TextEdit,
     ) {
-        Controls.textViewOf(mut ui, metrics, id, text, starts, count, look, gutter, mut edit, false);
+        var none = [0u16; 1];
+        var width: f32 = 0.0;
+        Controls.textViewOf(
+            mut ui,
+            metrics,
+            id,
+            text,
+            starts,
+            count,
+            look,
+            gutter,
+            mut edit,
+            false,
+            mut none[0..0],
+            mut width,
+        );
     }
 
     /// selectableTextView's work; an `editable` one also reports its caret to the host (the input method and a
-    /// phone's keyboard follow it).
+    /// phone's keyboard follow it). With `rows` (one per line, the cache of how many rows each wraps into) and
+    /// `look` wrapping words, lines wrap at the view's width; `wrapWidth` is the width the cache is for, and a new
+    /// width clears it.
     fn textViewOf<M: TextMetrics>(
         ui: borrow mut Ui,
         metrics: borrow M,
@@ -189,6 +364,8 @@ impl Controls {
         gutter: bool,
         edit: borrow mut TextEdit,
         editable: bool,
+        rows: SliceMut<u16>,
+        wrapWidth: borrow mut f32,
     ) {
         let h = hashId(id);
         ui.registerFocusable(h);
@@ -196,23 +373,66 @@ impl Controls {
         let measures = viewMeasures(config0, count, gutter);
         let lineH = measures[0];
         let gutterW = measures[1];
+        let wrap = config0.wrapsWords() && rows.length >= count && count > 0;
         let line = look.wrap(TextWrap.None).leading(lineH);
         let config = line.config();
         edit.caret = edit.caret.min(text.length);
         edit.anchor = edit.anchor.min(text.length);
         let box = ui.boxOfHash(h);
         let scroll = ui.scrollOffset(id);
-        // Where a point in the view lands: its line (clamped to the text's), then the nearest caret in it.
+        // The width rows wrap at: the view's, less the gutter and a caret's room. A new width clears the cache.
+        let width = match (box) {
+            Some(b) => (b.w - gutterW - 4.0).max(1.0),
+            null => 0.0,
+        };
+        // The cache of rows per line: the text's lines long when wrapping, else empty.
+        let limit = if (wrap) count else 0;
+        if (wrap && width != wrapWidth) {
+            for (k in 0..count) {
+                rows[k] = 0;
+            }
+            wrapWidth = width;
+        }
+        // The lines in view are measured first, so that what the pointer and the keys find this frame (a new width
+        // or an edit cleared the cache) is where it is drawn.
+        if (wrap) {
+            let viewTop = (0.0 - scroll.y).max(0.0);
+            let viewHeight = match (box) {
+                Some(b) => b.h,
+                null => 0.0,
+            };
+            let lastRow = truncate<usize>(((viewTop + viewHeight) / lineH).ceil()) + 1;
+            var k = lineOfRow(rows[0..limit], count, truncate<usize>((viewTop / lineH).floor()))[0];
+            var rowAt = rowsBefore(rows[0..limit], k);
+            while (k < count && rowAt <= lastRow) {
+                rowAt += layRows(
+                    metrics,
+                    config,
+                    lineOf(text, starts, count, k),
+                    wrap,
+                    width,
+                    mut rows[0..limit],
+                    k,
+                ).count;
+                k += 1;
+            }
+        }
+        // Where a point in the view lands: its row (clamped to the text's), then the nearest caret in it.
         let p = ui.pointer();
         var pointed: usize? = null;
         match (box) {
             Some(b) => {
                 if (count > 0) {
                     let contentY = p.position.y - b.y - scroll.y;
-                    let k = truncate<usize>((contentY / lineH).floor().max(0.0)).min(count - 1);
-                    let x = p.position.x - b.x - scroll.x - gutterW;
+                    let row = truncate<usize>((contentY / lineH).floor().max(0.0));
+                    let at = lineOfRow(rows[0..limit], count, row);
+                    let k = at[0];
                     let lineText = lineOf(text, starts, count, k);
-                    pointed = Some((starts[k] as usize) + offsetAtIn(metrics, lineText, config, x));
+                    let r = layRows(metrics, config, lineText, wrap, width, mut rows[0..limit], k);
+                    let range = rowRange(r, lineText, at[1].min(r.count - 1));
+                    let x = p.position.x - b.x - scroll.x - gutterW;
+                    let inRow = offsetAtIn(metrics, lineText[range[0]..range[1]], config, x);
+                    pointed = Some((starts[k] as usize) + range[0] + inRow);
                 }
             }
             null => {}
@@ -270,6 +490,11 @@ impl Controls {
             let lineStart = starts[k] as usize;
             let lineText = lineOf(text, starts, count, k);
             let local = (edit.caret - lineStart).min(lineText.length);
+            let r = layRows(metrics, config, lineText, wrap, width, mut rows[0..limit], k);
+            let row = rowOf(r, local);
+            let range = rowRange(r, lineText, row);
+            let rowText = lineText[range[0]..range[1]];
+            let inRow = local - range[0];
             var target: usize? = null;
             for (right in [false, true]) {
                 if (!ui.keyHit(if (right) Key.Right else Key.Left)) {
@@ -281,41 +506,92 @@ impl Controls {
                 } else if (!shift && edit.selects()) {
                     target = Some(if (right) edit.to() else edit.from());
                 } else {
-                    let step = lineStep(metrics, lineText, config, local, right);
-                    if (step != local) {
-                        target = Some(lineStart + step);
-                    } else {
+                    let step = lineStep(metrics, rowText, config, inRow, right);
+                    let forward = right != bidiParagraphRtl(lineText);
+                    if (step != inRow) {
+                        target = Some(lineStart + range[0] + step);
+                    } else if (forward && row + 1 < r.count) {
+                        // At a wrapped row's end: on into the next row (its start is this row's end).
+                        let next = rowRange(r, lineText, row + 1);
+                        target = Some(
+                            lineStart + next[0] + graphemeEnd(lineText[next[0]..next[1]], 0).min(next[1] - next[0]),
+                        );
+                    } else if (!forward && row > 0) {
+                        target = Some(lineStart + graphemeBefore(lineText[0..range[0]], range[0]));
+                    } else if (forward && k + 1 < count) {
                         // At the line's edge: on to the next line's start, or back to the end of the one before,
                         // as the line reads.
-                        let forward = right != bidiParagraphRtl(lineText);
-                        if (forward && k + 1 < count) {
-                            target = Some(starts[k + 1] as usize);
-                        } else if (!forward && k > 0) {
-                            target = Some(lineEnd(text, starts, count, k - 1));
-                        }
+                        target = Some(starts[k + 1] as usize);
+                    } else if (!forward && k > 0) {
+                        target = Some(lineEnd(text, starts, count, k - 1));
                     }
                 }
             }
-            // Up, Down, Page Up and Page Down keep the caret's place across the line.
+            // Up, Down, Page Up and Page Down move by rows on the screen, keeping the caret's place across.
             let page = truncate<usize>((viewH / lineH).floor().max(1.0));
-            var rows: usize = 0;
+            var steps: usize = 0;
             var down = false;
             if (ui.keyHit(Key.Up)) {
-                rows = 1;
+                steps = 1;
             } else if (ui.keyHit(Key.Down)) {
-                rows = 1;
+                steps = 1;
                 down = true;
             } else if (ui.keyHit(Key.PageUp)) {
-                rows = page;
+                steps = page;
             } else if (ui.keyHit(Key.PageDown)) {
-                rows = page;
+                steps = page;
                 down = true;
             }
-            if (rows > 0) {
-                let x = metrics.caretX(lineText, config, local);
-                let kk = if (down) (k + rows).min(count - 1) else (if (k > rows) k - rows else 0);
+            if (steps > 0) {
+                let x = metrics.caretX(rowText, config, inRow);
+                var kk = k;
+                var rr = row;
+                var rowsHere = r.count;
+                for (s in 0..steps) {
+                    let _ = s;
+                    if (down) {
+                        if (rr + 1 < rowsHere) {
+                            rr += 1;
+                        } else if (kk + 1 < count) {
+                            kk += 1;
+                            rr = 0;
+                            rowsHere = layRows(
+                                metrics,
+                                config,
+                                lineOf(text, starts, count, kk),
+                                wrap,
+                                width,
+                                mut rows[0..limit],
+                                kk,
+                            ).count;
+                        }
+                    } else {
+                        if (rr > 0) {
+                            rr -= 1;
+                        } else if (kk > 0) {
+                            kk -= 1;
+                            rowsHere = layRows(
+                                metrics,
+                                config,
+                                lineOf(text, starts, count, kk),
+                                wrap,
+                                width,
+                                mut rows[0..limit],
+                                kk,
+                            ).count;
+                            rr = rowsHere - 1;
+                        }
+                    }
+                }
                 let other = lineOf(text, starts, count, kk);
-                target = Some((starts[kk] as usize) + offsetAtIn(metrics, other, config, x));
+                let lr = layRows(metrics, config, other, wrap, width, mut rows[0..limit], kk);
+                let span = rowRange(lr, other, rr.min(lr.count - 1));
+                var landed = span[0] + offsetAtIn(metrics, other[span[0]..span[1]], config, x);
+                // Not past a wrapped row's end: that place is the next row's start.
+                if (rr + 1 < lr.count && landed >= span[1] && span[1] > span[0]) {
+                    landed = span[0] + graphemeBefore(other[span[0]..span[1]], span[1] - span[0]);
+                }
+                target = Some((starts[kk] as usize) + landed);
             }
             if (ui.keyPressed(Key.Home)) {
                 target = Some(lineStart);
@@ -334,12 +610,21 @@ impl Controls {
                 null => {}
             }
         }
-        // The caret moved: the view scrolls just enough to show its line and place.
+        // The caret's line and row, laid out.
+        let caretLine = if (count > 0) lineAt(starts, count, edit.caret) else 0;
+        var caretRow: usize = 0;
+        var caretRowTop: usize = 0;
+        if (count > 0) {
+            let lineText = lineOf(text, starts, count, caretLine);
+            let r = layRows(metrics, config, lineText, wrap, width, mut rows[0..limit], caretLine);
+            caretRow = rowOf(r, edit.caret - (starts[caretLine] as usize));
+            caretRowTop = rowsBefore(rows[0..limit], caretLine) + caretRow;
+        }
+        // The caret moved: the view scrolls just enough to show its row and place.
         match (box) {
             Some(b) => {
                 if (moved && count > 0) {
-                    let k = lineAt(starts, count, edit.caret);
-                    let top = round<f32>(k) * lineH;
+                    let top = round<f32>(caretRowTop) * lineH;
                     let shownTop = -scroll.y;
                     var dy: f32 = 0.0;
                     if (top < shownTop) {
@@ -347,8 +632,11 @@ impl Controls {
                     } else if (top + lineH > shownTop + b.h) {
                         dy = shownTop + b.h - (top + lineH);
                     }
-                    let lineText = lineOf(text, starts, count, k);
-                    let x = gutterW + metrics.caretX(lineText, config, edit.caret - (starts[k] as usize));
+                    let lineText = lineOf(text, starts, count, caretLine);
+                    let r = layRows(metrics, config, lineText, wrap, width, mut rows[0..limit], caretLine);
+                    let range = rowRange(r, lineText, caretRow);
+                    let local = edit.caret - (starts[caretLine] as usize);
+                    let x = gutterW + metrics.caretX(lineText[range[0]..range[1]], config, local - range[0]);
                     let shownLeft = -scroll.x;
                     var dx: f32 = 0.0;
                     if (x < shownLeft + gutterW) {
@@ -363,101 +651,131 @@ impl Controls {
             }
             null => {}
         }
-        let lines = visibleLines(ui.scrollOffset(id).y, viewH, lineH, count, 4);
+        // The rows in view: from the row at the top, a few either side, line by line.
+        let shownTop = (0.0 - ui.scrollOffset(id).y).max(0.0);
+        let firstRow = truncate<usize>((shownTop / lineH).floor().max(0.0));
+        let fromRow = if (firstRow > 4) firstRow - 4 else 0;
+        let lastRow = firstRow + truncate<usize>((viewH / lineH).ceil().max(1.0)) + 4;
+        let start = if (count > 0) lineOfRow(rows[0..limit], count, fromRow)[0] else 0;
         let focused = ui.hasFocus(h);
-        let caretLine = if (count > 0) lineAt(starts, count, edit.caret) else 0;
         let blink = (truncate<u64>((ui.time() * 2.0).floor()) & 1) == 0;
-        ui.open(Style.column().id(id).w(Size.grow()).h(Size.grow()).scroll(ScrollAxis.Both).bg(SLATE_900));
-        ui.open(Style.box().w(Size.fixed(1.0)).h(Size.fixed(round<f32>(lines[0]) * lineH)));
+        ui.open(
+            Style.column().id(id).w(Size.grow()).h(Size.grow()).scroll(
+                if (wrap) ScrollAxis.Vertical else ScrollAxis.Both,
+            )
+                .bg(SLATE_900),
+        );
+        let above = rowsBefore(rows[0..limit], start);
+        ui.open(Style.box().w(Size.fixed(1.0)).h(Size.fixed(round<f32>(above) * lineH)));
         ui.close();
-        for (k in lines[0]..lines[1]) {
+        var rowAt = above;
+        var k = start;
+        while (k < count && rowAt <= lastRow) {
             let lineStart = starts[k] as usize;
             let lineText = lineOf(text, starts, count, k);
             let lineStop = lineStart + lineText.length;
-            ui.open(Style.row().h(Size.fixed(lineH)).alignXY(AxisAlign.Start, AxisAlign.Center));
-            if (gutter) {
-                var number = [0u8; 12];
-                var w = TextWriter.create(mut number[..]);
-                w.decimal((k + 1) as u64);
-                ui.open(Style.box().w(Size.fixed(gutterW)).pr(12.0).alignXY(AxisAlign.End, AxisAlign.Center));
-                ui.labelBytes(w.written(), line.color(SLATE_500));
-                ui.close();
-            }
-            ui.open(Style.box().h(Size.fixed(lineH)).alignXY(AxisAlign.Start, AxisAlign.Center));
-            // The selection on this line, behind its text: where its characters are drawn, and the newline after
-            // them as a narrow box when the selection runs on.
-            if (edit.selects() && edit.from() <= lineStop && edit.to() > lineStart) {
-                var spans = [TextSpan { left: 0.0, right: 0.0 }; 8];
-                let a = edit.from().max(lineStart) - lineStart;
-                let b = edit.to().min(lineStop) - lineStart;
-                var n = metrics.spans(lineText, config, a, b, mut spans[..]);
-                if (edit.to() > lineStop) {
-                    let end = metrics.measure(lineText, config).w;
-                    let size = if (config.fontSize > 0.0) config.fontSize else 16.0;
-                    n = addTextSpan(mut spans[..], n, end, end + size * 0.4);
-                }
-                for (s in 0..n) {
-                    let span = spans[s];
-                    ui.open(Style.box().absolute().passthrough().left(span.left).top(0.0)
-                        .w(Size.fixed(span.right - span.left)).h(Size.fixed(lineH)).bg(0x3B82F666));
-                    ui.close();
-                }
-            }
-            // An editable view's caret line shows the input method's composition at the caret while it composes:
-            // spliced into the line, underlined, the caret where the input method has it.
-            let composing = editable && focused && k == caretLine && ui.composition().length > 0;
-            var spliced = [0u8; 4096];
-            var shownText = lineText;
-            var caretAt = if (k == caretLine && edit.caret >= lineStart) edit.caret - lineStart else 0;
-            if (composing) {
-                let comp = ui.composition();
-                let before = (edit.caret - lineStart).min(4096);
-                let n = comp.length.min(4096 - before);
-                let after = (lineText.length - before).min(4096 - before - n);
-                for (i in 0..before) {
-                    spliced[i] = lineText[i];
-                }
-                for (i in 0..n) {
-                    spliced[before + i] = comp[i];
-                }
-                for (i in 0..after) {
-                    spliced[before + n + i] = lineText[before + i];
-                }
-                shownText = spliced[0..before + n + after];
-                let u0 = metrics.caretX(shownText, config, before);
-                let u1 = metrics.caretX(shownText, config, before + n);
-                ui.open(Style.box().absolute().passthrough().left(u0.min(u1)).top(lineH - 2.0)
-                    .w(Size.fixed((u1 - u0).abs())).h(Size.fixed(1.0)).bg(SLATE_100));
-                ui.close();
-                caretAt = before + ui.compositionCaret().min(n);
-            }
-            ui.labelBytes(shownText, line);
-            if (focused && k == caretLine) {
-                let x = metrics.caretX(shownText, config, caretAt);
-                if (blink || composing) {
-                    ui.open(Style.box().absolute().passthrough().left(x).top(0.0).w(Size.fixed(2.0))
-                        .h(Size.fixed(lineH)).bg(SLATE_200));
-                    ui.close();
-                }
-                match (box) {
-                    Some(b) => {
-                        if (editable) {
-                            let shown = ui.scrollOffset(id);
-                            ui.reportCaret(Rect {
-                                x: b.x + shown.x + gutterW + x,
-                                y: b.y + shown.y + round<f32>(k) * lineH,
-                                w: 2.0,
-                                h: lineH,
-                            });
-                        }
+            let r = layRows(metrics, config, lineText, wrap, width, mut rows[0..limit], k);
+            for (row in 0..r.count) {
+                let range = rowRange(r, lineText, row);
+                let rowText = lineText[range[0]..range[1]];
+                let rowStart = lineStart + range[0];
+                let rowStop = lineStart + range[1];
+                let lastOfLine = row + 1 == r.count;
+                ui.open(Style.row().h(Size.fixed(lineH)).alignXY(AxisAlign.Start, AxisAlign.Center));
+                if (gutter) {
+                    ui.open(Style.box().w(Size.fixed(gutterW)).pr(12.0).alignXY(AxisAlign.End, AxisAlign.Center));
+                    if (row == 0) {
+                        var number = [0u8; 12];
+                        var w = TextWriter.create(mut number[..]);
+                        w.decimal((k + 1) as u64);
+                        ui.labelBytes(w.written(), line.color(SLATE_500));
                     }
-                    null => {}
+                    ui.close();
                 }
+                ui.open(Style.box().h(Size.fixed(lineH)).alignXY(AxisAlign.Start, AxisAlign.Center));
+                // The selection on this row, behind its text: where its characters are drawn, and on a line's last
+                // row the line break after them as a narrow box when the selection runs on.
+                if (edit.selects() && edit.from() <= rowStop && edit.to() > rowStart) {
+                    var spans = [TextSpan { left: 0.0, right: 0.0 }; 8];
+                    let a = edit.from().max(rowStart) - rowStart;
+                    let b = edit.to().min(rowStop) - rowStart;
+                    var n = metrics.spans(rowText, config, a, b, mut spans[..]);
+                    if (lastOfLine && edit.to() > lineStop) {
+                        let end = metrics.measure(rowText, config).w;
+                        let size = if (config.fontSize > 0.0) config.fontSize else 16.0;
+                        n = addTextSpan(mut spans[..], n, end, end + size * 0.4);
+                    }
+                    for (s in 0..n) {
+                        let span = spans[s];
+                        ui.open(Style.box().absolute().passthrough().left(span.left).top(0.0)
+                            .w(Size.fixed(span.right - span.left)).h(Size.fixed(lineH)).bg(0x3B82F666));
+                        ui.close();
+                    }
+                }
+                let caretHere = focused && k == caretLine && row == caretRow;
+                // An editable view's caret row shows the input method's composition at the caret while it
+                // composes: spliced in, underlined, the caret where the input method has it.
+                let composing = editable && caretHere && ui.composition().length > 0;
+                var spliced = [0u8; 4096];
+                var shownText = rowText;
+                var caretAt = if (caretHere && edit.caret >= rowStart) edit.caret - rowStart else 0;
+                if (composing) {
+                    let comp = ui.composition();
+                    let before = caretAt.min(4096);
+                    let n = comp.length.min(4096 - before);
+                    let after = (rowText.length - before).min(4096 - before - n);
+                    for (i in 0..before) {
+                        spliced[i] = rowText[i];
+                    }
+                    for (i in 0..n) {
+                        spliced[before + i] = comp[i];
+                    }
+                    for (i in 0..after) {
+                        spliced[before + n + i] = rowText[before + i];
+                    }
+                    shownText = spliced[0..before + n + after];
+                    let u0 = metrics.caretX(shownText, config, before);
+                    let u1 = metrics.caretX(shownText, config, before + n);
+                    ui.open(Style.box().absolute().passthrough().left(u0.min(u1)).top(lineH - 2.0)
+                        .w(Size.fixed((u1 - u0).abs())).h(Size.fixed(1.0)).bg(SLATE_100));
+                    ui.close();
+                    caretAt = before + ui.compositionCaret().min(n);
+                }
+                ui.labelBytes(shownText, line);
+                if (caretHere) {
+                    let x = metrics.caretX(shownText, config, caretAt);
+                    if (blink || composing) {
+                        ui.open(Style.box().absolute().passthrough().left(x).top(0.0).w(Size.fixed(2.0))
+                            .h(Size.fixed(lineH)).bg(SLATE_200));
+                        ui.close();
+                    }
+                    match (box) {
+                        Some(b) => {
+                            if (editable) {
+                                let shown = ui.scrollOffset(id);
+                                ui.reportCaret(Rect {
+                                    x: b.x + shown.x + gutterW + x,
+                                    y: b.y + shown.y + round<f32>(rowAt) * lineH,
+                                    w: 2.0,
+                                    h: lineH,
+                                });
+                            }
+                        }
+                        null => {}
+                    }
+                }
+                ui.close();
+                ui.close();
+                rowAt += 1;
             }
-            ui.close();
-            ui.close();
+            k += 1;
         }
-        ui.open(Style.box().w(Size.fixed(1.0)).h(Size.fixed(round<f32>(count - lines[1]) * lineH)));
+        // The rows below, as the cache knows them.
+        var below: usize = 0;
+        for (j in k..count) {
+            below += cachedRows(rows[0..limit], j);
+        }
+        ui.open(Style.box().w(Size.fixed(1.0)).h(Size.fixed(round<f32>(below) * lineH)));
         ui.close();
         ui.close();
     }
@@ -637,81 +955,108 @@ fn record(
     state.typingAt = if (typed && removed.length == 0 && !ends) Some(from + inserted.length) else null;
 }
 
+/// A text editor's document, all in caller-owned memory: the text (`buf`, its first `len` bytes), the index of its
+/// lines (`starts`, the first `count`), how many rows each line wraps into (`rows`, at least one per line; empty for
+/// lines that do not wrap), the caret and the selection (`edit`, byte offsets into the text), and the undo history
+/// (`history`, its size the history's; empty for none). The editor keeps them in step; an edit with no room in
+/// `buf` or `starts` is not made.
+public struct TextDocument<region r> {
+    public buf: SliceMut<r, u8>;
+    public len: usize;
+    public starts: SliceMut<r, u32>;
+    public count: usize;
+    public rows: SliceMut<r, u16>;
+    public edit: TextEdit;
+    public history: SliceMut<r, u8>;
+    public undo: TextHistory;
+    /// The width the rows were counted at.
+    wrapWidth: f32;
+
+    /// A document of `buf`'s first `len` bytes, its lines indexed into `starts`.
+    public fn over(
+        buf: SliceMut<r, u8>,
+        len: usize,
+        starts: SliceMut<r, u32>,
+        rows: SliceMut<r, u16>,
+        history: SliceMut<r, u8>,
+    ) -> TextDocument<r> {
+        let n = len.min(buf.length);
+        let count = indexLines(buf[0..n], starts) ?? 0;
+        return TextDocument {
+            buf: buf,
+            len: n,
+            starts: starts,
+            count: count,
+            rows: rows,
+            edit: TextEdit.at(0),
+            history: history,
+            undo: TextHistory.create(),
+            wrapWidth: 0.0,
+        };
+    }
+
+    /// The text.
+    public fn text(borrow this) -> Slice<u8> => this.buf[0..this.len];
+}
+
 impl Controls {
-    /// A text view that edits its text: a selectableTextView (the caret, the selection, the keys and the pointer as
-    /// there) over `buf[0..len]`, with its line index `starts[0..count]` (indexLines), both caller-owned and
-    /// changed here. Typing and Paste replace the selection, Enter starts a new line, Backspace and Delete take the
-    /// selection or a grapheme cluster (at a line's edge, the line break, joining the lines), and Cut takes the
-    /// selection; the index follows each change. An edit that `buf` or `starts` has no room for is not made.
-    /// Whether the text changed.
+    /// A text editor over `doc` (TextDocument): a selectableTextView (the caret, the selection, the keys and the
+    /// pointer as there) that changes its text. Typing and Paste replace the selection, Enter starts a new line,
+    /// Backspace and Delete take the selection or a grapheme cluster (at a line's edge, the line break, joining the
+    /// lines), Cut takes the selection, and with a history Undo and Redo (secondary-Z, secondary-Shift-Z,
+    /// Control-Y by default) take edits back a word of typing at a time and make them again. When `look` wraps words
+    /// and `doc` has rows, lines wrap at the view's width, and Up, Down and the page keys move by rows on the
+    /// screen. An input method's composition shows underlined at the caret. Whether the text changed.
     public fn textEditor<M: TextMetrics>(
         ui: borrow mut Ui,
         metrics: borrow M,
         id: StringView,
-        buf: SliceMut<u8>,
-        len: borrow mut usize,
-        starts: SliceMut<u32>,
-        count: borrow mut usize,
+        doc: borrow mut TextDocument,
         look: Text,
         gutter: bool,
-        edit: borrow mut TextEdit,
-    ) -> bool {
-        var none = [0u8; 1];
-        var state = TextHistory.create();
-        return Controls.textEditorWithUndo(
-            mut ui,
-            metrics,
-            id,
-            buf,
-            mut len,
-            starts,
-            mut count,
-            look,
-            gutter,
-            mut edit,
-            mut none[0..0],
-            mut state,
-        );
-    }
-
-    /// textEditor with an undo history: `history` (caller-owned, its size the history's) and `state` keep the
-    /// edits, and the Undo and Redo edit commands (secondary-Z, secondary-Shift-Z, Control-Y by default) take them
-    /// back and make them again. Whether the text changed.
-    public fn textEditorWithUndo<M: TextMetrics>(
-        ui: borrow mut Ui,
-        metrics: borrow M,
-        id: StringView,
-        buf: SliceMut<u8>,
-        len: borrow mut usize,
-        starts: SliceMut<u32>,
-        count: borrow mut usize,
-        look: Text,
-        gutter: bool,
-        edit: borrow mut TextEdit,
-        history: SliceMut<u8>,
-        state: borrow mut TextHistory,
     ) -> bool {
         let h = hashId(id);
-        len = len.min(buf.length);
-        if (count == 0 || count > starts.length) {
-            count = indexLines(buf[0..len], starts) ?? 0;
+        doc.len = doc.len.min(doc.buf.length);
+        if (doc.count == 0 || doc.count > doc.starts.length) {
+            doc.count = indexLines(doc.buf[0..doc.len], doc.starts) ?? 0;
         }
-        edit.caret = edit.caret.min(len);
-        edit.anchor = edit.anchor.min(len);
-        state.used = state.used.min(history.length);
-        state.end = state.end.min(history.length).max(state.used);
+        doc.edit.caret = doc.edit.caret.min(doc.len);
+        doc.edit.anchor = doc.edit.anchor.min(doc.len);
+        doc.undo.used = doc.undo.used.min(doc.history.length);
+        doc.undo.end = doc.undo.end.min(doc.history.length).max(doc.undo.used);
+        let countBefore = doc.count;
         var changed = false;
-        if (ui.hasFocus(h) && count > 0) {
+        if (ui.hasFocus(h) && doc.count > 0) {
             if (ui.commanded(EditCommand.Undo)) {
-                changed = undoIn(buf, mut len, starts, mut count, mut edit, history, mut state) || changed;
+                changed = undoIn(
+                    doc.buf,
+                    mut doc.len,
+                    doc.starts,
+                    mut doc.count,
+                    mut doc.edit,
+                    doc.history,
+                    mut doc.undo,
+                ) ||
+                    changed;
             }
             if (ui.commanded(EditCommand.Redo)) {
-                changed = redoIn(buf, mut len, starts, mut count, mut edit, history, mut state) || changed;
-            }
-            if (ui.commanded(EditCommand.Cut) && edit.selects()) {
-                ui.copyText(buf[edit.from()..edit.to()]);
-                changed = replaceIn(buf, mut len, starts, mut count, mut edit, "".bytes(), history, mut state, false) ||
+                changed = redoIn(
+                    doc.buf,
+                    mut doc.len,
+                    doc.starts,
+                    mut doc.count,
+                    mut doc.edit,
+                    doc.history,
+                    mut doc.undo,
+                ) ||
                     changed;
+            }
+            if (ui.commanded(EditCommand.Cut) && doc.edit.selects()) {
+                ui.copyText(doc.buf[doc.edit.from()..doc.edit.to()]);
+                changed = replaceIn(
+                    doc.buf, mut doc.len, doc.starts, mut doc.count, mut doc.edit, "".bytes(), doc.history, mut doc.undo,
+                    false,
+                ) || changed;
             }
             if (ui.commanded(EditCommand.Paste)) {
                 var pasted = [0u8; 4096];
@@ -721,17 +1066,9 @@ impl Controls {
                     pasted[i] = text[i];
                 }
                 changed = replaceIn(
-                    buf,
-                    mut len,
-                    starts,
-                    mut count,
-                    mut edit,
-                    pasted[0..n],
-                    history,
-                    mut state,
+                    doc.buf, mut doc.len, doc.starts, mut doc.count, mut doc.edit, pasted[0..n], doc.history, mut doc.undo,
                     false,
-                ) ||
-                    changed;
+                ) || changed;
             }
             loop {
                 let c = ui.nextChar();
@@ -743,39 +1080,61 @@ impl Controls {
                 }
                 var bytes = [0u8; 4];
                 let n = encodeUtf8(c, mut bytes);
-                changed = replaceIn(buf, mut len, starts, mut count, mut edit, bytes[0..n], history, mut state, true) ||
-                    changed;
+                changed = replaceIn(
+                    doc.buf, mut doc.len, doc.starts, mut doc.count, mut doc.edit, bytes[0..n], doc.history, mut doc.undo,
+                    true,
+                ) || changed;
             }
             if (ui.keyHit(Key.Enter)) {
                 changed = replaceIn(
-                    buf,
-                    mut len,
-                    starts,
-                    mut count,
-                    mut edit,
-                    "\n".bytes(),
-                    history,
-                    mut state,
+                    doc.buf, mut doc.len, doc.starts, mut doc.count, mut doc.edit, "\n".bytes(), doc.history, mut doc.undo,
                     true,
-                ) ||
-                    changed;
+                ) || changed;
             }
-            if (ui.keyHit(Key.Backspace) && (edit.selects() || edit.caret > 0)) {
-                if (!edit.selects()) {
-                    edit.anchor = stepBack(buf[0..len], starts[0..count], edit.caret);
+            if (ui.keyHit(Key.Backspace) && (doc.edit.selects() || doc.edit.caret > 0)) {
+                if (!doc.edit.selects()) {
+                    doc.edit.anchor = stepBack(doc.buf[0..doc.len], doc.starts[0..doc.count], doc.edit.caret);
                 }
-                changed = replaceIn(buf, mut len, starts, mut count, mut edit, "".bytes(), history, mut state, false) ||
-                    changed;
+                changed = replaceIn(
+                    doc.buf, mut doc.len, doc.starts, mut doc.count, mut doc.edit, "".bytes(), doc.history, mut doc.undo,
+                    false,
+                ) || changed;
             }
-            if (ui.keyHit(Key.Delete) && (edit.selects() || edit.caret < len)) {
-                if (!edit.selects()) {
-                    edit.anchor = stepOn(buf[0..len], starts[0..count], edit.caret);
+            if (ui.keyHit(Key.Delete) && (doc.edit.selects() || doc.edit.caret < doc.len)) {
+                if (!doc.edit.selects()) {
+                    doc.edit.anchor = stepOn(doc.buf[0..doc.len], doc.starts[0..doc.count], doc.edit.caret);
                 }
-                changed = replaceIn(buf, mut len, starts, mut count, mut edit, "".bytes(), history, mut state, false) ||
-                    changed;
+                changed = replaceIn(
+                    doc.buf, mut doc.len, doc.starts, mut doc.count, mut doc.edit, "".bytes(), doc.history, mut doc.undo,
+                    false,
+                ) || changed;
             }
         }
-        Controls.textViewOf(mut ui, metrics, id, buf[0..len], starts[0..count], count, look, gutter, mut edit, true);
+        // An edit moves the lines after it: their rows are counted again (the line count may have changed).
+        if (changed && doc.rows.length > 0) {
+            let first = if (countBefore != doc.count) 0 else lineAt(
+                doc.starts[0..doc.count],
+                doc.count,
+                doc.edit.from(),
+            );
+            for (k in first..doc.count.min(doc.rows.length)) {
+                doc.rows[k] = 0;
+            }
+        }
+        Controls.textViewOf(
+            mut ui,
+            metrics,
+            id,
+            doc.buf[0..doc.len],
+            doc.starts[0..doc.count],
+            doc.count,
+            look,
+            gutter,
+            mut doc.edit,
+            true,
+            doc.rows,
+            mut doc.wrapWidth,
+        );
         return changed;
     }
 }
