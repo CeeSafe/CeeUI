@@ -1691,6 +1691,23 @@ fn dataPage(ui: borrow mut Ui, app: borrow mut DemoApp) {
         "10,000 orders; only the rows in view are built. Press a title to sort, drag its edge to resize.",
         Text.of().color(SLATE_400),
     );
+    // Two charts over the orders: revenue and orders by month.
+    let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let revenue = [
+        42.0f32, 48.5, 45.2, 53.8, 61.0, 58.4, 66.9, 71.2, 69.5, 77.8, 84.1, 92.6,
+        30.1, 33.4, 35.0, 34.2, 39.8, 44.1, 42.7, 47.3, 51.9, 50.4, 56.2, 61.8,
+    ];
+    let counts = [310.0f32, 342.0, 335.0, 380.0, 402.0, 391.0, 436.0, 455.0, 441.0, 488.0, 512.0, 560.0];
+    ui.open(Style.row().w(Size.grow()).gap(space(4.0)));
+    ui.open(Style.column().w(Size.grow()).gap(space(1.0)));
+    ui.label("Revenue, thousands (online, in store)", Text.of().size(13.0).color(SLATE_300));
+    Controls.chart(mut ui, "Revenue", ChartKind.Area, revenue[..], months[..], [SKY_400, ROSE_400][..], 170.0);
+    ui.close();
+    ui.open(Style.column().w(Size.grow()).gap(space(1.0)));
+    ui.label("Orders a month", Text.of().size(13.0).color(SLATE_300));
+    Controls.chart(mut ui, "Orders", ChartKind.Bar, counts[..], months[..], [EMERALD_400][..], 170.0);
+    ui.close();
+    ui.close();
     let grid = Controls.dataGrid(
         mut ui,
         "orders",

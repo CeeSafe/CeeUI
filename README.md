@@ -93,6 +93,9 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   follows the rows sideways. Pressing a title sorts by its column (`GridSort`; the grid says when, and the program
   sorts its rows), and dragging a title's edge resizes its column (the program keeps the widths). Cells
   (`Controls.gridCell`) hold anything and clip what does not fit. The demo's Data page shows 10,000 orders.
+- **Charts:** `Controls.chart` draws line, area and bar charts of one or more series as vector paths, over a grid
+  on round values (1, 2 or 5 times a power of ten, taking in 0). The pointer over the plot highlights the nearest
+  label and shows its values; a screen reader hears the chart's name and size.
 - **Vector paths.** `PathBuilder` makes a path of lines and quadratic and cubic curves; `Ui.path` draws it in an
   element's box, filled (nonzero or even-odd) or stroked with round joins, optionally from a view box.
 - **Also:** focus cycling with Tab, vector icons, eased transitions, and dark and light themes.

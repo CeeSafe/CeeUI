@@ -1,0 +1,301 @@
+// SPDX-License-Identifier: MIT
+// Charts: line, area and bar charts of one or more series, drawn as vector paths (Ui.path) over a grid whose
+// lines fall on round values (1, 2 or 5 times a power of ten). The values are one slice, series after series, each
+// as long as the labels along the bottom; colours name the series. The pointer over the plot shows the values at
+// the nearest label.
+//
+//     let sales = [120.0f32, 140.0, 90.0,   80.0, 95.0, 130.0];   // two series of three
+//     Controls.chart(mut ui, "sales", ChartKind.Line, sales[..], ["Jan", "Feb", "Mar"][..], [SKY_400, ROSE_400][..],
+//         200.0);
+
+/// How a chart draws its series.
+public enum ChartKind {
+    /// Lines through each series' points.
+    Line,
+    /// Lines with the area under them filled, translucent.
+    Area,
+    /// Bars side by side at each label, one for each series.
+    Bar,
+}
+
+/// Room for a path's bytes: a line of about 900 points, or about 290 bars.
+const CHART_PATH_BYTES: usize = 16384;
+/// The width of the value axis's labels.
+const CHART_AXIS_W: f32 = 52.0;
+/// The height of the labels along the bottom.
+const CHART_LABELS_H: f32 = 20.0;
+
+/// A step between grid lines that is 1, 2 or 5 times a power of ten and at least `rough`.
+fn niceStep(rough: f32) -> f32 {
+    if (rough <= 0.0) {
+        return 1.0;
+    }
+    var power: f32 = 1.0;
+    while (power * 10.0 <= rough) {
+        power *= 10.0;
+    }
+    while (power > rough) {
+        power /= 10.0;
+    }
+    let f = rough / power;
+    let m: f32 = if (f <= 1.0) 1.0 else if (f <= 2.0) 2.0 else if (f <= 5.0) 5.0 else 10.0;
+    return m * power;
+}
+
+/// The value axis for `values`: its bottom, top and step, on round values, taking in 0.
+fn chartScale(values: Slice<f32>) -> [f32; 3] {
+    var lo: f32 = 0.0;
+    var hi: f32 = 0.0;
+    for (v in values) {
+        lo = lo.min(v);
+        hi = hi.max(v);
+    }
+    if (hi - lo <= 0.0) {
+        hi = lo + 1.0;
+    }
+    let step = niceStep((hi - lo) / 5.0);
+    let bottom = (lo / step).floor() * step;
+    let top = (hi / step).ceil() * step;
+    return [bottom, if (top > bottom) top else bottom + step, step];
+}
+
+/// A value as the pointer's box shows it: whole if it is, else to two significant decimals at most.
+fn writeTipValue(w: borrow mut TextWriter, value: f32) {
+    let whole = Math.round(value);
+    if ((value - whole).abs() < 0.0005) {
+        writeChartValue(mut w, whole, 1.0);
+    } else if (value.abs() >= 10.0) {
+        Format.fixed(mut w, value, 1);
+    } else {
+        Format.fixed(mut w, value, 2);
+    }
+}
+
+/// A layer over the whole plot, `w` × `h`, that the pointer passes through (to the plot, which tracks it).
+fn chartLayer(w: f32, h: f32) -> Style =>
+    Style.box().absolute().left(0.0).top(0.0).w(Size.fixed(w)).h(Size.fixed(h)).passthrough();
+
+/// `value` as a label: whole when the step is, else with as many decimals as the step needs.
+fn writeChartValue(w: borrow mut TextWriter, value: f32, step: f32) {
+    // A step of a tenth is 0.099999… as a sum of f32s: compared with a margin.
+    let decimals: u32 = if (step >= 0.999) 0 else if (step >= 0.0999) 1 else if (step >= 0.00999) 2 else 3;
+    if (decimals == 0) {
+        let rounded = Math.round(value);
+        if (rounded < 0.0) {
+            w.byte('-');
+        }
+        w.decimal(truncate<u64>(rounded.abs()));
+    } else {
+        Format.fixed(mut w, value, decimals);
+    }
+}
+
+impl Controls {
+    /// ClayWind_Chart: a `kind` chart `height` tall and as wide as it is given, of `colors.length` series laid one
+    /// after another in `values`, each with a value for each of `labels`. Its value axis runs over round values and
+    /// takes in 0; the pointer over it shows the values at the nearest label.
+    public fn chart(
+        ui: borrow mut Ui,
+        id: StringView,
+        kind: ChartKind,
+        values: Slice<f32>,
+        labels: Slice<StringView>,
+        colors: Slice<u32>,
+        height: f32,
+    ) {
+        let series = colors.length.max(1);
+        let points = labels.length.min(values.length / series);
+        let plotId = subId(id, "plot", -1);
+        let scale = chartScale(values[0..points * series]);
+        let bottom = scale[0];
+        let top = scale[1];
+        let step = scale[2];
+        // The plot as the last frame laid it out: its size is what the paths are drawn to.
+        let plot = ui.boxOfHash(plotId);
+        let pw = match (plot) {
+            Some(b) => b.w,
+            null => 0.0,
+        };
+        let ph = (height - CHART_LABELS_H).max(20.0);
+        if (plot == null) {
+            ui.requestFrame();
+        }
+        let ink = Text.of().size(12.0).color(SLATE_400).wrap(TextWrap.None);
+        // The label the pointer is nearest, over the plot.
+        var hover: usize? = null;
+        match (plot) {
+            Some(b) => {
+                let p = ui.pointer().position;
+                if (points > 0 && ui.overHash(plotId) && b.w > 0.0) {
+                    let slot = b.w / round<f32>(points);
+                    hover = truncate<usize>(Math.clamp((p.x - b.x) / slot, 0.0, round<f32>(points - 1)));
+                }
+            }
+            null => {}
+        }
+        // A screen reader hears what it is: its name and how many series and points.
+        ui.open(Style.column().id(id).w(Size.grow()).h(Size.fixed(height)));
+        var summary = [0u8; 96];
+        var sw = TextWriter.create(mut summary[..]);
+        sw.text(id);
+        sw.text(": chart, ");
+        sw.decimal(series as u64);
+        sw.text(if (series == 1) " series of " else " series of ");
+        sw.decimal(points as u64);
+        sw.text(" values");
+        let _ = ui.access(hashId(id), AccessRole.Image, sw.written());
+        ui.open(Style.row().w(Size.grow()).h(Size.fixed(ph)));
+        // The value axis: a label at each grid line, the top one at the top.
+        ui.open(Style.box().w(Size.fixed(CHART_AXIS_W)).h(Size.grow()));
+        let lines = truncate<usize>(Math.round((top - bottom) / step));
+        for (k in 0..lines + 1) {
+            let v = bottom + round<f32>(k) * step;
+            let y = ph - (v - bottom) / (top - bottom) * ph;
+            var text = [0u8; 24];
+            var w = TextWriter.create(mut text[..]);
+            writeChartValue(mut w, v, step);
+            ui.open(
+                Style.box().absolute().left(0.0).top((y - 8.0).max(0.0).min(ph - 16.0)).w(
+                    Size.fixed(CHART_AXIS_W - 8.0),
+                ).h(Size.fixed(16.0)).alignXY(AxisAlign.End, AxisAlign.Center),
+            );
+            ui.labelBytes(w.written(), ink);
+            ui.close();
+        }
+        ui.close();
+        ui.open(Style.box().idHash(plotId).w(Size.grow()).h(Size.grow()));
+        if (pw > 0.0 && points > 0) {
+            var bytes = [0u8; CHART_PATH_BYTES];
+            let slot = pw / round<f32>(points);
+            let yOf = (top - bottom) / ph;
+            // The grid: a line at each step.
+            {
+                var path = PathBuilder.over(mut bytes[..]);
+                for (k in 0..lines + 1) {
+                    let y = (ph - round<f32>(k) * step / yOf).max(0.5).min(ph - 0.5);
+                    path.moveTo(0.0, y);
+                    path.lineTo(pw, y);
+                }
+                ui.path(
+                    chartLayer(pw, ph),
+                    path.bytes(),
+                    PathLook.stroke(Color.hex(SLATE_700), 1.0),
+                );
+            }
+            // The highlighted label's column, under the series.
+            match (hover) {
+                Some(i) => {
+                    var path = PathBuilder.over(mut bytes[..]);
+                    path.rect(round<f32>(i) * slot, 0.0, slot, ph);
+                    ui.path(
+                        chartLayer(pw, ph),
+                        path.bytes(),
+                        PathLook.fill(Color.hex(withAlpha(SLATE_500, 48))),
+                    );
+                }
+                null => {}
+            }
+            let zeroY = ph - (0.0f32.max(bottom).min(top) - bottom) / yOf;
+            for (s in 0..series) {
+                let color = colors[s];
+                var path = PathBuilder.over(mut bytes[..]);
+                match (kind) {
+                    ChartKind.Bar => {
+                        // The bars at a label share its slot, with a gap either side.
+                        let groupW = slot * 0.75;
+                        let barW = groupW / round<f32>(series);
+                        for (i in 0..points) {
+                            let v = values[s * points + i];
+                            let y = ph - (v - bottom) / yOf;
+                            let x = round<f32>(i) * slot + (slot - groupW) * 0.5 + round<f32>(s) * barW;
+                            path.rect(x + 1.0, y.min(zeroY), (barW - 2.0).max(1.0), (zeroY - y).abs());
+                        }
+                        ui.path(
+                            chartLayer(pw, ph),
+                            path.bytes(),
+                            PathLook.fill(Color.hex(color)),
+                        );
+                    }
+                    _ => {
+                        for (i in 0..points) {
+                            let x = (round<f32>(i) + 0.5) * slot;
+                            let y = ph - (values[s * points + i] - bottom) / yOf;
+                            if (i == 0) {
+                                path.moveTo(x, y);
+                            } else {
+                                path.lineTo(x, y);
+                            }
+                        }
+                        let line = path.bytes().length;
+                        match (kind) {
+                            ChartKind.Area => {
+                                // Down to the zero line and back, filled faintly; then the line itself.
+                                path.lineTo((round<f32>(points) - 0.5) * slot, zeroY);
+                                path.lineTo(0.5 * slot, zeroY);
+                                path.close();
+                                ui.path(
+                                    chartLayer(pw, ph),
+                                    path.bytes(),
+                                    PathLook.fill(Color.hex(withAlpha(color, 64))),
+                                );
+                            }
+                            _ => {}
+                        }
+                        ui.path(
+                            chartLayer(pw, ph),
+                            path.bytes()[0..line],
+                            PathLook.stroke(Color.hex(color), 2.0),
+                        );
+                    }
+                }
+            }
+            // The values at the highlighted label, in a box beside it.
+            match (hover) {
+                Some(i) => {
+                    let right = round<f32>(i) * slot + slot * 0.5 > pw * 0.5;
+                    let tipX = if (right) (round<f32>(i) * slot - 8.0) else (round<f32>(i + 1) * slot + 8.0);
+                    var tip = Style.column().absolute().top(4.0).px(space(2.0)).py(space(1.0)).gap(space(0.5)).bg(
+                        SLATE_900,
+                    ).rounded(Radius.Sm).border(1.0, SLATE_600).z(5).passthrough();
+                    tip = if (right) tip.right(pw - tipX) else tip.left(tipX);
+                    ui.open(tip);
+                    ui.label(labels[i], Text.of().size(12.0).color(SLATE_300).wrap(TextWrap.None));
+                    for (s in 0..series) {
+                        ui.open(Style.row().gap(space(1.5)).alignXY(AxisAlign.Start, AxisAlign.Center));
+                        ui.open(Style.box().size(Size.fixed(8.0)).rounded(Radius.Sm).bg(colors[s]));
+                        ui.close();
+                        var text = [0u8; 24];
+                        var w = TextWriter.create(mut text[..]);
+                        writeTipValue(mut w, values[s * points + i]);
+                        ui.labelBytes(w.written(), Text.of().size(12.0).color(WHITE).wrap(TextWrap.None));
+                        ui.close();
+                    }
+                    ui.close();
+                }
+                null => {}
+            }
+        }
+        ui.close();
+        ui.close();
+        // The labels along the bottom, under their slots; as many as fit without crowding.
+        ui.open(Style.row().w(Size.grow()).h(Size.fixed(CHART_LABELS_H)).pl(CHART_AXIS_W));
+        if (pw > 0.0 && points > 0) {
+            let slot = pw / round<f32>(points);
+            let every = truncate<usize>((56.0 / slot).ceil().max(1.0));
+            for (i in 0..points) {
+                if (i % every != 0) {
+                    continue;
+                }
+                ui.open(
+                    Style.box().absolute().left(CHART_AXIS_W + (round<f32>(i) + 0.5) * slot - 28.0).top(2.0).w(
+                        Size.fixed(56.0),
+                    ).alignXY(AxisAlign.Center, AxisAlign.Start),
+                );
+                ui.label(labels[i], ink);
+                ui.close();
+            }
+        }
+        ui.close();
+        ui.close();
+    }
+}
