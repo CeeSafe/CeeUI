@@ -86,6 +86,11 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   selection, or what is typed next; Undo and Redo bring marks back with the text. Measuring, the caret, the pointer,
   wrapping and the selection all go a run at a time. The demo's Editor page marks text with buttons and the
   platform's B, E and K shortcuts.
+- **Layout inspector:** secondary-Alt-I (Command-Option-I on macOS, Control-Alt-I elsewhere) in any app, or
+  `Ui.setInspecting`, outlines the element under the pointer and its padding, and a card beside it gives its id,
+  box, sizing, padding and gap, background, corners and children, and a text element's size and words. It reads the
+  last frame's layout, costs nothing while off, and lets the pointer through (`CLAYWIND_INSPECT=1` turns it on in the
+  headless host).
 - **Retina output.** `Raster.setPixelRatio` draws at the display's pixel ratio while layout stays in points.
 - **Incremental rendering.** `Damage` works out what changed between frames, and the raster redraws only those
   boxes. The result is byte-identical to a full redraw.

@@ -121,6 +121,9 @@ public struct Ui<region r> {
     composingLength: usize;
     composingCaret: usize;
     caretArea: Rect;
+    /// The layout inspector (ui_inspect.cee): whether it is on, and the element it shows.
+    inspecting: bool;
+    inspected: ElementInfo?;
     wantsText: bool;
     /// The element that gives up the focus when the frame ends (leaveFocus); 0 = none.
     leavingId: u32;
@@ -240,6 +243,8 @@ public struct Ui<region r> {
             composingLength: 0,
             composingCaret: 0,
             caretArea: Rect.zero(),
+            inspecting: false,
+            inspected: null,
             wantsText: false,
             leavingId: 0,
             textKind: TextKind.Text,
@@ -339,6 +344,8 @@ public struct Ui<region r> {
         // Keystrokes to actions, through the key contexts around last frame's focused element.
         this.takeKeystrokes(mut platform);
         this.tree.hitTest(pointer.position);
+        // The inspector reads the last frame's element under the pointer while the frame still holds it.
+        this.inspectLastFrame();
         // Drags (drag.cee): one starting, moving or dropped, or files dragged from the system over the window.
         this.updateDrag(mut platform, pointer);
 
@@ -953,6 +960,7 @@ impl<region r> Ui<r> {
             }
             this.leavingId = 0;
         }
+        this.drawInspector();
         let result = this.tree.endLayout(metrics);
         // Scroll containers that were declared this frame record their size and content; the rest go away.
         var k: usize = 0;

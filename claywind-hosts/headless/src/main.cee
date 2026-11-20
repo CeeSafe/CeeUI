@@ -7,6 +7,7 @@
 //   CLAYWIND_SHOT_EVENTS=...   scripted input (see claywind_demo's ScriptPlatform)
 //   CLAYWIND_SHOT_FRAME=N      the frame to write (default 28: the one main.c's hook saves on its 30th update)
 //   CLAYWIND_LIGHT=1           start in light mode
+//   CLAYWIND_INSPECT=1         the layout inspector on (the element under the pointer outlined and described)
 //   CLAYWIND_FONT_DIR=DIR      where Arial.ttf, "Arial Bold.ttf" and "Courier New.ttf" are
 //                              (default /System/Library/Fonts/Supplemental)
 //   CLAYWIND_BENCH=N           run N frames and report the time per frame instead
@@ -186,6 +187,7 @@ fn main() -> i32 {
     var platform = ScriptPlatform.create(script.bytes(), Dims { w: round<f32>(WIDTH), h: round<f32>(HEIGHT) });
     var app = DemoApp.create();
     ui.setDarkMode(Environment.variable("CLAYWIND_LIGHT") == null);
+    ui.setInspecting(Environment.variable("CLAYWIND_INSPECT") != null);
     app.selectTab(truncate<usize>(envNumber("CLAYWIND_SCREENSHOT_TAB", 0)));
 
     let bench = envNumber("CLAYWIND_BENCH", 0);

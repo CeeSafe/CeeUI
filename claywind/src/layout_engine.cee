@@ -174,6 +174,32 @@ struct Remembered {
     frame: u32;
 }
 
+/// The id of the inspector's overlay (ui_inspect.cee), which hit testing passes over.
+public const INSPECTOR_ID: u32 = 0x1A5BEC70;
+
+/// An element of the last frame as an inspector shows it (LayoutTree.describe).
+public struct ElementInfo {
+    public id: u32;
+    public area: Rect;
+    public isText: bool;
+    public width: SizingAxis;
+    public height: SizingAxis;
+    public padding: Sides;
+    public childGap: f32;
+    /// Its children are laid out top to bottom (else left to right).
+    public column: bool;
+    public background: Color;
+    public radius: f32;
+    public children: usize;
+    /// It clips (and so may scroll) its children.
+    public scrolls: bool;
+    public floating: bool;
+    public fontSize: f32;
+    /// A text element's first bytes (whole characters).
+    public text: [u8; 48];
+    public textLength: usize;
+}
+
 /// Text to draw, as a range of the frame's text buffer (`LayoutTree.textBytes`) plus its style.
 public struct TextRun {
     public start: usize;
@@ -264,6 +290,8 @@ public struct LayoutTree<region r> {
     scratch: FixedList<r, usize>;
     remembered: FixedList<r, Remembered>;
     pointerOver: FixedList<r, u32>;
+    /// The innermost element under the pointer at the last hitTest, in the topmost tree it hit; 0 for none.
+    pointerDeepest: u32;
     screen: Dims;
     frame: u32;
     failed: bool;
@@ -315,6 +343,7 @@ public struct LayoutTree<region r> {
             scratch: FixedList<usize>.over(scratch),
             remembered: FixedList<Remembered>.over(remembered),
             pointerOver: FixedList<u32>.over(pointerOver),
+            pointerDeepest: 0,
             screen: Dims { w: 0.0, h: 0.0 },
             frame: 1,
             failed: false,
@@ -577,17 +606,73 @@ public struct LayoutTree<region r> {
     /// root that contains it. Call before `begin`, which discards the previous frame's tree.
     public fn hitTest(borrow mut this, point: Vec2) {
         this.pointerOver.clear();
+        this.pointerDeepest = 0;
         var r = this.roots.length();
         while (r > 0) {
             r -= 1;
             let root = this.roots.items[r];
+            // The inspector's overlay (ui_inspect.cee) is never under the pointer: it shows what is.
+            let underInspector = match (root.parentIndex) {
+                Some(parent) => this.nodes.items[parent].id == INSPECTOR_ID,
+                null => false,
+            };
+            if (this.nodes.items[root.index].id == INSPECTOR_ID || underInspector) {
+                continue;
+            }
             let found = hitTestNode(mut this, root.index, point);
+            if (found && this.pointerDeepest == 0) {
+                this.pointerDeepest = this.pointerOver.last();
+            }
             let floating = this.nodes.items[root.index].decl.floating;
             if (found && floating.isFloating() && !floating.passthrough) {
                 break;
             }
         }
     }
+
+    /// What element `id` of the last frame was: its box, sizing, padding and look, and its text (the start of it),
+    /// for an inspector. Null when the frame has no element `id`.
+    public fn describe(borrow this, id: u32) -> ElementInfo? {
+        let index = this.indexOf(id)?;
+        let node = this.nodes.items[index];
+        let layout = node.decl.layout;
+        var info = ElementInfo {
+            id: id,
+            area: node.area,
+            isText: node.isText,
+            width: layout.width,
+            height: layout.height,
+            padding: layout.padding,
+            childGap: layout.childGap,
+            column: match (layout.direction) {
+                Direction.Column => true,
+                _ => false,
+            },
+            background: node.decl.background,
+            radius: node.decl.cornerRadius.topLeft,
+            children: node.childCount,
+            scrolls: node.decl.clip.horizontal || node.decl.clip.vertical,
+            floating: node.decl.floating.isFloating(),
+            fontSize: if (node.isText) node.text.fontSize else 0.0,
+            text: [0u8; 48],
+            textLength: 0,
+        };
+        if (node.isText) {
+            // Whole characters only, up to the room there is.
+            var n = node.textLength.min(48);
+            while (n > 0 && n < node.textLength && (this.bytes.items[node.textStart + n] & 0xC0) == 0x80) {
+                n -= 1;
+            }
+            for (i in 0..n) {
+                info.text[i] = this.bytes.items[node.textStart + i];
+            }
+            info.textLength = n;
+        }
+        return info;
+    }
+
+    /// The innermost element under the pointer at the last `hitTest`, in the topmost tree it hit (0 for none).
+    public fn deepestUnderPointer(borrow this) -> u32 => this.pointerDeepest;
 
     /// Whether the element with `id` was under the pointer at the last `hitTest` (Clay_PointerOver).
     public fn isPointerOver(borrow this, id: u32) -> bool {

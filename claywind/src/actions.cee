@@ -352,5 +352,6 @@ impl<region r> Ui<r> {
         let e = this.bind("secondary-z", "undo", "");
         let f = this.bind("secondary-shift-z", "redo", "");
         let g = this.bind("ctrl-y", "redo", "");
+        let h = this.bind("secondary-alt-i", "toggle-inspector", "");
     }
 }

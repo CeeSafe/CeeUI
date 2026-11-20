@@ -1,0 +1,201 @@
+// SPDX-License-Identifier: MIT
+// The layout inspector: while it is on, the element under the pointer is outlined and a card beside it says what it
+// is: its id, its box, how it is sized, its padding and gap, its background and corners, its children, and a text
+// element's text and size. secondary-Alt-I turns it on and off in any app (Ui.setInspecting does too). It reads the
+// last frame's layout, so it costs nothing while it is off and never changes what the app lays out; its overlay
+// floats above everything and lets the pointer through.
+
+impl<region r> Ui<r> {
+    /// Turns the layout inspector on or off.
+    public fn setInspecting(borrow mut this, on: bool) {
+        this.inspecting = on;
+        if (!on) {
+            this.inspected = null;
+        }
+    }
+
+    /// Whether the layout inspector is on.
+    public fn isInspecting(borrow this) -> bool => this.inspecting;
+
+    /// The element the inspector shows (the last frame's innermost element under the pointer), or null.
+    public fn inspectedElement(borrow this) -> ElementInfo? => this.inspected;
+
+    /// At the frame's start: its toggle, and the last frame's element under the pointer.
+    fn inspectLastFrame(borrow mut this) {
+        if (this.action("toggle-inspector")) {
+            this.setInspecting(!this.inspecting);
+        }
+        if (!this.inspecting) {
+            return;
+        }
+        let id = this.tree.deepestUnderPointer();
+        this.inspected = if (id == 0) null else this.tree.describe(id);
+        // A frame follows a move of the pointer, so that the overlay keeps up with it.
+        this.requestFrame();
+    }
+
+    /// Before the layout ends: the overlay, over everything.
+    fn drawInspector(borrow mut this) {
+        if (!this.inspecting) {
+            return;
+        }
+        let info = match (this.inspected) {
+            Some(i) => i,
+            null => {
+                return;
+            }
+        };
+        let a = info.area;
+        // One floating root over everything (the app's tree is closed by now), its parts attached to it: hit testing
+        // passes over them all.
+        this.open(Style.box().idHash(INSPECTOR_ID).fixed().left(0.0).top(0.0).z(10000).passthrough());
+        // The element's box, and its padding inside it.
+        this.open(
+            Style.box().absolute().left(a.x).top(a.y).w(
+                Size.fixed(a.w.max(1.0)),
+            ).h(Size.fixed(a.h.max(1.0))).bg(0x38BDF833)
+                .border(1.0, SKY_400).passthrough(),
+        );
+        this.close();
+        // Its padding's inner edge (beside the box, not inside it: every part hangs off the overlay's root).
+        let p = info.padding;
+        if (p.left > 0.0 || p.top > 0.0 || p.right > 0.0 || p.bottom > 0.0) {
+            this.open(
+                Style.box().absolute().left(a.x + p.left).top(a.y + p.top).w(
+                    Size.fixed((a.w - p.left - p.right).max(0.0)),
+                ).h(Size.fixed((a.h - p.top - p.bottom).max(0.0))).border(1.0, 0x34D399AA).passthrough(),
+            );
+            this.close();
+        }
+        // The card: below the box when there is room, else above it, kept on the screen.
+        let cardW: f32 = 300.0;
+        let cardH: f32 = if (info.isText) 132.0 else 112.0;
+        let screen = this.screen;
+        let below = a.y + a.h + 6.0;
+        let top = if (below + cardH <= screen.h) below else (a.y - cardH - 6.0).max(0.0);
+        let left = a.x.max(0.0).min((screen.w - cardW).max(0.0));
+        this.open(
+            Style.column().absolute().left(left).top(top).w(
+                Size.fixed(cardW),
+            ).p(space(2.0)).gap(space(0.5)).bg(SLATE_950)
+                .rounded(Radius.Md).border(1.0, SKY_400).passthrough(),
+        );
+        let ink = Text.of().size(12.0).color(SLATE_200).wrap(TextWrap.None);
+        let mute = Text.of().size(12.0).color(SLATE_400).wrap(TextWrap.None);
+        var line = [0u8; 160];
+        {
+            var w = TextWriter.create(mut line[..]);
+            w.text(if (info.isText) "text" else if (info.column) "column" else "row");
+            w.text("  #");
+            writeHex(mut w, info.id);
+            if (info.floating) {
+                w.text("  floating");
+            }
+            if (info.scrolls) {
+                w.text("  clips");
+            }
+            this.labelBytes(w.written(), Text.of().size(12.0).color(SKY_400).bold().wrap(TextWrap.None));
+        }
+        {
+            var w = TextWriter.create(mut line[..]);
+            Format.fixed(mut w, a.w, 1);
+            w.text(" x ");
+            Format.fixed(mut w, a.h, 1);
+            w.text("  at ");
+            Format.fixed(mut w, a.x, 1);
+            w.text(", ");
+            Format.fixed(mut w, a.y, 1);
+            this.labelBytes(w.written(), ink);
+        }
+        {
+            var w = TextWriter.create(mut line[..]);
+            w.text("width ");
+            writeSizing(mut w, info.width);
+            w.text("   height ");
+            writeSizing(mut w, info.height);
+            this.labelBytes(w.written(), ink);
+        }
+        {
+            var w = TextWriter.create(mut line[..]);
+            w.text("padding ");
+            Format.fixed(mut w, p.top, 0);
+            w.byte(' ');
+            Format.fixed(mut w, p.right, 0);
+            w.byte(' ');
+            Format.fixed(mut w, p.bottom, 0);
+            w.byte(' ');
+            Format.fixed(mut w, p.left, 0);
+            w.text("   gap ");
+            Format.fixed(mut w, info.childGap, 0);
+            w.text("   children ");
+            w.decimal(info.children as u64);
+            this.labelBytes(w.written(), mute);
+        }
+        {
+            var w = TextWriter.create(mut line[..]);
+            let bg = info.background;
+            if (bg.a == 0) {
+                w.text("no background");
+            } else {
+                w.text("background #");
+                writeHex2(mut w, bg.r);
+                writeHex2(mut w, bg.g);
+                writeHex2(mut w, bg.b);
+                writeHex2(mut w, bg.a);
+            }
+            if (info.radius > 0.0) {
+                w.text("   radius ");
+                Format.fixed(mut w, info.radius, 0);
+            }
+            this.labelBytes(w.written(), mute);
+        }
+        if (info.isText) {
+            var w = TextWriter.create(mut line[..]);
+            Format.fixed(mut w, info.fontSize, 0);
+            w.text("px  \"");
+            for (i in 0..info.textLength) {
+                w.byte(info.text[i]);
+            }
+            w.byte('"');
+            this.labelBytes(w.written(), ink);
+        }
+        this.close();
+        this.close();
+    }
+}
+
+/// `v` as eight hexadecimal digits.
+fn writeHex(w: borrow mut TextWriter, v: u32) {
+    let digits = "0123456789abcdef".bytes();
+    var shift: u32 = 28;
+    loop {
+        w.byte(digits[((v >> shift) & 0xF) as usize]);
+        if (shift == 0) {
+            break;
+        }
+        shift -= 4;
+    }
+}
+
+/// `v` as two hexadecimal digits.
+fn writeHex2(w: borrow mut TextWriter, v: u8) {
+    let digits = "0123456789abcdef".bytes();
+    w.byte(digits[((v >> 4) & 0xF) as usize]);
+    w.byte(digits[(v & 0xF) as usize]);
+}
+
+/// How an axis is sized, as Clay's sizing names it.
+fn writeSizing(w: borrow mut TextWriter, s: SizingAxis) {
+    match (s.kind) {
+        SizingKind.Fit => { w.text("fit"); }
+        SizingKind.Grow => { w.text("grow"); }
+        SizingKind.Fixed => {
+            w.text("fixed ");
+            Format.fixed(mut w, s.min, 0);
+        }
+        SizingKind.Percent => {
+            Format.fixed(mut w, s.percent * 100.0, 0);
+            w.byte('%');
+        }
+    }
+}
