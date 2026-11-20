@@ -235,6 +235,9 @@ public struct DemoApp {
     editorWrap: f32;
     editorGoal: f32;
     editorLoaded: bool;
+    /// The editor's marks (the look of each byte: plain, bold, code, accent) and the one typing takes.
+    editorMarks: [u8; 16384];
+    editorTyping: u8;
     /// The Data page: its grid's rows in their sorted order, its columns' widths, sort and selection.
     orderRows: [u32; 10000];
     orderWidths: [f32; 4];
@@ -301,6 +304,8 @@ public struct DemoApp {
         editorWrap: 0.0,
         editorGoal: -1.0,
         editorLoaded: false,
+        editorMarks: [0u8; 16384],
+        editorTyping: 0,
         orderRows: [0u32; 10000],
         orderWidths: [110.0f32, 200.0, 120.0, 130.0],
         orderSort: GridSort.none(),
@@ -647,6 +652,9 @@ fn update(ui: borrow mut Ui, app: borrow mut DemoApp) {
         ui.bind("secondary-3", "show-effects", "");
         ui.bind("secondary-shift-l", "toggle-theme", "");
         ui.bind("secondary-shift-i", "open-inspector", "");
+        ui.bind("secondary-b", "mark-bold", "");
+        ui.bind("secondary-e", "mark-code", "");
+        ui.bind("secondary-k", "mark-accent", "");
         app.bound = true;
     }
     if (ui.action("show-dashboard")) {
@@ -1555,9 +1563,38 @@ fn clipSection(ui: borrow mut Ui) {
 /// The Editor page's text when it first opens: paragraphs that wrap, and lines in Arabic, Hebrew, both directions
 /// and Japanese, to edit, select and undo.
 static EDITOR_SAMPLE: StringView =
-    "ClayWind's text editor: a TextDocument in the program's own memory, edited with Controls.textEditor.\n\nType anywhere, select with the pointer (a double click selects a word, a triple click a line) or with Shift and the arrows, and move by words with Option on macOS or Control elsewhere. Undo and Redo take back a word of typing at a time. This paragraph is long, so it wraps at the view's width: Up and Down move by the rows you see, and Page Up and Page Down by a view's height.\n\n\u{645}\u{631}\u{62D}\u{628}\u{627} \u{628}\u{627}\u{644}\u{639}\u{627}\u{644}\u{645}: \u{647}\u{630}\u{627} \u{633}\u{637}\u{631} \u{639}\u{631}\u{628}\u{64A} \u{64A}\u{628}\u{62F}\u{623} \u{645}\u{646} \u{627}\u{644}\u{64A}\u{645}\u{64A}\u{646}.\n\u{5E9}\u{5DC}\u{5D5}\u{5DD} \u{5E2}\u{5D5}\u{5DC}\u{5DD}: \u{5E9}\u{5D5}\u{5E8}\u{5D4} \u{5D1}\u{5E2}\u{5D1}\u{5E8}\u{5D9}\u{5EA}.\nInvoice 1024 \u{644}\u{644}\u{639}\u{645}\u{64A}\u{644} \u{645}\u{62D}\u{645}\u{62F}, paid in full.\n\u{3053}\u{3093}\u{306B}\u{3061}\u{306F}\u{3001}\u{4E16}\u{754C}\u{3002}\u{65E5}\u{672C}\u{8A9E}\u{306E}\u{5165}\u{529B}\u{3082}\u{3067}\u{304D}\u{307E}\u{3059}\u{3002}\n";
+    "ClayWind's text editor: a TextDocument in the program's own memory, edited with Controls.richEditor. Select text and make it bold, code or an accent with the buttons above, or with the platform's B, E and K shortcuts.\n\nType anywhere, select with the pointer (a double click selects a word, a triple click a line) or with Shift and the arrows, and move by words with Option on macOS or Control elsewhere. Undo and Redo take back a word of typing at a time. This paragraph is long, so it wraps at the view's width: Up and Down move by the rows you see, and Page Up and Page Down by a view's height.\n\n\u{645}\u{631}\u{62D}\u{628}\u{627} \u{628}\u{627}\u{644}\u{639}\u{627}\u{644}\u{645}: \u{647}\u{630}\u{627} \u{633}\u{637}\u{631} \u{639}\u{631}\u{628}\u{64A} \u{64A}\u{628}\u{62F}\u{623} \u{645}\u{646} \u{627}\u{644}\u{64A}\u{645}\u{64A}\u{646}.\n\u{5E9}\u{5DC}\u{5D5}\u{5DD} \u{5E2}\u{5D5}\u{5DC}\u{5DD}: \u{5E9}\u{5D5}\u{5E8}\u{5D4} \u{5D1}\u{5E2}\u{5D1}\u{5E8}\u{5D9}\u{5EA}.\nInvoice 1024 \u{644}\u{644}\u{639}\u{645}\u{64A}\u{644} \u{645}\u{62D}\u{645}\u{62F}, paid in full.\n\u{3053}\u{3093}\u{306B}\u{3061}\u{306F}\u{3001}\u{4E16}\u{754C}\u{3002}\u{65E5}\u{672C}\u{8A9E}\u{306E}\u{5165}\u{529B}\u{3082}\u{3067}\u{304D}\u{307E}\u{3059}\u{3002}\n";
 
-/// The Editor page: Controls.textEditor over the demo's document, with line numbers.
+/// The editor's marks: the index of each byte's look.
+const MARK_PLAIN: u8 = 0;
+const MARK_BOLD: u8 = 1;
+const MARK_CODE: u8 = 2;
+const MARK_ACCENT: u8 = 3;
+
+/// Gives the first `needle` in the editor's text mark `mark`.
+fn markFirst(app: borrow mut DemoApp, needle: StringView, mark: u8) {
+    let n = needle.bytes();
+    if (n.length == 0 || n.length > app.editorLen) {
+        return;
+    }
+    for (i in 0..app.editorLen - n.length + 1) {
+        var same = true;
+        for (k in 0..n.length) {
+            if (app.editorBuf[i + k] != n[k]) {
+                same = false;
+                break;
+            }
+        }
+        if (same) {
+            for (k in 0..n.length) {
+                app.editorMarks[i + k] = mark;
+            }
+            return;
+        }
+    }
+}
+
+/// The Editor page: Controls.richEditor over the demo's document, with line numbers.
 fn editorPage<M: TextMetrics>(ui: borrow mut Ui, app: borrow mut DemoApp, metrics: borrow M) {
     if (!app.editorLoaded) {
         let sample = EDITOR_SAMPLE.bytes();
@@ -1566,15 +1603,24 @@ fn editorPage<M: TextMetrics>(ui: borrow mut Ui, app: borrow mut DemoApp, metric
             app.editorBuf[i] = sample[i];
         }
         app.editorLen = n;
+        // Some of it marked to start with.
+        markFirst(mut app, "TextDocument", MARK_CODE);
+        markFirst(mut app, "Controls.richEditor", MARK_CODE);
+        markFirst(mut app, "bold", MARK_BOLD);
+        markFirst(mut app, "code", MARK_CODE);
+        markFirst(mut app, "an accent", MARK_ACCENT);
+        markFirst(mut app, "Undo and Redo", MARK_BOLD);
         app.editorLoaded = true;
     }
-    var doc = TextDocument.over(
+    var doc = TextDocument.styled(
         mut app.editorBuf[..],
         app.editorLen,
+        mut app.editorMarks[..],
         mut app.editorStarts[..],
         mut app.editorRows[..],
         mut app.editorHistory[..],
     );
+    doc.typing = app.editorTyping;
     doc.edit = app.editorEdit;
     doc.undo = app.editorUndo;
     doc.wrapWidth = app.editorWrap;
@@ -1592,10 +1638,39 @@ fn editorPage<M: TextMetrics>(ui: borrow mut Ui, app: borrow mut DemoApp, metric
         TextStyle.of(4, Text.of().font(FONT_MONO).color(AMBER_400)),
     ];
     ui.richLabel(intro.bytes(), Text.of().color(SLATE_400), styles[..]);
+    // The marks: a button each (and their shortcuts) give the selection, or what is typed next, its look; the
+    // look it has already takes it back to plain.
+    ui.open(Style.row().gap(space(2.0)).alignXY(AxisAlign.Start, AxisAlign.Center));
+    var wanted: u8? = null;
+    if (Controls.button(mut ui, "markPlain", "Plain")) {
+        wanted = MARK_PLAIN;
+    }
+    if (Controls.button(mut ui, "markBold", "Bold") || ui.action("mark-bold")) {
+        wanted = MARK_BOLD;
+    }
+    if (Controls.button(mut ui, "markCode", "Code") || ui.action("mark-code")) {
+        wanted = MARK_CODE;
+    }
+    if (Controls.button(mut ui, "markAccent", "Accent") || ui.action("mark-accent")) {
+        wanted = MARK_ACCENT;
+    }
+    ui.close();
+    match (wanted) {
+        Some(m) => {
+            let same = doc.selectionMark() == Some(m);
+            let _ = doc.setMark(if (same) MARK_PLAIN else m);
+            // The editor keeps the focus, so typing goes on where it was.
+            ui.setFocus(hashId("editor"));
+        }
+        null => {}
+    }
+    let plain = Text.of().color(SLATE_100);
+    let looks = [plain, plain.bold().color(WHITE), plain.font(FONT_MONO).color(AMBER_400), plain.color(SKY_400)];
     ui.open(Style.column().w(Size.grow()).h(Size.grow()).rounded(Radius.Md).clip());
-    let _ = Controls.textEditor(mut ui, metrics, "editor", mut doc, Text.of().color(SLATE_100), true);
+    let _ = Controls.richEditor(mut ui, metrics, "editor", mut doc, plain, looks[..], true);
     ui.close();
     ui.close();
+    app.editorTyping = doc.typing;
     app.editorLen = doc.len;
     app.editorEdit = doc.edit;
     app.editorUndo = doc.undo;

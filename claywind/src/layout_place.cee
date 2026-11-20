@@ -210,7 +210,18 @@ fn placeStyledLine<M: TextMetrics>(
         from = to;
     }
     let rtl = paragraphRtl(l, node.textStart, node.textStart + node.textLength, line.start);
-    var x = if (rtl) at.x + line.width else at.x;
+    // From the right, the runs end where their own widths do (a one-style line then lands where plain text does,
+    // whose words measured apart may add up to a little more than the line drawn whole).
+    var total: f32 = 0.0;
+    if (rtl) {
+        from = line.start;
+        while (from < end) {
+            let to = styleEnd(l, node, from, end);
+            total += metrics.measure(l.bytes.items[from..to], styleAt(l, node, from)).w;
+            from = to;
+        }
+    }
+    var x = if (rtl) at.x + total else at.x;
     from = line.start;
     while (from < end) {
         let to = styleEnd(l, node, from, end);

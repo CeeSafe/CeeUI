@@ -120,14 +120,22 @@ fn lineEnd(text: Slice<u8>, starts: Slice<u32>, count: usize, k: usize) -> usize
 
 /// The grapheme boundary of `line` whose caret is the next one to the right (`right`) or left of the caret at
 /// `at`, as drawn in `config`; `at` when none is (the line's edge). As a text field's arrows (visualStep).
-fn lineStep<M: TextMetrics>(metrics: borrow M, line: Slice<u8>, config: TextConfig, at: usize, right: bool) -> usize {
-    let here = metrics.caretX(line, config, at);
+fn lineStep<M: TextMetrics>(
+    metrics: borrow M,
+    v: borrow ViewLooks,
+    line: Slice<u8>,
+    marks: Slice<u8>,
+    rtl: bool,
+    at: usize,
+    right: bool,
+) -> usize {
+    let here = styledCaretX(metrics, v, line, marks, rtl, at);
     var best = at;
     var bestAhead: f32 = 0.0;
     var b: usize = 0;
     loop {
         if (b != at) {
-            let x = metrics.caretX(line, config, b);
+            let x = styledCaretX(metrics, v, line, marks, rtl, b);
             let ahead = if (right) x - here else here - x;
             if (ahead > 0.25) {
                 let nearer = (if (b > at) b - at else at - b) < (if (best > at) best - at else at - best);
@@ -142,6 +150,151 @@ fn lineStep<M: TextMetrics>(metrics: borrow M, line: Slice<u8>, config: TextConf
         }
         b = graphemeEnd(line, b);
     }
+}
+
+/// How a text view's text is drawn: its look, and in a rich text the looks of its marks (mark 0, and any without a
+/// look of its own, in the view's).
+struct ViewLooks {
+    config: TextConfig;
+    configs: [TextConfig; 16];
+    count: usize;
+}
+
+/// The look of `mark`.
+fn lookOf(v: borrow ViewLooks, mark: u8) -> TextConfig =>
+    if (mark > 0 && (mark as usize) < v.count) v.configs[mark as usize] else v.config;
+
+/// `marks[a..b]`, or nothing for text without marks.
+fn marksIn<region a>(marks: Slice<a, u8>, from: usize, to: usize) -> Slice<a, u8> =>
+    if (marks.length == 0) marks else marks[from..to];
+
+/// Where the run of one mark that starts at `from` ends, by `to` (`to` without marks).
+fn markRunEnd(marks: Slice<u8>, from: usize, to: usize) -> usize {
+    if (marks.length == 0) {
+        return to;
+    }
+    var e = from + 1;
+    while (e < to && marks[e] == marks[from]) {
+        e += 1;
+    }
+    return e;
+}
+
+/// The width of `text` (its `marks` alongside), a run of one mark at a time.
+fn styledWidth<M: TextMetrics>(metrics: borrow M, v: borrow ViewLooks, text: Slice<u8>, marks: Slice<u8>) -> f32 {
+    if (marks.length == 0) {
+        return metrics.measure(text, v.config).w;
+    }
+    var w: f32 = 0.0;
+    var a: usize = 0;
+    while (a < text.length) {
+        let b = markRunEnd(marks, a, text.length);
+        w += metrics.measure(text[a..b], lookOf(v, marks[a])).w;
+        a = b;
+    }
+    return w;
+}
+
+/// Where the caret at byte `at` of `text` is drawn, from its left edge: in a run, as that run draws it, the runs
+/// side by side (from the right in a right-to-left line, `rtl`).
+fn styledCaretX<M: TextMetrics>(
+    metrics: borrow M,
+    v: borrow ViewLooks,
+    text: Slice<u8>,
+    marks: Slice<u8>,
+    rtl: bool,
+    at: usize,
+) -> f32 {
+    if (marks.length == 0) {
+        return metrics.caretX(text, v.config, at);
+    }
+    let total = if (rtl) styledWidth(metrics, v, text, marks) else 0.0;
+    var x: f32 = 0.0;
+    var a: usize = 0;
+    while (a < text.length) {
+        let b = markRunEnd(marks, a, text.length);
+        let config = lookOf(v, marks[a]);
+        let w = metrics.measure(text[a..b], config).w;
+        if (at < b || b == text.length) {
+            let left = if (rtl) total - x - w else x;
+            return left + metrics.caretX(text[a..b], config, at.max(a) - a);
+        }
+        x += w;
+        a = b;
+    }
+    return 0.0;
+}
+
+/// The caret nearest `x` (from `text`'s left edge): in the run under `x` (or the nearest run), as that run finds it.
+fn styledOffsetAt<M: TextMetrics>(
+    metrics: borrow M,
+    v: borrow ViewLooks,
+    text: Slice<u8>,
+    marks: Slice<u8>,
+    rtl: bool,
+    x: f32,
+) -> usize {
+    if (marks.length == 0 || text.length == 0) {
+        return offsetAtIn(metrics, text, v.config, x);
+    }
+    let total = if (rtl) styledWidth(metrics, v, text, marks) else 0.0;
+    var best: usize = 0;
+    var bestEnd: usize = 0;
+    var bestLeft: f32 = 0.0;
+    var bestGap: f32 = -1.0;
+    var sum: f32 = 0.0;
+    var a: usize = 0;
+    while (a < text.length) {
+        let b = markRunEnd(marks, a, text.length);
+        let w = metrics.measure(text[a..b], lookOf(v, marks[a])).w;
+        let left = if (rtl) total - sum - w else sum;
+        let gap = if (x < left) left - x else if (x > left + w) x - (left + w) else 0.0;
+        if (bestGap < 0.0 || gap < bestGap) {
+            best = a;
+            bestEnd = b;
+            bestLeft = left;
+            bestGap = gap;
+        }
+        sum += w;
+        a = b;
+    }
+    return best + offsetAtIn(metrics, text[best..bestEnd], lookOf(v, marks[best]), x - bestLeft);
+}
+
+/// Where bytes [`from`, `to`) of `text` are drawn, as spans (text_field's fieldSpans): a run at a time, merged.
+fn styledSpans<M: TextMetrics>(
+    metrics: borrow M,
+    v: borrow ViewLooks,
+    text: Slice<u8>,
+    marks: Slice<u8>,
+    rtl: bool,
+    from: usize,
+    to: usize,
+    out: SliceMut<TextSpan>,
+) -> usize {
+    if (marks.length == 0) {
+        return metrics.spans(text, v.config, from, to, out);
+    }
+    let total = if (rtl) styledWidth(metrics, v, text, marks) else 0.0;
+    var n: usize = 0;
+    var sum: f32 = 0.0;
+    var a: usize = 0;
+    while (a < text.length) {
+        let b = markRunEnd(marks, a, text.length);
+        let config = lookOf(v, marks[a]);
+        let w = metrics.measure(text[a..b], config).w;
+        let left = if (rtl) total - sum - w else sum;
+        if (from < b && to > a) {
+            var local = [TextSpan { left: 0.0, right: 0.0 }; 8];
+            let k = metrics.spans(text[a..b], config, from.max(a) - a, to.min(b) - a, mut local[..]);
+            for (i in 0..k) {
+                n = addTextSpan(out, n, left + local[i].left, left + local[i].right);
+            }
+        }
+        sum += w;
+        a = b;
+    }
+    return n;
 }
 
 /// The view's measures: its line height and the gutter's width (0 without one).
@@ -161,14 +314,15 @@ const MAX_ROWS: usize = 64;
 /// not count); a word wider than a row breaks between grapheme clusters. Without `wrap`, one row.
 fn wrapRows<M: TextMetrics>(
     metrics: borrow M,
-    config: TextConfig,
+    v: borrow ViewLooks,
     line: Slice<u8>,
+    marks: Slice<u8>,
     wrap: bool,
     width: f32,
     out: SliceMut<u32>,
 ) -> usize {
     out[0] = 0;
-    if (!wrap || width <= 0.0 || line.length == 0 || metrics.measure(line, config).w <= width) {
+    if (!wrap || width <= 0.0 || line.length == 0 || styledWidth(metrics, v, line, marks) <= width) {
         return 1;
     }
     var breaks = [0u8; 4096];
@@ -177,7 +331,7 @@ fn wrapRows<M: TextMetrics>(
     var rows: usize = 1;
     var start: usize = 0;
     while (rows < out.length.min(MAX_ROWS)) {
-        if (metrics.measure(trimEnd(line, start, line.length), config).w <= width) {
+        if (rowWidth(metrics, v, line, marks, start, line.length) <= width) {
             break;
         }
         // The break opportunities after start, in order; the last whose row fits, by halving.
@@ -198,7 +352,7 @@ fn wrapRows<M: TextMetrics>(
                     a = mid + 1;
                     continue;
                 }
-                if (metrics.measure(trimEnd(line, start, at), config).w <= width) {
+                if (rowWidth(metrics, v, line, marks, start, at) <= width) {
                     best = best.max(at);
                     a = mid + 1;
                 } else {
@@ -212,7 +366,8 @@ fn wrapRows<M: TextMetrics>(
             var at = graphemeEnd(line, start);
             loop {
                 let next = graphemeEnd(line, at);
-                if (next >= line.length || next == at || metrics.measure(line[start..next], config).w > width) {
+                if (next >= line.length || next == at ||
+                    styledWidth(metrics, v, line[start..next], marksIn(marks, start, next)) > width) {
                     break;
                 }
                 at = next;
@@ -227,6 +382,19 @@ fn wrapRows<M: TextMetrics>(
         start = lo;
     }
     return rows;
+}
+
+/// The width of `line[from..to]` without the spaces at its end.
+fn rowWidth<M: TextMetrics>(
+    metrics: borrow M,
+    v: borrow ViewLooks,
+    line: Slice<u8>,
+    marks: Slice<u8>,
+    from: usize,
+    to: usize,
+) -> f32 {
+    let row = trimEnd(line, from, to);
+    return styledWidth(metrics, v, row, marksIn(marks, from, from + row.length));
 }
 
 /// `line[from..to]` without the spaces at its end.
@@ -270,6 +438,18 @@ fn lineOfRow(rows: Slice<u16>, count: usize, row: usize) -> [usize; 2] {
     return [0, 0];
 }
 
+/// The marks of line `k` (nothing for text without marks).
+fn lineMarks<region a>(
+    marks: Slice<a, u8>,
+    text: Slice<u8>,
+    starts: Slice<u32>,
+    count: usize,
+    k: usize,
+) -> Slice<a, u8> {
+    let from = starts[k] as usize;
+    return marksIn(marks, from, from + lineOf(text, starts, count, k).length);
+}
+
 /// A line's rows as laid out now, its count stored in the cache.
 struct LineRows {
     starts: [u32; 64];
@@ -278,15 +458,16 @@ struct LineRows {
 
 fn layRows<M: TextMetrics>(
     metrics: borrow M,
-    config: TextConfig,
+    v: borrow ViewLooks,
     line: Slice<u8>,
+    marks: Slice<u8>,
     wrap: bool,
     width: f32,
     rows: SliceMut<u16>,
     k: usize,
 ) -> LineRows {
     var r = LineRows { starts: [0u32; 64], count: 0 };
-    r.count = wrapRows(metrics, config, line, wrap, width, mut r.starts[..]);
+    r.count = wrapRows(metrics, v, line, marks, wrap, width, mut r.starts[..]);
     if (k < rows.length) {
         rows[k] = truncate<u16>(r.count);
     }
@@ -297,16 +478,17 @@ fn layRows<M: TextMetrics>(
 /// being the paragraph), as a text field's text does; 0 otherwise, and for lines that do not wrap.
 fn rowShift<M: TextMetrics>(
     metrics: borrow M,
-    config: TextConfig,
+    v: borrow ViewLooks,
     line: Slice<u8>,
     row: Slice<u8>,
+    rowMarks: Slice<u8>,
     wrap: bool,
     width: f32,
 ) -> f32 {
     if (!wrap || !bidiParagraphRtl(line)) {
         return 0.0;
     }
-    return (width - metrics.measure(row, config).w).max(0.0);
+    return (width - styledWidth(metrics, v, row, rowMarks)).max(0.0);
 }
 
 /// The row of `r` that byte `local` of its line is in: a caret at a row's start is in that row.
@@ -350,6 +532,8 @@ impl Controls {
         var none = [0u16; 1];
         var width: f32 = 0.0;
         var goal: f32 = -1.0;
+        let noMarks = [0u8];
+        let noLooks = [look];
         Controls.textViewOf(
             mut ui,
             metrics,
@@ -364,6 +548,9 @@ impl Controls {
             mut none[0..0],
             mut width,
             mut goal,
+            noMarks[0..0],
+            noLooks[0..0],
+            0,
         );
     }
 
@@ -385,6 +572,9 @@ impl Controls {
         rows: SliceMut<u16>,
         wrapWidth: borrow mut f32,
         goalX: borrow mut f32,
+        allMarks: Slice<u8>,
+        looks: Slice<Text>,
+        typing: u8,
     ) {
         let h = hashId(id);
         ui.registerFocusable(h);
@@ -395,6 +585,15 @@ impl Controls {
         let wrap = config0.wrapsWords() && rows.length >= count && count > 0;
         let line = look.wrap(TextWrap.None).leading(lineH);
         let config = line.config();
+        // A rich text's marks and their looks (as many as there are, up to 16); a plain text has none.
+        let marks = if (allMarks.length >= text.length) allMarks[0..text.length] else allMarks[0..0];
+        var v = ViewLooks { config: config, configs: [config; 16], count: 0 };
+        if (marks.length > 0) {
+            v.count = looks.length.min(16);
+            for (m in 1..v.count) {
+                v.configs[m] = looks[m].wrap(TextWrap.None).leading(lineH).config();
+            }
+        }
         edit.caret = edit.caret.min(text.length);
         edit.anchor = edit.anchor.min(text.length);
         let box = ui.boxOfHash(h);
@@ -426,8 +625,9 @@ impl Controls {
             while (k < count && rowAt <= lastRow) {
                 rowAt += layRows(
                     metrics,
-                    config,
+                    v,
                     lineOf(text, starts, count, k),
+                    lineMarks(marks, text, starts, count, k),
                     wrap,
                     width,
                     mut rows[0..limit],
@@ -447,12 +647,22 @@ impl Controls {
                     let at = lineOfRow(rows[0..limit], count, row);
                     let k = at[0];
                     let lineText = lineOf(text, starts, count, k);
-                    let r = layRows(metrics, config, lineText, wrap, width, mut rows[0..limit], k);
+                    let r = layRows(
+                        metrics,
+                        v,
+                        lineText,
+                        lineMarks(marks, text, starts, count, k),
+                        wrap,
+                        width,
+                        mut rows[0..limit],
+                        k,
+                    );
                     let range = rowRange(r, lineText, at[1].min(r.count - 1));
                     let rowText = lineText[range[0]..range[1]];
-                    let shift = rowShift(metrics, config, lineText, rowText, wrap, width);
+                    let rowMarks = marksIn(marks, (starts[k] as usize) + range[0], (starts[k] as usize) + range[1]);
+                    let shift = rowShift(metrics, v, lineText, rowText, rowMarks, wrap, width);
                     let x = p.position.x - b.x - scroll.x - gutterW - shift;
-                    let inRow = offsetAtIn(metrics, rowText, config, x);
+                    let inRow = styledOffsetAt(metrics, v, rowText, rowMarks, bidiParagraphRtl(rowText), x);
                     pointed = Some((starts[k] as usize) + range[0] + inRow);
                 }
             }
@@ -512,10 +722,21 @@ impl Controls {
             let lineStart = starts[k] as usize;
             let lineText = lineOf(text, starts, count, k);
             let local = (edit.caret - lineStart).min(lineText.length);
-            let r = layRows(metrics, config, lineText, wrap, width, mut rows[0..limit], k);
+            let r = layRows(
+                metrics,
+                v,
+                lineText,
+                lineMarks(marks, text, starts, count, k),
+                wrap,
+                width,
+                mut rows[0..limit],
+                k,
+            );
             let row = rowOf(r, local);
             let range = rowRange(r, lineText, row);
             let rowText = lineText[range[0]..range[1]];
+            let rowMarks = marksIn(marks, lineStart + range[0], lineStart + range[1]);
+            let rowRtl = bidiParagraphRtl(rowText);
             let inRow = local - range[0];
             var target: usize? = null;
             for (right in [false, true]) {
@@ -528,7 +749,7 @@ impl Controls {
                 } else if (!shift && edit.selects()) {
                     target = Some(if (right) edit.to() else edit.from());
                 } else {
-                    let step = lineStep(metrics, rowText, config, inRow, right);
+                    let step = lineStep(metrics, v, rowText, rowMarks, rowRtl, inRow, right);
                     let forward = right != bidiParagraphRtl(lineText);
                     if (step != inRow) {
                         target = Some(lineStart + range[0] + step);
@@ -566,14 +787,8 @@ impl Controls {
             }
             if (steps > 0) {
                 // The place across that Up and Down keep: the one they started from, through shorter rows.
-                let here = rowShift(
-                    metrics,
-                    config,
-                    lineText,
-                    rowText,
-                    wrap,
-                    width,
-                ) + metrics.caretX(rowText, config, inRow);
+                let here = rowShift(metrics, v, lineText, rowText, rowMarks, wrap, width) +
+                    styledCaretX(metrics, v, rowText, rowMarks, rowRtl, inRow);
                 let goal: f32 = goalX;
                 let x = if (goal >= 0.0) goal else here;
                 goalX = x;
@@ -590,8 +805,9 @@ impl Controls {
                             rr = 0;
                             rowsHere = layRows(
                                 metrics,
-                                config,
+                                v,
                                 lineOf(text, starts, count, kk),
+                                lineMarks(marks, text, starts, count, kk),
                                 wrap,
                                 width,
                                 mut rows[0..limit],
@@ -605,8 +821,9 @@ impl Controls {
                             kk -= 1;
                             rowsHere = layRows(
                                 metrics,
-                                config,
+                                v,
                                 lineOf(text, starts, count, kk),
+                                lineMarks(marks, text, starts, count, kk),
                                 wrap,
                                 width,
                                 mut rows[0..limit],
@@ -617,11 +834,23 @@ impl Controls {
                     }
                 }
                 let other = lineOf(text, starts, count, kk);
-                let lr = layRows(metrics, config, other, wrap, width, mut rows[0..limit], kk);
+                let lr = layRows(
+                    metrics,
+                    v,
+                    other,
+                    lineMarks(marks, text, starts, count, kk),
+                    wrap,
+                    width,
+                    mut rows[0..limit],
+                    kk,
+                );
                 let span = rowRange(lr, other, rr.min(lr.count - 1));
                 let otherRow = other[span[0]..span[1]];
-                let otherShift = rowShift(metrics, config, other, otherRow, wrap, width);
-                var landed = span[0] + offsetAtIn(metrics, otherRow, config, x - otherShift);
+                let otherStart = starts[kk] as usize;
+                let otherMarks = marksIn(marks, otherStart + span[0], otherStart + span[1]);
+                let otherShift = rowShift(metrics, v, other, otherRow, otherMarks, wrap, width);
+                var landed = span[0] +
+                    styledOffsetAt(metrics, v, otherRow, otherMarks, bidiParagraphRtl(otherRow), x - otherShift);
                 // Not past a wrapped row's end: that place is the next row's start.
                 if (rr + 1 < lr.count && landed >= span[1] && span[1] > span[0]) {
                     landed = span[0] + graphemeBefore(other[span[0]..span[1]], span[1] - span[0]);
@@ -654,7 +883,16 @@ impl Controls {
         var caretRowTop: usize = 0;
         if (count > 0) {
             let lineText = lineOf(text, starts, count, caretLine);
-            let r = layRows(metrics, config, lineText, wrap, width, mut rows[0..limit], caretLine);
+            let r = layRows(
+                metrics,
+                v,
+                lineText,
+                lineMarks(marks, text, starts, count, caretLine),
+                wrap,
+                width,
+                mut rows[0..limit],
+                caretLine,
+            );
             caretRow = rowOf(r, edit.caret - (starts[caretLine] as usize));
             caretRowTop = rowsBefore(rows[0..limit], caretLine) + caretRow;
         }
@@ -671,12 +909,24 @@ impl Controls {
                         dy = shownTop + b.h - (top + lineH);
                     }
                     let lineText = lineOf(text, starts, count, caretLine);
-                    let r = layRows(metrics, config, lineText, wrap, width, mut rows[0..limit], caretLine);
+                    let r = layRows(
+                        metrics,
+                        v,
+                        lineText,
+                        lineMarks(marks, text, starts, count, caretLine),
+                        wrap,
+                        width,
+                        mut rows[0..limit],
+                        caretLine,
+                    );
                     let range = rowRange(r, lineText, caretRow);
                     let local = edit.caret - (starts[caretLine] as usize);
                     let rowText = lineText[range[0]..range[1]];
-                    let shift = rowShift(metrics, config, lineText, rowText, wrap, width);
-                    let x = gutterW + shift + metrics.caretX(rowText, config, local - range[0]);
+                    let caretStart = starts[caretLine] as usize;
+                    let rowMarks = marksIn(marks, caretStart + range[0], caretStart + range[1]);
+                    let shift = rowShift(metrics, v, lineText, rowText, rowMarks, wrap, width);
+                    let x = gutterW + shift +
+                        styledCaretX(metrics, v, rowText, rowMarks, bidiParagraphRtl(rowText), local - range[0]);
                     let shownLeft = -scroll.x;
                     var dx: f32 = 0.0;
                     if (x < shownLeft + gutterW) {
@@ -711,7 +961,16 @@ impl Controls {
             let lineStart = starts[k] as usize;
             let lineText = lineOf(text, starts, count, k);
             let lineStop = lineStart + lineText.length;
-            let r = layRows(metrics, config, lineText, wrap, width, mut rows[0..limit], k);
+            let r = layRows(
+                metrics,
+                v,
+                lineText,
+                lineMarks(marks, text, starts, count, k),
+                wrap,
+                width,
+                mut rows[0..limit],
+                k,
+            );
             for (row in 0..r.count) {
                 let range = rowRange(r, lineText, row);
                 let rowText = lineText[range[0]..range[1]];
@@ -734,7 +993,9 @@ impl Controls {
                     }
                     ui.close();
                 }
-                let shift = rowShift(metrics, config, lineText, rowText, wrap, width);
+                let rowMarks = marksIn(marks, rowStart, rowStop);
+                let rowRtl = bidiParagraphRtl(rowText);
+                let shift = rowShift(metrics, v, lineText, rowText, rowMarks, wrap, width);
                 ui.open(Style.box().h(Size.fixed(lineH)).ml(shift).alignXY(AxisAlign.Start, AxisAlign.Center));
                 // The selection on this row, behind its text: where its characters are drawn, and on a line's last
                 // row the line break after them as a narrow box when the selection runs on.
@@ -742,9 +1003,9 @@ impl Controls {
                     var spans = [TextSpan { left: 0.0, right: 0.0 }; 8];
                     let a = edit.from().max(rowStart) - rowStart;
                     let b = edit.to().min(rowStop) - rowStart;
-                    var n = metrics.spans(rowText, config, a, b, mut spans[..]);
+                    var n = styledSpans(metrics, v, rowText, rowMarks, rowRtl, a, b, mut spans[..]);
                     if (lastOfLine && edit.to() > lineStop) {
-                        let end = metrics.measure(rowText, config).w;
+                        let end = styledWidth(metrics, v, rowText, rowMarks);
                         let size = if (config.fontSize > 0.0) config.fontSize else 16.0;
                         n = addTextSpan(mut spans[..], n, end, end + size * 0.4);
                     }
@@ -760,7 +1021,9 @@ impl Controls {
                 // composes: spliced in, underlined, the caret where the input method has it.
                 let composing = editable && caretHere && ui.composition().length > 0;
                 var spliced = [0u8; 4096];
+                var splicedMarks = [0u8; 4096];
                 var shownText = rowText;
+                var shownMarks = rowMarks;
                 var caretAt = if (caretHere && edit.caret >= rowStart) edit.caret - rowStart else 0;
                 if (composing) {
                     let comp = ui.composition();
@@ -777,16 +1040,46 @@ impl Controls {
                         spliced[before + n + i] = rowText[before + i];
                     }
                     shownText = spliced[0..before + n + after];
-                    let u0 = metrics.caretX(shownText, config, before);
-                    let u1 = metrics.caretX(shownText, config, before + n);
+                    if (rowMarks.length > 0) {
+                        // The composition in the typing mark, between the row's marks.
+                        for (i in 0..before) {
+                            splicedMarks[i] = rowMarks[i];
+                        }
+                        for (i in 0..n) {
+                            splicedMarks[before + i] = typing;
+                        }
+                        for (i in 0..after) {
+                            splicedMarks[before + n + i] = rowMarks[before + i];
+                        }
+                        shownMarks = splicedMarks[0..before + n + after];
+                    }
+                    let shownRtl = bidiParagraphRtl(shownText);
+                    let u0 = styledCaretX(metrics, v, shownText, shownMarks, shownRtl, before);
+                    let u1 = styledCaretX(metrics, v, shownText, shownMarks, shownRtl, before + n);
                     ui.open(Style.box().absolute().passthrough().left(u0.min(u1)).top(lineH - 2.0)
                         .w(Size.fixed((u1 - u0).abs())).h(Size.fixed(1.0)).bg(SLATE_100));
                     ui.close();
                     caretAt = before + ui.compositionCaret().min(n);
                 }
-                ui.labelBytes(shownText, line);
+                if (shownMarks.length == 0) {
+                    ui.labelBytes(shownText, line);
+                } else {
+                    // A rich row: a run of each mark in its look, as measured.
+                    var styles = [TextStyle.of(0, line); 64];
+                    var runs: usize = 0;
+                    var a: usize = 0;
+                    while (a < shownText.length && runs < 64) {
+                        let b = markRunEnd(shownMarks, a, shownText.length);
+                        let m = shownMarks[a] as usize;
+                        let runLook = if (m > 0 && m < v.count) looks[m].wrap(TextWrap.None).leading(lineH) else line;
+                        styles[runs] = TextStyle.of(b - a, runLook);
+                        runs += 1;
+                        a = b;
+                    }
+                    ui.richLabel(shownText, line, styles[0..runs]);
+                }
                 if (caretHere) {
-                    let x = metrics.caretX(shownText, config, caretAt);
+                    let x = styledCaretX(metrics, v, shownText, shownMarks, bidiParagraphRtl(shownText), caretAt);
                     if (blink || composing) {
                         ui.open(Style.box().absolute().passthrough().left(x).top(0.0).w(Size.fixed(2.0))
                             .h(Size.fixed(lineH)).bg(SLATE_200));
@@ -1210,6 +1503,24 @@ impl Controls {
         look: Text,
         gutter: bool,
     ) -> bool {
+        let noLooks = [look];
+        return Controls.richEditor(mut ui, metrics, id, mut doc, look, noLooks[0..0], gutter);
+    }
+
+    /// ClayWind_RichEditor: a textEditor that draws a rich document's text (TextDocument.styled) in the looks of its
+    /// marks: each byte in `looks[mark]` (mark 0, and marks past the looks or past 16, in `look`). The looks are best
+    /// kept to `look`'s size (bold, a colour, a monospaced face), as every row is `look`'s line height. Typed text
+    /// takes the document's typing mark, which follows the caret (the mark of the byte before it) when the caret
+    /// moves; `doc.setMark` marks the selection, or what is typed next. Whether the text or its marks changed.
+    public fn richEditor<M: TextMetrics>(
+        ui: borrow mut Ui,
+        metrics: borrow M,
+        id: StringView,
+        doc: borrow mut TextDocument,
+        look: Text,
+        looks: Slice<Text>,
+        gutter: bool,
+    ) -> bool {
         let h = hashId(id);
         doc.len = doc.len.min(doc.buf.length);
         if (doc.count == 0 || doc.count > doc.starts.length) {
@@ -1283,21 +1594,55 @@ impl Controls {
                 doc.rows[k] = 0;
             }
         }
-        Controls.textViewOf(
-            mut ui,
-            metrics,
-            id,
-            doc.buf[0..doc.len],
-            doc.starts[0..doc.count],
-            doc.count,
-            look,
-            gutter,
-            mut doc.edit,
-            true,
-            doc.rows,
-            mut doc.wrapWidth,
-            mut doc.goalX,
-        );
+        let caretBefore = doc.edit.caret;
+        let noMarks = [0u8];
+        match (borrow doc.marks) {
+            Some(m) => {
+                Controls.textViewOf(
+                    mut ui,
+                    metrics,
+                    id,
+                    doc.buf[0..doc.len],
+                    doc.starts[0..doc.count],
+                    doc.count,
+                    look,
+                    gutter,
+                    mut doc.edit,
+                    true,
+                    doc.rows,
+                    mut doc.wrapWidth,
+                    mut doc.goalX,
+                    m[0..doc.len],
+                    looks,
+                    doc.typing,
+                );
+            }
+            null => {
+                Controls.textViewOf(
+                    mut ui,
+                    metrics,
+                    id,
+                    doc.buf[0..doc.len],
+                    doc.starts[0..doc.count],
+                    doc.count,
+                    look,
+                    gutter,
+                    mut doc.edit,
+                    true,
+                    doc.rows,
+                    mut doc.wrapWidth,
+                    mut doc.goalX,
+                    noMarks[0..0],
+                    looks,
+                    doc.typing,
+                );
+            }
+        }
+        // The caret moved (not by an edit): typing takes the mark of the byte before it, as in a word processor.
+        if (!changed && doc.edit.caret != caretBefore && doc.marks != null) {
+            let at = doc.edit.caret;
+            doc.typing = if (at > 0) doc.markAt(at - 1) else doc.markAt(0);
+        }
         return changed;
     }
 }

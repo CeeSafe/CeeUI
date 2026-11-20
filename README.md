@@ -80,6 +80,12 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   width at UAX #14's opportunities (Up, Down and the page keys then move by rows); only the lines in view are laid out
   and measured, the rest counted as one row until they are. An input method's composition shows underlined at the
   caret.
+- **Rich text editing:** `Controls.richEditor` edits a rich document (`TextDocument.styled`: a mark for each byte of
+  the text, the index of its look) and draws each run of one mark in its own look (bold, a colour, a monospaced
+  face). Typed and pasted text takes the typing mark, which follows the caret; `TextDocument.setMark` marks the
+  selection, or what is typed next; Undo and Redo bring marks back with the text. Measuring, the caret, the pointer,
+  wrapping and the selection all go a run at a time. The demo's Editor page marks text with buttons and the
+  platform's B, E and K shortcuts.
 - **Retina output.** `Raster.setPixelRatio` draws at the display's pixel ratio while layout stays in points.
 - **Incremental rendering.** `Damage` works out what changed between frames, and the raster redraws only those
   boxes. The result is byte-identical to a full redraw.

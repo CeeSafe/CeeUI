@@ -108,3 +108,149 @@ fn undoingAnEditBringsBackItsMarks() -> Result<void, TestFailure> {
     command(mut ui, mut platform, mut doc, EditCommand.Redo)?;
     return Check.isTrue(isText(doc, "one six") && marksAre(doc, "0000111"), "redone, marks and all");
 }
+
+/// Metrics in which a byte is half its font size wide, so a run in a bigger look is wider.
+struct SizeAdvance {
+    unused: u8;
+}
+
+impl TextMetrics for SizeAdvance {
+    fn measure(borrow this, utf8: Slice<u8>, config: TextConfig) -> Dims =>
+        Dims { w: round<f32>(utf8.length) * config.fontSize * 0.5, h: config.fontSize * 1.25 };
+    fn baseline(borrow this, config: TextConfig) -> f32 => config.fontSize * 0.8;
+}
+
+/// A frame of a rich editor whose mark 1 is 20 points (10 a byte) and the rest 14 (7 a byte).
+fn richFrame(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    doc: borrow mut EditorDoc,
+) -> Result<bool, TestFailure> {
+    let metrics = SizeAdvance { unused: 0 };
+    ui.begin(mut platform);
+    ui.open(Style.column().w(Size.fixed(300.0)).h(Size.fixed(200.0)));
+    let look = Text.of().size(14.0).leading(20.0);
+    let looks = [look, Text.of().size(20.0).leading(20.0).color(ROSE_400)];
+    var d = TextDocument.styled(
+        mut doc.buf[..],
+        doc.len,
+        mut doc.marks[..],
+        mut doc.starts[..],
+        mut doc.rows[..],
+        mut doc.history[..],
+    );
+    d.typing = doc.typing;
+    d.edit = doc.edit;
+    d.undo = doc.state;
+    d.goalX = doc.goal;
+    match (doc.markWanted) {
+        Some(m) => { let _ = d.setMark(m); }
+        null => {}
+    }
+    doc.markWanted = null;
+    let changed = Controls.richEditor(mut ui, metrics, "ed", mut d, look, looks[..], false);
+    doc.typing = d.typing;
+    doc.len = d.len;
+    doc.count = d.count;
+    doc.edit = d.edit;
+    doc.state = d.undo;
+    doc.goal = d.goalX;
+    ui.close();
+    // Laid out with the same metrics the editor measured with.
+    let ok = match (ui.endFrame(mut platform, metrics)) {
+        Ok() => true,
+        Err(_) => false,
+    };
+    Check.isTrue(ok, "the frame fits")?;
+    platform.pressed = 0;
+    platform.typedCount = 0;
+    platform.typedRead = 0;
+    platform.pointerState.pressed = false;
+    platform.pointerState.released = false;
+    return Ok(changed);
+}
+
+/// A rich editor holding "aaBBcc" with "BB" in mark 1, focused.
+fn markedEditor(ui: borrow mut Ui, platform: borrow mut FakePlatform) -> Result<EditorDoc, TestFailure> {
+    var doc = editorOf("aaBBcc");
+    doc.rich = true;
+    doc.marks[2] = 1;
+    doc.marks[3] = 1;
+    richFrame(mut ui, mut platform, mut doc)?;
+    ui.setFocus(hashId("ed"));
+    richFrame(mut ui, mut platform, mut doc)?;
+    return Ok(doc);
+}
+
+@test
+fn aRichEditorDrawsEachRunInItsLook() -> Result<void, TestFailure> {
+    var storage = heap(2097152);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var doc = markedEditor(mut ui, mut platform)?;
+    // Three text commands: "aa" at 14, "BB" at 20, "cc" at 14, side by side.
+    var xs = [0.0f32; 4];
+    var sizes = [0.0f32; 4];
+    var n: usize = 0;
+    let tree = ui.layout();
+    for (i in 0..tree.commandCount()) {
+        match (tree.command(i)) {
+            Command.Text(area, run) => {
+                if (n < 4) {
+                    xs[n] = area.x;
+                    sizes[n] = run.fontSize;
+                    n += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    Check.equalU64(3, n as u64)?;
+    Check.isTrue(sizes[0] == 14.0 && sizes[1] == 20.0 && sizes[2] == 14.0, "each run in its size")?;
+    Check.isTrue((xs[1] - xs[0] - 14.0).abs() < 0.5 && (xs[2] - xs[1] - 20.0).abs() < 0.5, "side by side")?;
+    // End puts the caret after all three: 14 + 20 + 14.
+    let box = ui.boxOf("ed")!;
+    editKeyRich(mut ui, mut platform, mut doc, Key.End)?;
+    Check.equalU64(6, doc.edit.caret as u64)?;
+    let caret = ui.textInputArea();
+    return Check.isTrue((caret.x - box.x - 48.0).abs() < 0.5, "the caret after the runs' widths");
+}
+
+fn editKeyRich(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    doc: borrow mut EditorDoc,
+    k: Key,
+) -> Result<bool, TestFailure> {
+    platform.pressed = 1u64 << (keyIndex(k) as u64);
+    return richFrame(mut ui, mut platform, mut doc);
+}
+
+@test
+fn aRichEditorPlacesTheCaretByItsRuns() -> Result<void, TestFailure> {
+    var storage = heap(2097152);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var doc = markedEditor(mut ui, mut platform)?;
+    // 26 across is 12 into "BB" (14 to 34, 10 a byte): the caret after its first B.
+    let box = ui.boxOf("ed")!;
+    platform.pointerState.position = Vec2 { x: box.x + 26.0, y: box.y + 5.0 };
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    richFrame(mut ui, mut platform, mut doc)?;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    richFrame(mut ui, mut platform, mut doc)?;
+    Check.equalU64(3, doc.edit.caret as u64)?;
+    // There typing takes the mark of the byte before the caret: a B's.
+    Check.equalU64(1, doc.typing as u64)?;
+    typeChars(mut platform, "x");
+    richFrame(mut ui, mut platform, mut doc)?;
+    Check.isTrue(isText(doc, "aaBxBcc") && marksAre(doc, "0011100"), "typed in B's mark")?;
+    // Moved back into "aa", typing is plain again.
+    editKeyRich(mut ui, mut platform, mut doc, Key.Home)?;
+    editKeyRich(mut ui, mut platform, mut doc, Key.Right)?;
+    return Check.equalU64(0, doc.typing as u64);
+}
