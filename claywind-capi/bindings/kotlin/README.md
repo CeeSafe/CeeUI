@@ -17,7 +17,7 @@ ClayWind.run("Counter", 480, 360) {
 }
 ```
 
-## Building (macOS)
+## Building (macOS and Linux)
 
 ```sh
 cd claywind-capi
@@ -25,6 +25,9 @@ ceesafec build              # out/claywind_capi.a
 cd bindings/kotlin
 ./build.sh run              # build/libclaywind_jni.dylib and build/counter.jar, then the example
 ```
+
+On Linux, build the archive with `ceesafec build --cflag -fPIC`: the JNI library is a shared object, which takes
+position-independent code (`CEESAFE-FINDINGS.md` Q3).
 
 `build.sh` compiles `src/main/c/claywind_jni.c` against the JDK's headers and links it with claywind-capi's archive
 into `libclaywind_jni.dylib`, then compiles the Kotlin layer and the example into one jar with `kotlinc`. It takes

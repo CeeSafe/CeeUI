@@ -466,3 +466,15 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
 - **Q2 (doc). `ceesafe_init(NULL)` is refused (`CEESAFE_INIT_SIZE`).** embed.h says so, but the obvious first call
   in a host fails silently unless its result is checked; tooling.md §8.3 and type-system.md §28.6 do not show a
   minimal config. claywind.h's example fills one (`.size = sizeof(ceesafe_config)`).
+- **Q3 (open). `ceesafec build --emit lib` makes an archive that cannot go into a shared library on Linux.** Its
+  objects are compiled without `-fPIC`, and the runtime's thread-locals use the local-exec model: linking
+  claywind_capi.a into the Kotlin binding's JNI library (`-shared`) fails with "relocation R_X86_64_TPOFF32 against
+  `cee_budget_now' can not be used when making a shared object; recompile with -fPIC" (CI, Ubuntu 24.04, ceesafec
+  0.84.1). A host loading CeeSafe through a shared object (JNI, a Python extension, a plugin) is the usual case for an
+  embedded library. `--cflag -fPIC` works around it; a library build could compile position-independent code by
+  default, or take a `--pic` flag documented in tooling.md beside `--emit lib`. macOS and Windows are unaffected.
+- **Q4 (open). Since 0.84, CI's macOS and Windows runners build ClayWind's hosts twice the size, in twice the time.**
+  The headless host, stripped: macOS 0.76 MB with 0.78.0, 1.78 MB with 0.84.1; Windows 1.06 to 2.24 MB; Linux 0.95
+  either way. Build time on macOS 16 s to 37 s. On a Mac with Apple clang 21 the same 0.84.1 makes it 0.99 MB in 23 s,
+  smaller than 0.78.0's 1.35 MB, at the same ClayWind commit, so it depends on the runner (its clang, or its core
+  count). Being measured: ClayWind's CI prints the binary's segments.

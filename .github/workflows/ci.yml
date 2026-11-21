@@ -99,6 +99,8 @@ jobs:
           curl -fsSL -o "$RUNNER_TEMP/kotlin.zip" \
             https://github.com/JetBrains/kotlin/releases/download/v2.1.0/kotlin-compiler-2.1.0.zip
           unzip -q "$RUNNER_TEMP/kotlin.zip" -d "$RUNNER_TEMP"
+          # A shared library on Linux takes position-independent objects (CEESAFE-FINDINGS.md Q3).
+          if [ "$(uname -s)" = Linux ]; then (cd claywind-capi && ceesafec build --cflag -fPIC); fi
           KOTLINC="$RUNNER_TEMP/kotlinc/bin/kotlinc" claywind-capi/bindings/kotlin/build.sh
 
       - name: Tests
@@ -122,6 +124,7 @@ jobs:
           ls -la
           if [ "$(uname -s)" = Darwin ]; then size -m headless | grep -E '^Segment|total' ; else size -A headless | sort -k2 -n | tail -8; fi
           cc --version | head -1
+          python3 ../../../tools/largest_functions.py headless 25
 
       - name: A new app from the template
         if: runner.os != 'Windows' # claywind-pack needs a Unix
