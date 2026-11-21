@@ -1,0 +1,9 @@
+[package]
+name = "claywind"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "ClayWind for Rust: a window laid out each frame by a closure, over ClayWind's C API (claywind.h)"
+links = "claywind_capi"
+
+[dependencies]
