@@ -54,8 +54,8 @@ fn loadCollectionFace(raster: borrow mut Raster, id: u32, path: StringView, weig
 
 /// Loads the regular, bold and monospaced faces into FONT_18, FONT_BOLD and FONT_MONO: from CLAYWIND_FONT_DIR's
 /// Arial.ttf, "Arial Bold.ttf" and "Courier New.ttf" when it is set, else from the first of macOS's, Windows', Linux's
-/// Microsoft core fonts, DejaVu's and Android's that has them, else iOS's Helvetica Neue and Courier New. False when
-/// none has.
+/// Microsoft core fonts, DejaVu's and Android's that has them, else Fedora's Liberation Sans and Mono, else iOS's
+/// Helvetica Neue and Courier New. False when none has.
 public fn loadSystemFonts(raster: borrow mut Raster) -> bool {
     match (Environment.variable("CLAYWIND_FONT_DIR")) {
         Some(dir) => {
@@ -93,6 +93,13 @@ public fn loadSystemFonts(raster: borrow mut Raster) -> bool {
             return loadFontFile(mut raster, FONT_BOLD, dir, places[k * 4 + 2]) &&
                 loadFontFile(mut raster, FONT_MONO, dir, places[k * 4 + 3]);
         }
+    }
+    // Fedora and others that keep each family in a folder of its own: Liberation Sans and Mono, which have Arial's and
+    // Courier New's metrics.
+    let sans = "/usr/share/fonts/liberation-sans-fonts";
+    if (loadFontFile(mut raster, FONT_18, sans, "LiberationSans-Regular.ttf")) {
+        return loadFontFile(mut raster, FONT_BOLD, sans, "LiberationSans-Bold.ttf") &&
+            loadFontFile(mut raster, FONT_MONO, "/usr/share/fonts/liberation-mono-fonts", "LiberationMono-Regular.ttf");
     }
     // iOS keeps its faces in collections: Helvetica Neue's regular and bold, and Courier New.
     let neue = "/System/Library/Fonts/Core/HelveticaNeue.ttc";

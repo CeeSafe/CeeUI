@@ -22,8 +22,10 @@ fn main() {
             }
         }
         Ok("linux") => {
-            for lib in ["m", "pthread", "dl"] {
-                println!("cargo:rustc-link-lib={lib}");
+            // The archive is the link's last argument, after Rust's own libraries: what it needs from the C library
+            // (pthread_atfork is in glibc's libc_nonshared.a) is named again after it.
+            for lib in ["m", "pthread", "dl", "c"] {
+                println!("cargo:rustc-link-arg=-l{lib}");
             }
         }
         _ => {}
