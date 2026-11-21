@@ -1,7 +1,7 @@
 # claywind-capi: ClayWind for C
 
-ClayWind's C API, for programs in C and in languages that call C: Swift, Kotlin (through JNI) and Rust. It is the
-first step of the roadmap's bindings (P6). The C API is `include/claywind.h`; `examples/counter.c` uses all of it.
+ClayWind's C API, for programs in C and in languages that call C: Swift (`bindings/swift`), Kotlin (through JNI)
+and Rust. It is the first step of the roadmap's bindings (P6). The C API is `include/claywind.h`; `examples/counter.c` uses all of it.
 
 ```sh
 cd claywind-capi
@@ -50,4 +50,5 @@ A host:
   scripted platform: a button press and a checkbox's changes reach the host's next frame, once; a field's typed text
   reaches the host's buffer once, the host's own change stands, and text past the buffer is cut at a character.
 - Linux: `examples/build.sh` has a link line, but it has not been run. Windows: no build script yet.
-- Next: Swift, Kotlin and Rust bindings over this header; an iOS and Android host.
+- Swift: `bindings/swift`, a Swift package over this header with the example in Swift (its README).
+- Next: Kotlin and Rust bindings over this header; an iOS and Android host.
