@@ -75,10 +75,31 @@ jobs:
             (cd "$p" && ceesafec check && ceesafec fmt --check)
           done
 
-      - name: The C API's example, built and linked (macOS)
-        if: runner.os == 'macOS'
+      - name: The C API's example, built and linked
         working-directory: claywind-capi
         run: ./examples/build.sh
+
+      # The bindings over the C API (claywind-capi/bindings), built against its archive: Rust everywhere, Swift on
+      # macOS, Kotlin through JNI on macOS and Linux. Built only: a runner has no screen to run their windows on.
+      - name: The C API's Rust binding
+        working-directory: claywind-capi/bindings/rust
+        run: cargo build --example counter
+
+      - name: The C API's Swift binding (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -e
+          (cd claywind-capi && MACOSX_DEPLOYMENT_TARGET=13.0 ceesafec build)
+          cd claywind-capi/bindings/swift && swift build
+
+      - name: The C API's Kotlin binding (macOS, Linux)
+        if: runner.os != 'Windows'
+        run: |
+          set -e
+          curl -fsSL -o "$RUNNER_TEMP/kotlin.zip" \
+            https://github.com/JetBrains/kotlin/releases/download/v2.1.0/kotlin-compiler-2.1.0.zip
+          unzip -q "$RUNNER_TEMP/kotlin.zip" -d "$RUNNER_TEMP"
+          KOTLINC="$RUNNER_TEMP/kotlinc/bin/kotlinc" claywind-capi/bindings/kotlin/build.sh
 
       - name: Tests
         working-directory: claywind-tests
@@ -92,6 +113,15 @@ jobs:
             echo "== $p"
             (cd "$p" && ceesafec build)
           done
+
+      # Why the headless host is the size it is: its segments, and the objects it was built from.
+      - name: The headless host's size
+        if: runner.os != 'Windows'
+        run: |
+          cd claywind-hosts/headless/out
+          ls -la
+          if [ "$(uname -s)" = Darwin ]; then size -m headless | grep -E '^Segment|total' ; else size -A headless | sort -k2 -n | tail -8; fi
+          cc --version | head -1
 
       - name: A new app from the template
         if: runner.os != 'Windows' # claywind-pack needs a Unix
