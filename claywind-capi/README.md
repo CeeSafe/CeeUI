@@ -1,7 +1,7 @@
 # claywind-capi: ClayWind for C
 
 ClayWind's C API, for programs in C and in languages that call C: Swift (`bindings/swift`), Rust
-(`bindings/rust`) and Kotlin (through JNI). It is the first step of the roadmap's bindings (P6). The C API is `include/claywind.h`; `examples/counter.c` uses all of it.
+(`bindings/rust`) and Kotlin (`bindings/kotlin`, through JNI). It is the first step of the roadmap's bindings (P6). The C API is `include/claywind.h`; `examples/counter.c` uses all of it.
 
 ```sh
 cd claywind-capi
@@ -52,4 +52,5 @@ A host:
 - Linux: `examples/build.sh` has a link line, but it has not been run. Windows: no build script yet.
 - Swift: `bindings/swift`, a Swift package over this header with the example in Swift (its README).
 - Rust: `bindings/rust`, a crate over this header with the example in Rust (its README).
-- Next: Kotlin (through JNI) over this header; an iOS and Android host.
+- Kotlin: `bindings/kotlin`, JNI over this header with the example in Kotlin (its README).
+- Next: Linux and Windows builds of the bindings; an iOS and Android host.
