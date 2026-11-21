@@ -287,6 +287,7 @@ fn main() -> i32 {
         if (systemFonts.supplyFrame(mut raster, main.ui) > 0) {
             main.damage.invalidate(); // the same commands draw other glyphs now (the next frame lays them out)
             inspector.damage.invalidate();
+            main.ui.requestFrame();
         }
         if (!main.draw(mut raster, mut share, mut window, Color.hex(pageBg(main.ui)))) {
             Console.writeErrorLine("desktop: the window refused a frame");

@@ -165,13 +165,15 @@ impl Controls {
         }
         let focused = ui.hasFocus(h);
         ui.open(
-            Style.column().w(Size.grow()).h(height).bg(SLATE_800).rounded(Radius.Md).border(
+            Style.column().w(Size.grow()).h(height).bg(ui.tone(SLATE_800)).rounded(Radius.Md).border(
                 1.0,
-                if (focused) BLUE_500 else SLATE_600,
+                if (focused) BLUE_500 else ui.tone(SLATE_600),
             ),
         );
         ui.open(
-            Style.row().idHash(headId).w(Size.grow()).h(Size.fixed(rowH)).scroll(ScrollAxis.Horizontal).bg(SLATE_900),
+            Style.row().idHash(headId).w(Size.grow()).h(
+                Size.fixed(rowH),
+            ).scroll(ScrollAxis.Horizontal).bg(ui.tone(SLATE_900)),
         );
         for (c in 0..columns) {
             let title = subId(id, "title", truncate<i64>(c));
@@ -180,7 +182,7 @@ impl Controls {
                 Style.row().idHash(title).w(Size.fixed(grid.widths[c])).h(Size.grow()).pl(space(3.0)).alignXY(
                     AxisAlign.Start,
                     AxisAlign.Center,
-                ).gap(space(1.0)).cursor(Cursor.Pointer).clip().hover(Style.of().bg(SLATE_700)),
+                ).gap(space(1.0)).cursor(Cursor.Pointer).clip().hover(Style.of().bg(ui.tone(SLATE_700))),
             );
             let node = ui.access(title, AccessRole.Button, titles[c].bytes());
             let sorted = match (sort.column) {
@@ -188,11 +190,11 @@ impl Controls {
                 null => false,
             };
             ui.accessFlag(node, ACCESS_SELECTED, sorted);
-            ui.label(titles[c], Text.of().size(13.0).color(SLATE_300).wrap(TextWrap.None));
+            ui.label(titles[c], Text.of().size(13.0).color(ui.tone(SLATE_300)).wrap(TextWrap.None));
             if (sorted) {
                 // A chevron down for descending, turned up for ascending.
                 ui.open(
-                    Style.box().size(Size.fixed(12.0)).icon(ICON_CHEVRON_DOWN, SLATE_300, 0.0).rotate(
+                    Style.box().size(Size.fixed(12.0)).icon(ICON_CHEVRON_DOWN, ui.tone(SLATE_300), 0.0).rotate(
                         if (sort.descending) 0.0 else 180.0,
                     ),
                 );
@@ -204,9 +206,9 @@ impl Controls {
                 Style.box().idHash(edge).w(Size.fixed(GRID_EDGE)).h(Size.grow()).alignXY(
                     AxisAlign.Center,
                     AxisAlign.Center,
-                ).bg(if (ui.captured() == edge) BLUE_500 else NONE).hover(Style.of().bg(SLATE_500)),
+                ).bg(if (ui.captured() == edge) BLUE_500 else NONE).hover(Style.of().bg(ui.tone(SLATE_500))),
             );
-            ui.open(Style.box().w(Size.fixed(1.0)).h(Size.grow()).bg(SLATE_600));
+            ui.open(Style.box().w(Size.fixed(1.0)).h(Size.grow()).bg(ui.tone(SLATE_600)));
             ui.close();
             ui.close();
             ui.close();
@@ -241,9 +243,9 @@ impl Controls {
             null => false,
         };
         var style = Style.row().idHash(row).w(Size.fixed(grid.total)).h(Size.fixed(grid.rowH)).cursor(Cursor.Pointer)
-            .bg(if (on) BLUE_600 else if (i % 2 == 1) SLATE_900 else NONE);
+            .bg(if (on) BLUE_600 else if (i % 2 == 1) ui.tone(SLATE_900) else NONE);
         if (!on) {
-            style = style.hover(Style.of().bg(SLATE_700));
+            style = style.hover(Style.of().bg(ui.tone(SLATE_700)));
         }
         ui.open(style);
         let node = ui.access(row, AccessRole.ListItem, name.bytes());

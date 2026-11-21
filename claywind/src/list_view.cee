@@ -132,9 +132,9 @@ impl Controls {
         }
         let rows = visibleLines(ui.scrollOffset(id).y, viewH, rowH, count, 4);
         ui.open(
-            Style.column().id(id).w(Size.grow()).h(height).scroll(ScrollAxis.Vertical).bg(SLATE_800).rounded(
+            Style.column().id(id).w(Size.grow()).h(height).scroll(ScrollAxis.Vertical).bg(ui.tone(SLATE_800)).rounded(
                 Radius.Md,
-            ).border(1.0, if (ui.hasFocus(h)) BLUE_500 else SLATE_600),
+            ).border(1.0, if (ui.hasFocus(h)) BLUE_500 else ui.tone(SLATE_600)),
         );
         // The rows above the view, as their height.
         ui.open(Style.box().w(Size.fixed(1.0)).h(Size.fixed(round<f32>(rows[0]) * rowH)));
@@ -165,7 +165,7 @@ impl Controls {
             AxisAlign.Center,
         ).gap(space(2.0)).cursor(Cursor.Pointer).bg(if (on) BLUE_600 else NONE);
         if (!on) {
-            style = style.hover(Style.of().bg(SLATE_700));
+            style = style.hover(Style.of().bg(ui.tone(SLATE_700)));
         }
         ui.open(style);
         let node = ui.access(row, AccessRole.ListItem, name.bytes());

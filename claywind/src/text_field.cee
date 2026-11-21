@@ -406,7 +406,7 @@ impl Controls {
                 ui.clearFocus();
             }
         }
-        ui.open(Controls.fieldStyle(h, focused));
+        ui.open(Controls.fieldStyle(ui, h, focused));
         let node = ui.access(h, AccessRole.TextField, id.bytes());
         var dots = [0u8; 1020];
         let dotCount = if (masked) maskInto(buf[0..len], mut dots) else 0;
@@ -466,23 +466,23 @@ impl Controls {
                 line[before + n + i] = buf[edit.caret + i];
             }
             let all = before + n + after;
-            ui.labelBytes(line[0..all], Text.of().color(SLATE_100));
+            ui.labelBytes(line[0..all], Text.of().color(ui.tone(SLATE_100)));
             let u0 = metrics.caretX(line[0..all], config, before);
             let u1 = metrics.caretX(line[0..all], config, before + n);
             ui.open(Style.box().absolute().passthrough().left(textX + u0.min(u1)).top(padY + FIELD_TEXT)
-                .w(Size.fixed((u1 - u0).abs())).h(Size.fixed(1.0)).bg(SLATE_100));
+                .w(Size.fixed((u1 - u0).abs())).h(Size.fixed(1.0)).bg(ui.tone(SLATE_100)));
             ui.close();
             caretX = metrics.caretX(line[0..all], config, before + ui.compositionCaret().min(n));
         } else if (masked && dotCount > 0) {
-            ui.labelBytes(dots[0..dotCount], Text.of().color(SLATE_100));
+            ui.labelBytes(dots[0..dotCount], Text.of().color(ui.tone(SLATE_100)));
         } else if (len > 0) {
-            ui.labelBytes(buf[0..len], Text.of().color(SLATE_100));
+            ui.labelBytes(buf[0..len], Text.of().color(ui.tone(SLATE_100)));
         }
         ui.close();
         if (focused) {
             if ((truncate<u64>((ui.time() * 2.0).floor()) & 1) == 0 || composing) {
                 ui.open(Style.box().absolute().passthrough().left(textX + caretX).top(padY).w(Size.fixed(2.0))
-                    .h(Size.fixed(FIELD_TEXT)).bg(SLATE_200));
+                    .h(Size.fixed(FIELD_TEXT)).bg(ui.tone(SLATE_200)));
                 ui.close();
             }
             match (box) {

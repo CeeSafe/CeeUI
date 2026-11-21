@@ -445,3 +445,123 @@ fn aTapElsewhereLeavesATextFieldWhenItEnds() -> Result<void, TestFailure> {
     }
     return Ok();
 }
+
+/// The colour the text `label` is drawn in, this frame.
+fn inkOf(ui: borrow Ui, label: StringView) -> Color? {
+    for (k in 0..ui.commandCount()) {
+        let command = ui.commandAt(k);
+        match (command) {
+            Command.Text(_, run) => {
+                if (ui.textOf(command) == label.bytes()) {
+                    return run.color;
+                }
+            }
+            _ => {}
+        }
+    }
+    return null;
+}
+
+fn sameColor(c: Color?, hex: u32) -> bool => match (c) {
+    Some(v) => {
+        let want = Color.hex(hex);
+        v.r == want.r && v.g == want.g && v.b == want.b
+    }
+    null => false,
+};
+
+/// A frame of a checkbox and a button in the theme `dark`.
+fn themedFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, dark: bool) -> Result<void, TestFailure> {
+    ui.setDarkMode(dark);
+    ui.begin(mut platform);
+    ui.open(Style.column().id("page").w(Size.grow()).h(Size.grow()));
+    var on = false;
+    let _ = Controls.checkbox(mut ui, "sub", "Subscribe", mut on);
+    let _ = Controls.button(mut ui, "go", "Go");
+    ui.close();
+    let metrics = FixedAdvance { unused: 0 };
+    let ok = match (ui.endFrame(mut platform, metrics)) {
+        Ok() => true,
+        Err(_) => false,
+    };
+    return Check.isTrue(ok, "frame fits");
+}
+
+@test
+fn controlsTakeTheTheme() -> Result<void, TestFailure> {
+    var storage = Vector<u8>.create();
+    let _ = storage.resize(1048576, 0);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(800.0, 600.0, -1.0, -1.0);
+
+    themedFrame(mut ui, mut platform, true)?;
+    Check.isTrue(sameColor(inkOf(ui, "Subscribe"), SLATE_200), "dark: a checkbox's label is light")?;
+    Check.isTrue(sameColor(inkOf(ui, "Go"), SLATE_100), "dark: a button's label is light")?;
+    themedFrame(mut ui, mut platform, false)?;
+    Check.isTrue(sameColor(inkOf(ui, "Subscribe"), SLATE_800), "light: a checkbox's label is dark")?;
+    Check.isTrue(sameColor(inkOf(ui, "Go"), SLATE_900), "light: a button's label is dark")?;
+    Check.isTrue(ui.tone(BLUE_500) == BLUE_500 && ui.tone(SLATE_500) == SLATE_500, "blues and the middle slate stay")?;
+    return Ok();
+}
+
+/// One frame of a page as claywind-capi's examples lay it out: a heading row, a caption that wraps, a panel below.
+fn wrapFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform) -> Result<void, TestFailure> {
+    ui.begin(mut platform);
+    ui.open(Style.column().id("page").w(Size.grow()).h(Size.grow()).p(space(6.0)).gap(space(3.0)));
+    ui.open(Style.row().w(Size.grow()).gap(12.0).alignXY(AxisAlign.Start, AxisAlign.Center));
+    ui.label("ClayWind from Swift", Text.of().size(22.0).bold());
+    ui.close();
+    ui.label("Each frame is laid out by a Swift closure; ClayWind draws it.", Text.of().wrap(TextWrap.Words));
+    ui.open(Style.column().id("panel").w(Size.grow()).p(space(4.0)));
+    ui.label("Pressed 0 times", Text.of());
+    ui.close();
+    ui.close();
+    let metrics = FixedAdvance { unused: 0 };
+    let ok = match (ui.endFrame(mut platform, metrics)) {
+        Ok() => true,
+        Err(_) => false,
+    };
+    return Check.isTrue(ok, "frame fits");
+}
+
+/// The bottom of the lowest line of text whose first bytes are `start`.
+fn textBottom(ui: borrow Ui, start: StringView) -> f32 {
+    var bottom: f32 = 0.0;
+    var inside = false;
+    for (k in 0..ui.commandCount()) {
+        let command = ui.commandAt(k);
+        match (command) {
+            Command.Text(r, _) => {
+                let t = ui.textOf(command);
+                if (t.length >= start.length && t[0..start.length] == start.bytes()) {
+                    inside = true;
+                } else if (inside && t.length > 0 && t[0] == 'P') {
+                    inside = false;
+                }
+                if (inside) {
+                    bottom = bottom.max(r.y + r.h);
+                }
+            }
+            _ => {}
+        }
+    }
+    return bottom;
+}
+
+@test
+fn wrappedTextHasItsHeightOnTheFirstFrame() -> Result<void, TestFailure> {
+    var storage = Vector<u8>.create();
+    let _ = storage.resize(1048576, 0);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(520.0, 520.0, -1.0, -1.0);
+    wrapFrame(mut ui, mut platform)?;
+    let first = ui.boxOf("panel")!.y;
+    let bottom = textBottom(ui, "Each");
+    wrapFrame(mut ui, mut platform)?;
+    let second = ui.boxOf("panel")!.y;
+    Check.isTrue(first >= bottom, "the panel starts below the caption's last line on the first frame")?;
+    Check.isTrue(first == second, "and where it is on the next")?;
+    return Ok();
+}

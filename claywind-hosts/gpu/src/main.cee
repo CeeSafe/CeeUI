@@ -345,6 +345,7 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
         window.setCursor(windowCursor(platform.cursor));
         if (systemFonts.supplyFrame(mut gpu.raster, ui) > 0) {
             damage.invalidate(); // the same commands draw other glyphs now (the next frame lays them out)
+            ui.requestFrame();
         }
         let clear = Color.hex(pageBg(ui));
         let boxes = damage.plan(ui, gpu.raster, clear, width as usize, height as usize, scale);

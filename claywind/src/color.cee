@@ -288,3 +288,30 @@ public const NONE: u32 = 0x00000000;
 public const WHITE: u32 = 0xFFFFFFFF;
 public const BLACK: u32 = 0x000000FF;
 public const TRANSPARENT: u32 = 0x00000000;
+
+/// The slate opposite `c` on the scale (SLATE_100 and SLATE_900, ...; SLATE_500 is its own), for the light theme
+/// (Ui.tone); a colour that is not a slate is itself.
+public fn lightSlate(c: u32) -> u32 {
+    if (c == SLATE_50) {
+        return SLATE_950;
+    } else if (c == SLATE_100) {
+        return SLATE_900;
+    } else if (c == SLATE_200) {
+        return SLATE_800;
+    } else if (c == SLATE_300) {
+        return SLATE_700;
+    } else if (c == SLATE_400) {
+        return SLATE_600;
+    } else if (c == SLATE_600) {
+        return SLATE_400;
+    } else if (c == SLATE_700) {
+        return SLATE_300;
+    } else if (c == SLATE_800) {
+        return SLATE_200;
+    } else if (c == SLATE_900) {
+        return SLATE_100;
+    } else if (c == SLATE_950) {
+        return SLATE_50;
+    }
+    return c;
+}

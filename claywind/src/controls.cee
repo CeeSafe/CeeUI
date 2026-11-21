@@ -29,14 +29,16 @@ public struct Controls {
     public fn button(ui: borrow mut Ui, id: StringView, label: StringView) -> bool {
         let h = hashId(id);
         ui.open(
-            Style.box().idHash(h).px(space(4.0)).py(space(2.0)).bg(SLATE_700).rounded(Radius.Md).cursor(Cursor.Pointer)
-                .hover(Style.of().bg(SLATE_600)).active(Style.of().bg(SLATE_500)),
+            Style.box().idHash(h).px(space(4.0)).py(space(2.0)).bg(
+                ui.tone(SLATE_700),
+            ).rounded(Radius.Md).cursor(Cursor.Pointer)
+                .hover(Style.of().bg(ui.tone(SLATE_600))).active(Style.of().bg(ui.tone(SLATE_500))),
         );
         // A click: the pointer went down and came back up over the button, as a native button acts (a press dragged
         // off it does nothing, and a window the button opens is not sent behind by the release).
         let hit = ui.clickedHash(h);
         ui.access(h, AccessRole.Button, label.bytes());
-        ui.label(label, Text.of().color(SLATE_100));
+        ui.label(label, Text.of().color(ui.tone(SLATE_100)));
         ui.close();
         return hit;
     }
@@ -54,22 +56,29 @@ public struct Controls {
         }
         let node = ui.access(h, AccessRole.Checkbox, label.bytes());
         ui.accessFlag(node, ACCESS_CHECKED, value);
-        ui.open(Style.box().size(Size.fixed(18.0)).bg(if (value) BLUE_500 else SLATE_700).rounded(Radius.Sm).center()
-            .border(1.0, SLATE_500));
+        ui.open(
+            Style.box().size(Size.fixed(18.0)).bg(
+                if (value) BLUE_500 else ui.tone(SLATE_700),
+            ).rounded(Radius.Sm).center()
+                .border(1.0, ui.tone(SLATE_500)),
+        );
         if (value) {
             ui.open(Style.box().size(Size.fixed(14.0)).icon(ICON_CHECK, WHITE, 0.0));
             ui.close();
         }
         ui.close();
-        ui.label(label, Text.of().color(SLATE_200));
+        ui.label(label, Text.of().color(ui.tone(SLATE_200)));
         ui.close();
         return changed;
     }
 
     /// The text field's shared frame style (minH keeps it one line tall while empty).
-    fn fieldStyle(h: u32, focused: bool) -> Style => Style.box().idHash(h).w(Size.grow()).px(space(3.0)).py(space(2.0))
-        .minH(18.0 + 2.0 * space(2.0)).bg(SLATE_800).rounded(Radius.Md).cursor(Cursor.Text).isFocused(focused)
-        .border(1.0, SLATE_600).focus(Style.of().border(2.0, BLUE_400));
+    fn fieldStyle(ui: borrow Ui, h: u32, focused: bool) -> Style =>
+        Style.box().idHash(h).w(Size.grow()).px(space(3.0)).py(space(2.0))
+            .minH(
+                18.0 + 2.0 * space(2.0),
+            ).bg(ui.tone(SLATE_800)).rounded(Radius.Md).cursor(Cursor.Text).isFocused(focused)
+            .border(1.0, ui.tone(SLATE_600)).focus(Style.of().border(2.0, BLUE_400));
 
     /// ClayWind_TextInput: edits at the end (type, Backspace a grapheme cluster); Enter leaves the field.
     public fn textInput(ui: borrow mut Ui, id: StringView, buf: SliceMut<u8>, len: borrow mut usize) -> bool {
@@ -77,7 +86,7 @@ public struct Controls {
         ui.registerFocusable(h);
         let focused = ui.hasFocus(h);
         var changed = false;
-        ui.open(Controls.fieldStyle(h, focused));
+        ui.open(Controls.fieldStyle(ui, h, focused));
         if (ui.pressedOn(h)) {
             ui.setFocus(h);
         } else if (ui.hasFocus(h) && ui.releasedOutside(h)) {
@@ -109,11 +118,11 @@ public struct Controls {
         ui.accessCaret(node, len, len); // it edits at its end
         ui.open(Style.row().alignXY(AxisAlign.Start, AxisAlign.Center));
         if (len > 0) {
-            ui.labelBytes(buf[0..len], Text.of().color(SLATE_100));
+            ui.labelBytes(buf[0..len], Text.of().color(ui.tone(SLATE_100)));
         }
         // A blinking caret at the end (about 2 Hz) while focused.
         if (focused && (truncate<u64>((ui.time() * 2.0).floor()) & 1) == 0) {
-            ui.open(Style.box().w(Size.fixed(2.0)).h(Size.fixed(18.0)).bg(SLATE_200));
+            ui.open(Style.box().w(Size.fixed(2.0)).h(Size.fixed(18.0)).bg(ui.tone(SLATE_200)));
             ui.close();
         }
         ui.close();
@@ -132,8 +141,10 @@ public struct Controls {
         let h = hashId(id);
         let pop = subId(id, "pop", -1);
         var changed = false;
-        ui.open(Style.box().idHash(h).w(Size.grow()).px(space(3.0)).py(space(2.0)).bg(SLATE_800).rounded(Radius.Md)
-            .cursor(Cursor.Pointer).border(1.0, SLATE_600).hover(Style.of().bg(SLATE_700)));
+        ui.open(
+            Style.box().idHash(h).w(Size.grow()).px(space(3.0)).py(space(2.0)).bg(ui.tone(SLATE_800)).rounded(Radius.Md)
+                .cursor(Cursor.Pointer).border(1.0, ui.tone(SLATE_600)).hover(Style.of().bg(ui.tone(SLATE_700))),
+        );
         if (ui.pressedOn(h)) {
             open = !open;
         }
@@ -144,17 +155,20 @@ public struct Controls {
         ui.accessFlag(node, ACCESS_EXPANDED, open);
         ui.open(Style.row().w(Size.grow()).alignXY(AxisAlign.Start, AxisAlign.Center));
         if (selected < items.length) {
-            ui.label(items[selected], Text.of().color(SLATE_100));
+            ui.label(items[selected], Text.of().color(ui.tone(SLATE_100)));
         }
         ui.open(Style.box().w(Size.grow()));
         ui.close();
-        ui.open(Style.box().size(Size.fixed(14.0)).icon(ICON_CHEVRON_DOWN, SLATE_400, 0.0));
+        ui.open(Style.box().size(Size.fixed(14.0)).icon(ICON_CHEVRON_DOWN, ui.tone(SLATE_400), 0.0));
         ui.close();
         ui.close();
         if (open) {
             // A floating list below the trigger, layered above everything.
             ui.open(Style.box().idHash(pop).absolute().top(38.0).z(200).w(Size.fixed(200.0)).h(Size.fit()).maxH(220.0)
-                .bg(SLATE_900).rounded(Radius.Md).border(1.0, SLATE_600).scroll(ScrollAxis.Vertical).p(space(1.0)));
+                .bg(ui.tone(SLATE_900)).rounded(Radius.Md).border(
+                1.0,
+                ui.tone(SLATE_600),
+            ).scroll(ScrollAxis.Vertical).p(space(1.0)));
             ui.open(Style.column().w(Size.grow()).gap(space(1.0)));
             for (i in 0..items.length) {
                 let row = subId(id, "", truncate<i64>(i));
@@ -162,7 +176,7 @@ public struct Controls {
                 var style = Style.box().idHash(row).w(Size.grow()).px(space(3.0)).py(space(2.0)).rounded(Radius.Sm)
                     .cursor(Cursor.Pointer).bg(if (isSelected) BLUE_600 else NONE);
                 if (!isSelected) {
-                    style = style.hover(Style.of().bg(SLATE_700));
+                    style = style.hover(Style.of().bg(ui.tone(SLATE_700)));
                 }
                 ui.open(style);
                 if (ui.pressedOn(row)) {
@@ -172,7 +186,7 @@ public struct Controls {
                 }
                 let choice = ui.access(row, AccessRole.MenuItem, items[i].bytes());
                 ui.accessFlag(choice, ACCESS_SELECTED, isSelected);
-                ui.label(items[i], Text.of().color(SLATE_100));
+                ui.label(items[i], Text.of().color(ui.tone(SLATE_100)));
                 ui.close();
             }
             ui.close();
@@ -197,8 +211,10 @@ public struct Controls {
         let h = hashId(id);
         var changed = false;
         ui.open(
-            Style.box().idHash(h).w(Size.grow()).h(height).bg(SLATE_800).rounded(Radius.Md).scroll(ScrollAxis.Vertical)
-                .border(1.0, SLATE_600).p(space(1.0)),
+            Style.box().idHash(h).w(Size.grow()).h(height).bg(
+                ui.tone(SLATE_800),
+            ).rounded(Radius.Md).scroll(ScrollAxis.Vertical)
+                .border(1.0, ui.tone(SLATE_600)).p(space(1.0)),
         );
         ui.open(Style.column().w(Size.grow()).gap(space(1.0)));
         for (i in 0..items.length) {
@@ -207,7 +223,7 @@ public struct Controls {
             var style = Style.box().idHash(row).w(Size.grow()).px(space(3.0)).py(space(2.0)).rounded(Radius.Sm)
                 .cursor(Cursor.Pointer).bg(if (isSelected) BLUE_600 else NONE);
             if (!isSelected) {
-                style = style.hover(Style.of().bg(SLATE_700));
+                style = style.hover(Style.of().bg(ui.tone(SLATE_700)));
             }
             ui.open(style);
             if (ui.pressedOn(row)) {
@@ -216,7 +232,7 @@ public struct Controls {
             }
             let node = ui.access(row, AccessRole.ListItem, items[i].bytes());
             ui.accessFlag(node, ACCESS_SELECTED, i == selected);
-            ui.label(items[i], Text.of().color(if (isSelected) WHITE else SLATE_200));
+            ui.label(items[i], Text.of().color(if (isSelected) WHITE else ui.tone(SLATE_200)));
             ui.close();
         }
         ui.close();
@@ -235,8 +251,10 @@ public struct Controls {
         let h = hashId(id);
         var changed = false;
         ui.open(
-            Style.box().idHash(h).w(Size.grow()).h(height).bg(SLATE_800).rounded(Radius.Md).scroll(ScrollAxis.Vertical)
-                .border(1.0, SLATE_600).p(space(1.0)),
+            Style.box().idHash(h).w(Size.grow()).h(height).bg(
+                ui.tone(SLATE_800),
+            ).rounded(Radius.Md).scroll(ScrollAxis.Vertical)
+                .border(1.0, ui.tone(SLATE_600)).p(space(1.0)),
         );
         ui.open(Style.column().w(Size.grow()).gap(space(1.0)));
         for (i in 0..items.length) {
@@ -245,7 +263,7 @@ public struct Controls {
             var style = Style.box().idHash(row).w(Size.grow()).px(space(3.0)).py(space(2.0)).rounded(Radius.Sm)
                 .cursor(Cursor.Pointer).bg(if (on) BLUE_600 else NONE);
             if (!on) {
-                style = style.hover(Style.of().bg(SLATE_700));
+                style = style.hover(Style.of().bg(ui.tone(SLATE_700)));
             }
             ui.open(style);
             if (ui.pressedOn(row) && i < selected.length) {
@@ -255,7 +273,7 @@ public struct Controls {
             let nowOn = i < selected.length && selected[i];
             let node = ui.access(row, AccessRole.ListItem, items[i].bytes());
             ui.accessFlag(node, ACCESS_SELECTED, nowOn);
-            ui.label(items[i], Text.of().color(if (nowOn) WHITE else SLATE_200));
+            ui.label(items[i], Text.of().color(if (nowOn) WHITE else ui.tone(SLATE_200)));
             ui.close();
         }
         ui.close();
@@ -301,7 +319,7 @@ public struct Controls {
         ui.open(
             Style.box().idHash(h).w(
                 Size.fixed(width),
-            ).h(Size.fixed(16.0)).bg(SLATE_700).rounded(Radius.Xl).cursor(Cursor.Pointer),
+            ).h(Size.fixed(16.0)).bg(ui.tone(SLATE_700)).rounded(Radius.Xl).cursor(Cursor.Pointer),
         );
         let node = ui.access(h, AccessRole.Slider, id.bytes());
         ui.accessRange(node, min, max, value);
@@ -330,13 +348,13 @@ public struct Controls {
             }
             let node = ui.access(row, AccessRole.Radio, items[i].bytes());
             ui.accessFlag(node, ACCESS_CHECKED, i == selected);
-            ui.open(Style.box().size(Size.fixed(18.0)).rounded(Radius.Xl).center().border(2.0, SLATE_500));
+            ui.open(Style.box().size(Size.fixed(18.0)).rounded(Radius.Xl).center().border(2.0, ui.tone(SLATE_500)));
             if (i == selected) {
                 ui.open(Style.box().size(Size.fixed(8.0)).bg(BLUE_500).rounded(Radius.Xl));
                 ui.close();
             }
             ui.close();
-            ui.label(items[i], Text.of().color(SLATE_200));
+            ui.label(items[i], Text.of().color(ui.tone(SLATE_200)));
             ui.close();
         }
         ui.close();
@@ -352,9 +370,9 @@ public struct Controls {
             let tab = subId(id, "", truncate<i64>(i));
             let on = i == active;
             var style = Style.box().idHash(tab).px(space(3.0)).py(space(2.0)).roundedT(Radius.Md).cursor(Cursor.Pointer)
-                .bg(if (on) SLATE_700 else NONE);
+                .bg(if (on) ui.tone(SLATE_700) else NONE);
             if (!on) {
-                style = style.hover(Style.of().bg(SLATE_800));
+                style = style.hover(Style.of().bg(ui.tone(SLATE_800)));
             }
             ui.open(style);
             if (ui.pressedOn(tab)) {
@@ -363,7 +381,7 @@ public struct Controls {
             }
             let node = ui.access(tab, AccessRole.Tab, items[i].bytes());
             ui.accessFlag(node, ACCESS_SELECTED, i == active);
-            ui.label(items[i], Text.of().color(if (on) SLATE_100 else SLATE_400));
+            ui.label(items[i], Text.of().color(if (on) ui.tone(SLATE_100) else ui.tone(SLATE_400)));
             ui.close();
         }
         ui.close();
@@ -385,8 +403,10 @@ public struct Controls {
         }
         let h = hashId(id);
         var chosen: usize? = null;
-        ui.open(Style.box().idHash(h).fixed().left(x).top(y).z(300).bg(SLATE_900).p(space(1.0)).rounded(Radius.Md)
-            .border(1.0, SLATE_600));
+        ui.open(
+            Style.box().idHash(h).fixed().left(x).top(y).z(300).bg(ui.tone(SLATE_900)).p(space(1.0)).rounded(Radius.Md)
+                .border(1.0, ui.tone(SLATE_600)),
+        );
         ui.open(Style.column().w(Size.fixed(180.0)));
         for (i in 0..items.length) {
             let row = subId(id, "", truncate<i64>(i));
@@ -401,7 +421,7 @@ public struct Controls {
                 open = false;
             }
             ui.access(row, AccessRole.MenuItem, items[i].bytes());
-            ui.label(items[i], Text.of().color(SLATE_100));
+            ui.label(items[i], Text.of().color(ui.tone(SLATE_100)));
             ui.close();
         }
         ui.close();
@@ -419,8 +439,8 @@ public struct Controls {
         }
         let m = ui.pointer().position;
         ui.open(Style.box().id("cw-tip").fixed().left(m.x + 14.0).top(m.y + 16.0).z(400).px(space(2.0)).py(space(1.0))
-            .bg(SLATE_950).rounded(Radius.Sm).border(1.0, SLATE_600));
-        ui.label(text, Text.of().color(SLATE_100));
+            .bg(ui.tone(SLATE_950)).rounded(Radius.Sm).border(1.0, ui.tone(SLATE_600)));
+        ui.label(text, Text.of().color(ui.tone(SLATE_100)));
         ui.close();
     }
 
@@ -440,7 +460,9 @@ public struct Controls {
         let dec = subId(id, "dec", -1);
         let inc = subId(id, "inc", -1);
         ui.open(Style.row().idHash(h).gap(space(1.0)).alignXY(AxisAlign.Start, AxisAlign.Center).p(space(1.0))
-            .rounded(Radius.Md).isFocused(focused).border(1.0, SLATE_600).focus(Style.of().border(2.0, BLUE_400)));
+            .rounded(Radius.Md).isFocused(focused).border(1.0, ui.tone(SLATE_600)).focus(
+            Style.of().border(2.0, BLUE_400),
+        ));
         if (ui.pressedOn(h)) {
             ui.setFocus(h);
         }
@@ -459,8 +481,8 @@ public struct Controls {
         ui.open(
             Style.box().idHash(dec).size(
                 Size.fixed(22.0),
-            ).bg(SLATE_700).rounded(Radius.Sm).cursor(Cursor.Pointer).center()
-                .icon(ICON_MINUS, SLATE_100, 0.0).hover(Style.of().bg(SLATE_600)),
+            ).bg(ui.tone(SLATE_700)).rounded(Radius.Sm).cursor(Cursor.Pointer).center()
+                .icon(ICON_MINUS, ui.tone(SLATE_100), 0.0).hover(Style.of().bg(ui.tone(SLATE_600))),
         );
         if (ui.pressedOn(dec) && value - step >= min) {
             value -= step;
@@ -471,13 +493,13 @@ public struct Controls {
         var digits = [0u8; 24];
         var w = TextWriter.create(mut digits[..]);
         w.signed(value as i64);
-        ui.labelBytes(w.written(), Text.of().color(SLATE_100));
+        ui.labelBytes(w.written(), Text.of().color(ui.tone(SLATE_100)));
         ui.close();
         ui.open(
             Style.box().idHash(inc).size(
                 Size.fixed(22.0),
-            ).bg(SLATE_700).rounded(Radius.Sm).cursor(Cursor.Pointer).center()
-                .icon(ICON_PLUS, SLATE_100, 0.0).hover(Style.of().bg(SLATE_600)),
+            ).bg(ui.tone(SLATE_700)).rounded(Radius.Sm).cursor(Cursor.Pointer).center()
+                .icon(ICON_PLUS, ui.tone(SLATE_100), 0.0).hover(Style.of().bg(ui.tone(SLATE_600))),
         );
         if (ui.pressedOn(inc) && value + step <= max) {
             value += step;
@@ -515,7 +537,7 @@ public struct Controls {
         if (caret > len) {
             caret = len;
         }
-        ui.open(Controls.fieldStyle(h, focused));
+        ui.open(Controls.fieldStyle(ui, h, focused));
         let node = ui.access(h, AccessRole.TextField, id.bytes());
         ui.accessValue(node, buf[0..len]);
         ui.accessCaret(node, caret, caret);
@@ -568,7 +590,7 @@ public struct Controls {
             }
         }
         if (len > 0) {
-            ui.labelBytes(buf[0..len], Text.of().color(SLATE_100));
+            ui.labelBytes(buf[0..len], Text.of().color(ui.tone(SLATE_100)));
         }
         // The caret, absolutely placed at the measured width of buf[0..caret), past the padding.
         if (focused && (truncate<u64>((ui.time() * 2.0).floor()) & 1) == 0) {
@@ -576,7 +598,7 @@ public struct Controls {
             ui.open(
                 Style.box().absolute().passthrough().left(
                     space(3.0) + cx,
-                ).top(space(2.0)).w(Size.fixed(2.0)).h(Size.fixed(18.0)).bg(SLATE_200),
+                ).top(space(2.0)).w(Size.fixed(2.0)).h(Size.fixed(18.0)).bg(ui.tone(SLATE_200)),
             );
             ui.close();
         }

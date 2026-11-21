@@ -89,7 +89,7 @@ impl Controls {
         let lines = visibleLines(ui.scrollOffset(id).y, viewH, lineH, count, 4);
         let digits = if (count >= 100000) 6 else if (count >= 10000) 5 else if (count >= 1000) 4 else 3;
         let gutterW = round<f32>(digits) * (if (config.fontSize > 0.0) config.fontSize else 16.0) * 0.62 + 12.0;
-        ui.open(Style.column().id(id).w(Size.grow()).h(Size.grow()).scroll(ScrollAxis.Both).bg(SLATE_900));
+        ui.open(Style.column().id(id).w(Size.grow()).h(Size.grow()).scroll(ScrollAxis.Both).bg(ui.tone(SLATE_900)));
         // The lines above the view, as their height.
         ui.open(Style.box().w(Size.fixed(1.0)).h(Size.fixed(round<f32>(lines[0]) * lineH)));
         ui.close();
@@ -101,7 +101,7 @@ impl Controls {
                 var w = TextWriter.create(mut number[..]);
                 w.decimal((k + 1) as u64);
                 ui.open(Style.box().w(Size.fixed(gutterW)).pr(12.0).alignXY(AxisAlign.End, AxisAlign.Center));
-                ui.labelBytes(w.written(), line.color(SLATE_500));
+                ui.labelBytes(w.written(), line.color(ui.tone(SLATE_500)));
                 ui.close();
             }
             ui.labelBytes(lineOf(text, starts, count, k), line);
@@ -951,7 +951,7 @@ impl Controls {
         let blink = (truncate<u64>((ui.time() * 2.0).floor()) & 1) == 0;
         // Clipped both ways, so that no row's width can widen the view (wrapped rows fit it, and the view stays as
         // wide as its parent gives it).
-        ui.open(Style.column().id(id).w(Size.grow()).h(Size.grow()).scroll(ScrollAxis.Both).bg(SLATE_900));
+        ui.open(Style.column().id(id).w(Size.grow()).h(Size.grow()).scroll(ScrollAxis.Both).bg(ui.tone(SLATE_900)));
         let above = rowsBefore(rows[0..limit], start);
         ui.open(Style.box().w(Size.fixed(1.0)).h(Size.fixed(round<f32>(above) * lineH)));
         ui.close();
@@ -989,7 +989,7 @@ impl Controls {
                         var number = [0u8; 12];
                         var w = TextWriter.create(mut number[..]);
                         w.decimal((k + 1) as u64);
-                        ui.labelBytes(w.written(), line.color(SLATE_500));
+                        ui.labelBytes(w.written(), line.color(ui.tone(SLATE_500)));
                     }
                     ui.close();
                 }
@@ -1057,7 +1057,7 @@ impl Controls {
                     let u0 = styledCaretX(metrics, v, shownText, shownMarks, shownRtl, before);
                     let u1 = styledCaretX(metrics, v, shownText, shownMarks, shownRtl, before + n);
                     ui.open(Style.box().absolute().passthrough().left(u0.min(u1)).top(lineH - 2.0)
-                        .w(Size.fixed((u1 - u0).abs())).h(Size.fixed(1.0)).bg(SLATE_100));
+                        .w(Size.fixed((u1 - u0).abs())).h(Size.fixed(1.0)).bg(ui.tone(SLATE_100)));
                     ui.close();
                     caretAt = before + ui.compositionCaret().min(n);
                 }
@@ -1082,7 +1082,7 @@ impl Controls {
                     let x = styledCaretX(metrics, v, shownText, shownMarks, bidiParagraphRtl(shownText), caretAt);
                     if (blink || composing) {
                         ui.open(Style.box().absolute().passthrough().left(x).top(0.0).w(Size.fixed(2.0))
-                            .h(Size.fixed(lineH)).bg(SLATE_200));
+                            .h(Size.fixed(lineH)).bg(ui.tone(SLATE_200)));
                         ui.close();
                     }
                     match (box) {

@@ -737,6 +737,11 @@ public struct Ui<region r> {
     public fn isDarkMode(borrow this) -> bool => this.darkMode;
     public fn theme(borrow this, dark: u32, light: u32) -> u32 => if (this.darkMode) dark else light;
 
+    /// A control's colour in the theme: `dark`, a colour as the dark theme draws it, as it is in the dark theme, and
+    /// in the light one a slate turned over (50 and 950, 100 and 900, ... 400 and 600; 500 stays), so a surface that
+    /// was dark is light and its ink dark. Other colours (the blues, white) are the same in both.
+    public fn tone(borrow this, dark: u32) -> u32 => if (this.darkMode) dark else lightSlate(dark);
+
     /// @container: the size the element named `name` had on the previous frame (0 before its first layout).
     public fn containerSize(borrow this, name: StringView) -> Dims {
         return match (this.tree.boxOf(hashId(name))) {

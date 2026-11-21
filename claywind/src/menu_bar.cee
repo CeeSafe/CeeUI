@@ -159,7 +159,12 @@ impl Controls {
     public fn menuBar(ui: borrow mut Ui, id: StringView, model: borrow MenuModel, open: borrow mut usize) {
         let bar = hashId(id);
         let mac = ui.usesCommand();
-        ui.open(Style.row().idHash(bar).w(Size.grow()).px(space(2.0)).bg(SLATE_900).border(1.0, SLATE_700));
+        ui.open(
+            Style.row().idHash(bar).w(Size.grow()).px(space(2.0)).bg(ui.tone(SLATE_900)).border(
+                1.0,
+                ui.tone(SLATE_700),
+            ),
+        );
         var menuIndex: usize = 0;
         var pop: u32 = 0;
         var k: usize = 0;
@@ -172,7 +177,7 @@ impl Controls {
             let h = subId(id, "menu", truncate<i64>(menuIndex));
             let isOpen = (open & MENU_INDEX) == menuIndex;
             ui.open(Style.box().idHash(h).px(space(3.0)).py(space(1.0)).rounded(Radius.Sm).cursor(Cursor.Pointer)
-                .bg(if (isOpen) SLATE_700 else NONE).hover(Style.of().bg(SLATE_700)));
+                .bg(if (isOpen) ui.tone(SLATE_700) else NONE).hover(Style.of().bg(ui.tone(SLATE_700))));
             // As a system's menu bar: a press on a title opens its menu, or closes it if a press opened it; with a menu
             // open, moving over another title opens that one, and a press there keeps it open.
             if (ui.pressedOn(h)) {
@@ -182,19 +187,21 @@ impl Controls {
             }
             let title = ui.access(h, AccessRole.MenuItem, model.title(k));
             ui.accessFlag(title, ACCESS_EXPANDED, (open & MENU_INDEX) == menuIndex);
-            ui.labelBytes(model.title(k), Text.of().color(SLATE_100));
+            ui.labelBytes(model.title(k), Text.of().color(ui.tone(SLATE_100)));
             k += 1;
             if ((open & MENU_INDEX) == menuIndex) {
                 pop = subId(id, "pop", truncate<i64>(menuIndex));
-                ui.open(Style.column().idHash(pop).absolute().top(30.0).z(300).w(Size.fixed(240.0)).bg(SLATE_900)
-                    .rounded(Radius.Md).border(1.0, SLATE_600).p(space(1.0)));
+                ui.open(
+                    Style.column().idHash(pop).absolute().top(30.0).z(300).w(Size.fixed(240.0)).bg(ui.tone(SLATE_900))
+                        .rounded(Radius.Md).border(1.0, ui.tone(SLATE_600)).p(space(1.0)),
+                );
             }
             // The menu's items.
             while (k < model.count && model.parts[k].kind != MENU_TITLE) {
                 if ((open & MENU_INDEX) == menuIndex) {
                     let part = model.parts[k];
                     if (part.kind == MENU_SEPARATOR) {
-                        ui.open(Style.box().w(Size.grow()).h(Size.fixed(1.0)).my(space(1.0)).bg(SLATE_700));
+                        ui.open(Style.box().w(Size.grow()).h(Size.fixed(1.0)).my(space(1.0)).bg(ui.tone(SLATE_700)));
                         ui.close();
                     } else {
                         let row = subId(id, "item", truncate<i64>(k));
@@ -207,7 +214,7 @@ impl Controls {
                             open = 0;
                         }
                         ui.access(row, AccessRole.MenuItem, model.title(k));
-                        ui.labelBytes(model.title(k), Text.of().color(SLATE_100));
+                        ui.labelBytes(model.title(k), Text.of().color(ui.tone(SLATE_100)));
                         ui.open(Style.box().w(Size.grow()));
                         ui.close();
                         match (ui.bindingForHash(part.action)) {
@@ -215,7 +222,7 @@ impl Controls {
                                 var shortcut = [0u8; 48];
                                 var w = TextWriter.create(mut shortcut[..]);
                                 writeBinding(mut w, b, mac);
-                                ui.labelBytes(w.written(), Text.of().color(SLATE_400));
+                                ui.labelBytes(w.written(), Text.of().color(ui.tone(SLATE_400)));
                             }
                             null => {}
                         }

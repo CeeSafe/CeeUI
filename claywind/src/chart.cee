@@ -120,7 +120,7 @@ impl Controls {
         if (plot == null) {
             ui.requestFrame();
         }
-        let ink = Text.of().size(12.0).color(SLATE_400).wrap(TextWrap.None);
+        let ink = Text.of().size(12.0).color(ui.tone(SLATE_400)).wrap(TextWrap.None);
         // The label the pointer is nearest, over the plot.
         var hover: usize? = null;
         match (plot) {
@@ -179,7 +179,7 @@ impl Controls {
                 ui.path(
                     chartLayer(pw, ph),
                     path.bytes(),
-                    PathLook.stroke(Color.hex(SLATE_700), 1.0),
+                    PathLook.stroke(Color.hex(ui.tone(SLATE_700)), 1.0),
                 );
             }
             // The highlighted label's column, under the series.
@@ -190,7 +190,7 @@ impl Controls {
                     ui.path(
                         chartLayer(pw, ph),
                         path.bytes(),
-                        PathLook.fill(Color.hex(withAlpha(SLATE_500, 48))),
+                        PathLook.fill(Color.hex(withAlpha(ui.tone(SLATE_500), 48))),
                     );
                 }
                 null => {}
@@ -255,11 +255,11 @@ impl Controls {
                     let right = round<f32>(i) * slot + slot * 0.5 > pw * 0.5;
                     let tipX = if (right) (round<f32>(i) * slot - 8.0) else (round<f32>(i + 1) * slot + 8.0);
                     var tip = Style.column().absolute().top(4.0).px(space(2.0)).py(space(1.0)).gap(space(0.5)).bg(
-                        SLATE_900,
-                    ).rounded(Radius.Sm).border(1.0, SLATE_600).z(5).passthrough();
+                        ui.tone(SLATE_900),
+                    ).rounded(Radius.Sm).border(1.0, ui.tone(SLATE_600)).z(5).passthrough();
                     tip = if (right) tip.right(pw - tipX) else tip.left(tipX);
                     ui.open(tip);
-                    ui.label(labels[i], Text.of().size(12.0).color(SLATE_300).wrap(TextWrap.None));
+                    ui.label(labels[i], Text.of().size(12.0).color(ui.tone(SLATE_300)).wrap(TextWrap.None));
                     for (s in 0..series) {
                         ui.open(Style.row().gap(space(1.5)).alignXY(AxisAlign.Start, AxisAlign.Center));
                         ui.open(Style.box().size(Size.fixed(8.0)).rounded(Radius.Sm).bg(colors[s]));

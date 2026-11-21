@@ -57,7 +57,9 @@ fn main() -> i32 {
             return 1;
         }
         if (systemFonts.supplyFrame(mut raster, pane.ui) > 0) {
+            // The same commands draw other glyphs now; the next frame lays them out with the fonts' measures.
             pane.damage.invalidate();
+            pane.ui.requestFrame();
         }
         if (!pane.draw(
             mut raster,
