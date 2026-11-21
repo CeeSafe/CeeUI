@@ -484,4 +484,6 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   base, five states, five screens). Apple clang 21 and upstream clang 17 do not inline them (0.85 and 0.72 MB).
   Ways out: in CeeSafe, a way to keep a function out of line (an attribute, or never inlining a function that takes
   or returns an aggregate past some size); in ClayWind, a smaller `Style` (its state and screen variants out of
-  line). ClayWind's macOS and Windows budgets were raised for it on 2026-11-21.
+  line). ClayWind's macOS and Windows budgets were raised for it on 2026-11-21. The owner chose the CeeSafe fix: ADR
+  0199 (proposed on branch adr/0199-large-values-out-of-line) keeps out of line every function that takes or returns
+  a value over 1 KiB by value; applied by hand to 0.84.1's C on the runner, 583,801 bytes in 9 s.

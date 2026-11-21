@@ -40,3 +40,21 @@ compile new-reachable "$work/new-reachable"
 flags="$flags -fno-inline-functions"
 compile new-no-inlining "$work/new"
 flags="${flags% -fno-inline-functions}"
+# The newer one with the rule ADR 0199 proposes, applied by hand: every function that takes or returns a Style (5.7 KB)
+# by value kept out of line.
+cp -R "$work/new" "$work/new-out-of-line"
+python3 - "$work/new-out-of-line/main.c" <<'PY'
+import re, sys
+path = sys.argv[1]
+lines = open(path).read().split("\n")
+count = 0
+for k, line in enumerate(lines):
+    if line.startswith("static ") and line.rstrip().endswith("{") and "(" in line:
+        head, params = line.split("(", 1)
+        if "ceeT_8claywind_Style " in head or re.search(r"\bceeT_8claywind_Style v_", params):
+            lines[k] = "static __attribute__((noinline)) " + line[len("static "):]
+            count += 1
+open(path, "w").write("\n".join(lines))
+print(f"{count} functions kept out of line")
+PY
+compile new-out-of-line "$work/new-out-of-line"
