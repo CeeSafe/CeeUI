@@ -15,13 +15,20 @@ cd claywind-capi
 
 A host calls `claywind_run` with a frame function. ClayWind opens a window, and for each frame calls that function
 with a `claywind_frame`. The function lays out the whole window from the program's state: columns, rows, panels,
-labels, buttons and checkboxes. ClayWind then lays the frame out, draws it and waits for input.
+labels, buttons, checkboxes and text fields. ClayWind then lays the frame out, draws it and waits for input.
 
 The calls are recorded and replayed. ClayWind's `Ui` borrows its memory, and CeeSafe gives C no pointer to a value
 that holds loans. So the frame function's calls are recorded into a `Frame` of plain data (`src/frame.cee`), and
 ClayWind replays them into the `Ui` when the function returns. A consequence for the host is that a control's result
-arrives in the next frame. A button is true in the frame after it was pressed, and a checkbox's new state arrives
-the same way. ClayWind asks for that frame at once, so the delay is about one screen refresh.
+arrives in the next frame. A button is true in the frame after it was pressed, and a checkbox's new state and a text
+field's new text arrive the same way. ClayWind asks for that frame at once, and for one more after it, so what the host
+changed in answer shows even where the frame lays it out before the control (a count above its button). The delay
+is about one screen refresh.
+
+A text field's text stays in the host's buffer (`claywind_text_field`: the buffer, its capacity and the text's
+length). ClayWind keeps the caret and the selection, and a copy of the text it edits; when the user changes the text,
+the next call writes it into the buffer, cut at a character to fit, and returns true. A host may also change the
+buffer itself: the field then shows the host's text.
 `CEESAFE-FINDINGS.md` Q1 records the gap.
 
 ## Linking
@@ -37,8 +44,10 @@ A host:
 
 ## Status
 
-- Checked on macOS: the example builds, opens its window and draws it. `claywind-tests/tests/capi_test.cee` drives
-  recorded frames with a scripted platform: a button press and a checkbox's changes reach the host's next frame,
-  once.
+- Checked on macOS: the example builds, opens its window and draws it; with real mouse and key events, a click in
+  the name field put the caret at its end, typed text reached the C program's buffer and its greeting, and one click
+  on Add one after typing showed the new count. `claywind-tests/tests/capi_test.cee` drives recorded frames with a
+  scripted platform: a button press and a checkbox's changes reach the host's next frame, once; a field's typed text
+  reaches the host's buffer once, the host's own change stands, and text past the buffer is cut at a character.
 - Linux: `examples/build.sh` has a link line, but it has not been run. Windows: no build script yet.
-- Next: a text field; Swift, Kotlin and Rust bindings over this header; an iOS and Android host.
+- Next: Swift, Kotlin and Rust bindings over this header; an iOS and Android host.

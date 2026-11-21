@@ -4,7 +4,13 @@
 // ClayWind's Ui borrows its memory, and CeeSafe gives C no pointer to a value that holds loans (type-system.md §27.1,
 // N0281). So a host's frame function records its calls into a Frame, plain data C may point to, and when it returns
 // ClayWind replays them into the Ui. What the user did with a control in one frame (a button pressed, a checkbox
-// flipped) is what that control's call returns in the next; replay asks for that frame at once.
+// flipped, a text field edited) is what that control's call returns in the next; replay asks for that frame at once,
+// and for one more after it, so what the host changed in answer shows even where it laid that out before the control.
+//
+// A text field's text is the host's, in the host's buffer; what is being edited (the caret, the selection) is
+// ClayWind's, kept here by the field's id with a copy of the text the replay edits. When the user changed the text in
+// a replay, the host's next call takes the copy into its buffer; when the host changed its buffer itself, the copy
+// takes the host's text.
 
 import claywind;
 
@@ -21,10 +27,14 @@ const OP_BUTTON: u8 = 9;
 const OP_CHECKBOX: u8 = 10;
 const OP_SET_DARK: u8 = 11;
 const OP_REQUEST_FRAME: u8 = 12;
+const OP_TEXT_FIELD: u8 = 13;
 
 /// The most a frame records: calls, and bytes of text. Past either the rest of the frame is dropped.
 public const MAX_OPS: usize = 65536;
 public const MAX_BYTES: usize = 4194304;
+
+/// The most text a field holds, in bytes: a host's larger buffer is used up to this.
+public const MAX_FIELD_BYTES: usize = 65536;
 
 /// One recorded call: what it does, a number (a gap), a flag (a checkbox's state; the theme), and its text and id as
 /// ranges of the frame's bytes.
@@ -44,20 +54,36 @@ struct Outcome {
     value: bool;
 }
 
+/// A text field's editing, by its id's hash: the text the replay edits (as long as the host's buffer), its length, the
+/// caret and selection, and whether the frame being recorded has the field.
+struct Field {
+    id: u32;
+    text: Vector<u8>;
+    length: usize;
+    edit: TextEdit;
+    used: bool;
+}
+
 /// A frame as a host records it, and what the last replay's controls came to.
 public struct Frame {
     ops: Vector<Op>;
     bytes: Vector<u8>;
     outcomes: Vector<Outcome>;
+    fields: Vector<Field>;
     dark: bool;
     full: bool;
+    /// Whether a control's call returned what the user did, this frame: the host may have changed its state after
+    /// recording what shows it, so the replay asks for one more frame.
+    answered: bool;
 
     public fn create() -> Frame => Frame {
         ops: Vector<Op>.create(),
         bytes: Vector<u8>.create(),
         outcomes: Vector<Outcome>.create(),
+        fields: Vector<Field>.create(),
         dark: false,
         full: false,
+        answered: false,
     };
 }
 
@@ -67,7 +93,11 @@ impl Frame {
         this.ops.clear();
         this.bytes.clear();
         this.full = false;
+        this.answered = false;
         this.dark = dark;
+        for (k in 0..this.fields.length) {
+            this.fields[k].used = false;
+        }
     }
 
     /// How many calls the frame holds, and whether some were dropped for want of room.
@@ -146,7 +176,9 @@ impl Frame {
     /// A button; true when it was pressed in the last replay.
     public fn button(borrow mut this, id: Slice<u8>, label: Slice<u8>) -> bool {
         this.record(OP_BUTTON, 0.0, false, label, id);
-        return this.outcome(id) != null;
+        let pressed = this.outcome(id) != null;
+        this.answered = this.answered || pressed;
+        return pressed;
     }
 
     /// A checkbox over `value`; when it was flipped in the last replay, `value` takes the new state and the result is
@@ -161,7 +193,62 @@ impl Frame {
             null => {}
         }
         this.record(OP_CHECKBOX, 0.0, value, label, id);
+        this.answered = this.answered || changed;
         return changed;
+    }
+
+    /// A text field named `id` over the host's text, `buffer[0..length]`. When the user changed the text in the last
+    /// replay, `buffer` and `length` take the new text (cut at a character to fit the buffer) and the result is true;
+    /// otherwise the field shows the host's text. `name` is what a screen reader calls the field.
+    public fn textField(
+        borrow mut this,
+        id: Slice<u8>,
+        name: Slice<u8>,
+        buffer: SliceMut<u8>,
+        length: borrow mut usize,
+    ) -> bool {
+        let capacity = buffer.length.min(MAX_FIELD_BYTES);
+        let host = length.min(capacity);
+        let at = this.fieldOf(hashBytes(id), capacity);
+        let changed = this.outcome(id) != null;
+        let f = borrow mut this.fields[at];
+        if (changed) {
+            let n = fitting(f.text.view()[0..f.length], capacity);
+            for (k in 0..n) {
+                buffer[k] = f.text[k];
+            }
+            length = n;
+        } else if (f.text.view()[0..f.length] != buffer[0..host]) {
+            for (k in 0..host) {
+                f.text[k] = buffer[k];
+            }
+            f.length = host;
+            f.edit.caret = f.edit.caret.min(host);
+            f.edit.anchor = f.edit.anchor.min(host);
+        }
+        f.used = true;
+        this.record(OP_TEXT_FIELD, 0.0, false, name, id);
+        this.answered = this.answered || changed;
+        return changed;
+    }
+
+    /// The field with id hash `h`, its text room `capacity` bytes, made when the host first has it.
+    fn fieldOf(borrow mut this, h: u32, capacity: usize) -> usize {
+        for (k in 0..this.fields.length) {
+            if (this.fields[k].id == h) {
+                if (this.fields[k].text.length != capacity) {
+                    let _ = this.fields[k].text.resize(capacity, 0);
+                    let cut = this.fields[k].length.min(capacity);
+                    this.fields[k].length = cut;
+                    this.fields[k].edit = TextEdit.at(this.fields[k].edit.caret.min(cut));
+                }
+                return k;
+            }
+        }
+        var text = Vector<u8>.create();
+        let _ = text.resize(capacity, 0);
+        let _ = this.fields.push(Field { id: h, text: text, length: 0, edit: TextEdit.at(0), used: false });
+        return this.fields.length - 1;
     }
 
     public fn isDark(borrow this) -> bool => this.dark;
@@ -176,13 +263,36 @@ impl Frame {
     }
 }
 
+/// How many of `text`'s bytes fit in `room`, cut where a character starts.
+fn fitting(text: Slice<u8>, room: usize) -> usize {
+    if (text.length <= room) {
+        return text.length;
+    }
+    var n = room;
+    while (n > 0 && (text[n] & 0xC0) == 0x80) {
+        n -= 1;
+    }
+    return n;
+}
+
 /// `bytes` as UTF-8 text; empty when they are not.
 fn utf8(bytes: Slice<u8>) -> StringView => StringView.fromUtf8(bytes) ?? "";
 
 /// Replays `frame`'s calls into `ui`, keeping what its controls came to for the next frame's calls, and asking for
-/// that frame when one did something. What the host left open is closed; an end with nothing open is dropped.
-public fn replay(ui: borrow mut Ui, frame: borrow mut Frame) {
+/// that frame when one did something. What the host left open is closed; an end with nothing open is dropped. A text
+/// field is measured with `metrics`, the renderer's. The fields the host no longer has are forgotten.
+public fn replay<M: TextMetrics>(ui: borrow mut Ui, frame: borrow mut Frame, metrics: borrow M) {
     frame.outcomes.clear();
+    var kept: usize = 0;
+    for (k in 0..frame.fields.length) {
+        if (frame.fields[k].used) {
+            if (kept != k) {
+                frame.fields.swap(kept, k);
+            }
+            kept += 1;
+        }
+    }
+    frame.fields.truncate(kept);
     var open: usize = 0;
     for (k in 0..frame.ops.length) {
         let op = frame.ops[k];
@@ -222,6 +332,20 @@ public fn replay(ui: borrow mut Ui, frame: borrow mut Frame) {
             if (Controls.checkbox(mut ui, id, text, mut on)) {
                 let _ = frame.outcomes.push(Outcome { id: hashId(id), value: on });
             }
+        } else if (op.kind == OP_TEXT_FIELD) {
+            let h = hashId(id);
+            for (j in 0..frame.fields.length) {
+                if (frame.fields[j].id == h) {
+                    let f = borrow mut frame.fields[j];
+                    if (Controls.textField(mut ui, metrics, id, mut f.text.viewMut(), mut f.length, mut f.edit)) {
+                        let _ = frame.outcomes.push(Outcome { id: h, value: false });
+                    }
+                    if (text.length > 0) {
+                        ui.accessName(id, text);
+                    }
+                    break;
+                }
+            }
         } else if (op.kind == OP_SET_DARK) {
             ui.setDarkMode(op.flag);
         } else if (op.kind == OP_REQUEST_FRAME) {
@@ -232,7 +356,10 @@ public fn replay(ui: borrow mut Ui, frame: borrow mut Frame) {
         ui.close();
         open -= 1;
     }
-    if (frame.outcomes.length > 0) {
+    // A control that did something asks for the frame its call reports it in; a call that reported something asks
+    // for the frame after, which shows what the host did about it (a label recorded before the button that changes
+    // it).
+    if (frame.outcomes.length > 0 || frame.answered) {
         ui.requestFrame();
     }
 }

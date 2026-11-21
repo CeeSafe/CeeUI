@@ -19,8 +19,8 @@
  *
  * The model is immediate mode. ClayWind calls the frame function whenever the window needs a new frame (an input, an
  * animation, claywind_request_frame), and the function lays out the whole window from the program's state. A control's
- * call returns what the user did with it: true when a button was pressed, and a checkbox's new state. That result
- * arrives in the frame after the one the user acted in, which ClayWind runs at once.
+ * call returns what the user did with it: true when a button was pressed, a checkbox's new state, a text field's new
+ * text. That result arrives in the frame after the one the user acted in, which ClayWind runs at once.
  *
  * Text is UTF-8, given as a pointer and a length; the _s macros take a NUL-terminated string. ClayWind copies what it
  * is given: nothing passed in needs to outlive the call. A control's id names it among the frame's controls and must
@@ -46,7 +46,7 @@ extern "C" {
 #endif
 
 /* The API's version: major * 10000 + minor * 100 + patch; claywind_version() gives the library's. */
-#define CLAYWIND_VERSION 100
+#define CLAYWIND_VERSION 200
 
 /* What claywind_run returns. */
 #define CLAYWIND_CLOSED 0            /* the window was closed */
@@ -87,6 +87,13 @@ bool claywind_button(claywind_frame *frame, const uint8_t *id, size_t id_length,
 bool claywind_checkbox(claywind_frame *frame, const uint8_t *id, size_t id_length, const uint8_t *label,
                        size_t label_length, bool *value);
 
+/* A text field over the program's UTF-8 text: the first *length of capacity bytes at buffer. When the user changed the
+   text in the last frame, the buffer and *length take the new text (cut at a character to fit; no NUL is written) and
+   the call returns true; otherwise it shows the program's text, so the program may change the buffer itself. The
+   caret and selection are ClayWind's. `name` is what a screen reader calls the field. */
+bool claywind_text_field(claywind_frame *frame, const uint8_t *id, size_t id_length, const uint8_t *name,
+                         size_t name_length, uint8_t *buffer, size_t capacity, size_t *length);
+
 /* The window. */
 bool claywind_is_dark(claywind_frame *frame);
 void claywind_set_dark(claywind_frame *frame, bool dark);
@@ -100,6 +107,8 @@ void claywind_request_frame(claywind_frame *frame);
 #define claywind_heading_s(f, text) claywind_heading((f), CLAYWIND_S(text))
 #define claywind_button_s(f, id, label) claywind_button((f), CLAYWIND_S(id), CLAYWIND_S(label))
 #define claywind_checkbox_s(f, id, label, value) claywind_checkbox((f), CLAYWIND_S(id), CLAYWIND_S(label), (value))
+#define claywind_text_field_s(f, id, name, buffer, capacity, length) \
+    claywind_text_field((f), CLAYWIND_S(id), CLAYWIND_S(name), (buffer), (capacity), (length))
 
 #ifdef __cplusplus
 }

@@ -11,7 +11,7 @@ import claywind_desktop;
 import claywind_fonts;
 
 /// The API's version: major * 10000 + minor * 100 + patch.
-const API_VERSION: i32 = 100;
+const API_VERSION: i32 = 200;
 
 /// What claywind_run returns.
 const RUN_CLOSED: i32 = 0;
@@ -104,7 +104,7 @@ fn claywind_run(
         let dark = pane.ui.isDarkMode();
         pane.ui.open(Style.column().id("claywind-page").w(Size.grow()).h(Size.grow()).p(space(6.0)).gap(space(3.0))
             .bg(if (dark) SLATE_950 else SLATE_50).safe(pane.ui.safeArea()));
-        replay(mut pane.ui, mut recorded);
+        replay(mut pane.ui, mut recorded, raster);
         pane.ui.close();
         if (!pane.end(mut window, raster)) {
             return RUN_FRAME_TOO_LARGE;
@@ -197,6 +197,35 @@ fn claywind_checkbox(
     let changed = frameOf(frame).checkbox(bytesOf(id, idLength), bytesOf(label, labelLength), mut on);
     unsafe {
         value.write(on);
+    }
+    return changed;
+}
+
+/// A text field named `id` over the host's UTF-8 text, the first `*length` of `capacity` bytes at `buffer`. When the
+/// user changed the text in the last frame, the buffer and `*length` take the new text (cut at a character to fit;
+/// not NUL-terminated) and the call returns true. `name` is what a screen reader calls the field. A null buffer or
+/// length, or no capacity, draws no field.
+/// Safety: the API's contract (claywind.h) is that `buffer` names `capacity` writable bytes and `length` a size_t the
+/// host owns, for the call.
+@export
+fn claywind_text_field(
+    frame: *mut void,
+    id: *u8,
+    idLength: usize,
+    name: *u8,
+    nameLength: usize,
+    buffer: *mut u8,
+    capacity: usize,
+    length: *mut usize,
+) -> bool {
+    if (buffer.isNull() || length.isNull() || capacity == 0) {
+        return false;
+    }
+    let text = unsafe { SliceMut.fromRaw(buffer, capacity) };
+    var n = unsafe { length.read() };
+    let changed = frameOf(frame).textField(bytesOf(id, idLength), bytesOf(name, nameLength), text, mut n);
+    unsafe {
+        length.write(n);
     }
     return changed;
 }
