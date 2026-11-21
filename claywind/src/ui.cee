@@ -632,6 +632,11 @@ public struct Ui<region r> {
     public fn overHash(borrow this, id: u32) -> bool => this.tree.isPointerOver(id);
 
     public fn hasFocus(borrow this, id: u32) -> bool => this.focusedId != 0 && this.focusedId == id;
+
+    /// Controls: whether control `id` has the focus and was activated from the keyboard this frame, by Enter or Space,
+    /// as a native button, checkbox or radio button is.
+    public fn activatedByKey(borrow this, id: u32) -> bool =>
+        this.hasFocus(id) && (this.keyPressed(Key.Enter) || this.typed(32));
     public fn hasFocusNamed(borrow this, name: StringView) -> bool => this.hasFocus(hashId(name));
     public fn setFocus(borrow mut this, id: u32) {
         this.focusedId = id;

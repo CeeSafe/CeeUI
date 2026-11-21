@@ -192,10 +192,13 @@ fn controlsDrivenByAScriptedPlatform() -> Result<void, TestFailure> {
     step(mut ui, mut platform, mut app)?;
     Check.isTrue(!ui.hasFocusNamed("name"), "Enter clears focus")?;
 
-    // Tab cycling: the first Tab focuses the first registered focusable (the text field).
+    // Tab cycling: the first Tab focuses the first registered focusable (the Save button), the next the text field.
     press(mut platform, Key.Tab);
     step(mut ui, mut platform, mut app)?;
-    Check.isTrue(ui.hasFocusNamed("name"), "Tab focuses the first focusable control")?;
+    Check.isTrue(ui.hasFocusNamed("save"), "Tab focuses the first focusable control, the button")?;
+    press(mut platform, Key.Tab);
+    step(mut ui, mut platform, mut app)?;
+    Check.isTrue(ui.hasFocusNamed("name"), "Tab moves to the text field")?;
     press(mut platform, Key.Tab);
     step(mut ui, mut platform, mut app)?;
     Check.isTrue(ui.hasFocusNamed("qty"), "Tab moves to the next control (the spin input)")?;
@@ -563,5 +566,79 @@ fn wrappedTextHasItsHeightOnTheFirstFrame() -> Result<void, TestFailure> {
     let second = ui.boxOf("panel")!.y;
     Check.isTrue(first >= bottom, "the panel starts below the caption's last line on the first frame")?;
     Check.isTrue(first == second, "and where it is on the next")?;
+    return Ok();
+}
+
+/// The keyboard alone: a frame of a field, a button and a checkbox, with what the platform was given this frame.
+struct KeyApp {
+    text: [u8; 16];
+    length: usize;
+    edit: TextEdit;
+    presses: i32;
+    on: bool;
+}
+
+fn keyFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, app: borrow mut KeyApp) -> Result<void, TestFailure> {
+    ui.begin(mut platform);
+    ui.open(Style.column().id("page").w(Size.grow()).h(Size.grow()).gap(8.0));
+    let metrics = FixedAdvance { unused: 0 };
+    let _ = Controls.textField(mut ui, metrics, "name", mut app.text[..], mut app.length, mut app.edit);
+    if (Controls.button(mut ui, "go", "Go")) {
+        app.presses += 1;
+    }
+    let _ = Controls.checkbox(mut ui, "sub", "Subscribe", mut app.on);
+    ui.close();
+    let ok = match (ui.endFrame(mut platform, metrics)) {
+        Ok() => true,
+        Err(_) => false,
+    };
+    platform.pressed = 0;
+    platform.typedCount = 0;
+    platform.typedRead = 0;
+    platform.clock += 1.0 / 60.0;
+    return Check.isTrue(ok, "frame fits");
+}
+
+@test
+fn theKeyboardAloneReachesAndWorksEveryControl() -> Result<void, TestFailure> {
+    var storage = Vector<u8>.create();
+    let _ = storage.resize(1048576, 0);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(800.0, 600.0, -1.0, -1.0);
+    var app = KeyApp { text: [0u8; 16], length: 0, edit: TextEdit.at(0), presses: 0, on: false };
+    keyFrame(mut ui, mut platform, mut app)?;
+
+    // Tab from nothing focuses the field, then the button, then the checkbox, then the field again.
+    press(mut platform, Key.Tab);
+    keyFrame(mut ui, mut platform, mut app)?;
+    Check.isTrue(ui.hasFocusNamed("name"), "Tab focuses the field first")?;
+    press(mut platform, Key.Tab);
+    keyFrame(mut ui, mut platform, mut app)?;
+    Check.isTrue(ui.hasFocusNamed("go"), "then the button")?;
+
+    // Enter, then Space, press the focused button, once each.
+    press(mut platform, Key.Enter);
+    keyFrame(mut ui, mut platform, mut app)?;
+    Check.isTrue(app.presses == 1, "Enter presses the focused button")?;
+    typeChars(mut platform, " ");
+    keyFrame(mut ui, mut platform, mut app)?;
+    Check.isTrue(app.presses == 2, "and Space")?;
+    keyFrame(mut ui, mut platform, mut app)?;
+    Check.isTrue(app.presses == 2, "once each")?;
+
+    press(mut platform, Key.Tab);
+    keyFrame(mut ui, mut platform, mut app)?;
+    Check.isTrue(ui.hasFocusNamed("sub"), "Tab reaches the checkbox")?;
+    typeChars(mut platform, " ");
+    keyFrame(mut ui, mut platform, mut app)?;
+    Check.isTrue(app.on, "Space ticks the focused checkbox")?;
+    press(mut platform, Key.Enter);
+    keyFrame(mut ui, mut platform, mut app)?;
+    Check.isTrue(!app.on && app.presses == 2, "Enter unticks it, and presses no button")?;
+
+    press(mut platform, Key.Tab);
+    keyFrame(mut ui, mut platform, mut app)?;
+    Check.isTrue(ui.hasFocusNamed("name"), "and Tab comes round to the field")?;
     return Ok();
 }

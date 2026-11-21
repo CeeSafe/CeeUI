@@ -28,15 +28,18 @@ public struct Controls {
     /// ClayWind_Button: true on the frame it is clicked.
     public fn button(ui: borrow mut Ui, id: StringView, label: StringView) -> bool {
         let h = hashId(id);
+        ui.registerFocusable(h); // Tab reaches it, and Enter or Space presses it
+        let focused = ui.hasFocus(h);
         ui.open(
             Style.box().idHash(h).px(space(4.0)).py(space(2.0)).bg(
                 ui.tone(SLATE_700),
             ).rounded(Radius.Md).cursor(Cursor.Pointer)
-                .hover(Style.of().bg(ui.tone(SLATE_600))).active(Style.of().bg(ui.tone(SLATE_500))),
+                .hover(Style.of().bg(ui.tone(SLATE_600))).active(Style.of().bg(ui.tone(SLATE_500)))
+                .isFocused(focused).focus(Style.of().ring(2.0, BLUE_400, 2.0)),
         );
         // A click: the pointer went down and came back up over the button, as a native button acts (a press dragged
         // off it does nothing, and a window the button opens is not sent behind by the release).
-        let hit = ui.clickedHash(h);
+        let hit = ui.clickedHash(h) || ui.activatedByKey(h);
         ui.access(h, AccessRole.Button, label.bytes());
         ui.label(label, Text.of().color(ui.tone(SLATE_100)));
         ui.close();
@@ -47,10 +50,13 @@ public struct Controls {
     public fn checkbox(ui: borrow mut Ui, id: StringView, label: StringView, value: borrow mut bool) -> bool {
         let h = hashId(id);
         var changed = false;
+        ui.registerFocusable(h); // Tab reaches it, and Space or Enter flips it
+        let focused = ui.hasFocus(h);
         ui.open(
-            Style.row().idHash(h).gap(space(2.0)).alignXY(AxisAlign.Start, AxisAlign.Center).cursor(Cursor.Pointer),
+            Style.row().idHash(h).gap(space(2.0)).alignXY(AxisAlign.Start, AxisAlign.Center).cursor(Cursor.Pointer)
+                .rounded(Radius.Sm).isFocused(focused).focus(Style.of().ring(2.0, BLUE_400, 2.0)),
         );
-        if (ui.pressedOn(h)) {
+        if (ui.pressedOn(h) || ui.activatedByKey(h)) {
             value = !value;
             changed = true;
         }
@@ -336,13 +342,16 @@ public struct Controls {
         ui.open(Style.column().idHash(h).gap(space(2.0)));
         for (i in 0..items.length) {
             let row = subId(id, "", truncate<i64>(i));
+            ui.registerFocusable(row); // each option a Tab stop; Space or Enter selects it
+            let focused = ui.hasFocus(row);
             ui.open(
                 Style.row().idHash(row).gap(space(2.0)).alignXY(
                     AxisAlign.Start,
                     AxisAlign.Center,
-                ).cursor(Cursor.Pointer),
+                ).cursor(Cursor.Pointer).rounded(Radius.Sm).isFocused(focused)
+                    .focus(Style.of().ring(2.0, BLUE_400, 2.0)),
             );
-            if (ui.pressedOn(row)) {
+            if (ui.pressedOn(row) || ui.activatedByKey(row)) {
                 selected = i;
                 changed = true;
             }
