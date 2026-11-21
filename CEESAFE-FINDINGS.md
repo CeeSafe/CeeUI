@@ -466,7 +466,8 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
 - **Q2 (doc). `ceesafe_init(NULL)` is refused (`CEESAFE_INIT_SIZE`).** embed.h says so, but the obvious first call
   in a host fails silently unless its result is checked; tooling.md §8.3 and type-system.md §28.6 do not show a
   minimal config. claywind.h's example fills one (`.size = sizeof(ceesafe_config)`).
-- **Q3 (open). `ceesafec build --emit lib` makes an archive that cannot go into a shared library on Linux.** Its
+- **Q3 (fixed in 0.88.0, ADR 0202). `ceesafec build --emit lib` made an archive that could not go into a shared
+  library on Linux.** Its
   objects are compiled without `-fPIC`, and the runtime's thread-locals use the local-exec model: linking
   claywind_capi.a into the Kotlin binding's JNI library (`-shared`) fails with "relocation R_X86_64_TPOFF32 against
   `cee_budget_now' can not be used when making a shared object; recompile with -fPIC" (CI, Ubuntu 24.04, ceesafec
