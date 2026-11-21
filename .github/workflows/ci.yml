@@ -14,9 +14,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # The release ClayWind was last tested with and is formatted by. 0.78.0 or later: on Linux, 0.77's runtime left the
-  # browser host's input unread when its frames ran behind.
-  CEESAFE_VERSION: v0.78.0
+  # The release ClayWind was last tested with and is formatted by. 0.84.0 or later: claywind-pack passes --arch for
+  # each Android ABI (CeeSafe ADR 0192); on Linux, 0.77's runtime left the browser host's input unread when its frames
+  # ran behind.
+  CEESAFE_VERSION: v0.84.1
 
 defaults:
   run:
