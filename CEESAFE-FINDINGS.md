@@ -473,13 +473,15 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   0.84.1). A host loading CeeSafe through a shared object (JNI, a Python extension, a plugin) is the usual case for an
   embedded library. `--cflag -fPIC` works around it; a library build could compile position-independent code by
   default, or take a `--pic` flag documented in tooling.md beside `--emit lib`. macOS and Windows are unaffected.
-- **Q4 (open). Since 0.84, CI's macOS and Windows runners build ClayWind's hosts twice the size, in twice the time.**
-  The headless host, stripped: macOS 0.76 MB with 0.78.0, 1.78 MB with 0.84.1; Windows 1.06 to 2.24 MB; Linux 0.95
-  either way. Build time on macOS 16 s to 37 s. On a Mac with Apple clang 21 the same 0.84.1 makes it 0.99 MB in 23 s,
-  smaller than 0.78.0's 1.35 MB, at the same ClayWind commit, so it depends on the runner (its clang, or its core
-  count). Measured on CI (run 44886852410): the growth is code (macOS __TEXT 1.7 MB, Apple clang 17), mostly in the
-  functions that build many `Style` values (the demo's dashboard 236 KB against 97 KB with clang 21). The runner images
-  were the same as the last good run's, the generated C is the same as 0.78.0's (Controls.button identical, the new
-  CEE_POLLS and chunk lines compiled out) and so are the C flags; what is left is how clang 17 and the Windows runner's
-  LLVM compile 0.84's runtime header or build. ClayWind's macOS and Windows budgets were raised for it on 2026-11-21;
-  next: clang 17 locally, both versions' output compiled and compared.
+- **Q4 (found; the fix is open). Since 0.84, Apple clang 17 (CI's macOS) and the Windows runner's LLVM inline ClayWind's
+  `Style` builders, and the hosts double in size and build time.** The headless host, stripped: macOS 0.76 MB with
+  0.78.0, 1.78 MB with 0.84.1; Windows 1.06 to 2.24 MB; Linux 0.95 either way. tools/compare_codegen.sh, run on a
+  macOS runner (branch diag/q4, 2026-11-21), compiles the generated main.c alone: 0.78.0's 0.66 MB of code in 12 s,
+  0.84.1's 1.66 MB in 47 s, and 0.84.1's with -fno-inline-functions 0.49 MB in 3 s. The generated C is the same but
+  for one change: 0.84 no longer copies a returned value through a temporary (`t_1 = f(); t_2 = t_1;` is now
+  `t_2 = f();`), which is better code and makes each `Style` builder (Style.box, .of, .w, ...) small enough for Apple
+  clang 17's inliner, so each call site gets the builder's copies of a 5 KiB `Style` (a Decl and eleven Props: the
+  base, five states, five screens). Apple clang 21 and upstream clang 17 do not inline them (0.85 and 0.72 MB).
+  Ways out: in CeeSafe, a way to keep a function out of line (an attribute, or never inlining a function that takes
+  or returns an aggregate past some size); in ClayWind, a smaller `Style` (its state and screen variants out of
+  line). ClayWind's macOS and Windows budgets were raised for it on 2026-11-21.
