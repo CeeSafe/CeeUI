@@ -473,7 +473,7 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   0.84.1). A host loading CeeSafe through a shared object (JNI, a Python extension, a plugin) is the usual case for an
   embedded library. `--cflag -fPIC` works around it; a library build could compile position-independent code by
   default, or take a `--pic` flag documented in tooling.md beside `--emit lib`. macOS and Windows are unaffected.
-- **Q4 (found; the fix is open). Since 0.84, Apple clang 17 (CI's macOS) and the Windows runner's LLVM inline ClayWind's
+- **Q4 (fixed in 0.85.0, ADR 0199). Since 0.84, Apple clang 17 (CI's macOS) and the Windows runner's LLVM inline ClayWind's
   `Style` builders, and the hosts double in size and build time.** The headless host, stripped: macOS 0.76 MB with
   0.78.0, 1.78 MB with 0.84.1; Windows 1.06 to 2.24 MB; Linux 0.95 either way. tools/compare_codegen.sh, run on a
   macOS runner (branch diag/q4, 2026-11-21), compiles the generated main.c alone: 0.78.0's 0.66 MB of code in 12 s,
@@ -487,3 +487,6 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   line). ClayWind's macOS and Windows budgets were raised for it on 2026-11-21. The owner chose the CeeSafe fix: ADR
   0199 (proposed on branch adr/0199-large-values-out-of-line) keeps out of line every function that takes or returns
   a value over 1 KiB by value; applied by hand to 0.84.1's C on the runner, 583,801 bytes in 9 s.
+  Fixed: ceesafec 0.85.0 keeps every function that takes or returns more than 1 KiB by value out of line, and adds
+  `@outOfLine`. ClayWind's CI with it (run 44899965736): macOS 14.0 s, headless 0.69 MB, desktop 0.84 MB; Windows
+  16.9 s, 0.98 and 1.16 MB, below 0.78.0's numbers; the budgets are back to their old values.

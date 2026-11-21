@@ -1,9 +1,9 @@
 {
-  "_about": "tools/bench.py's budgets, by system: the most each number may be before CI fails. Set from GitHub's runners (macOS and Windows: run 44569611440; Linux: run 44600968881, 2026-11-19): times about twice what they measured, sizes and memory about a third more, since runners vary; idle_redraws and incremental_differs are correctness, with no headroom. A system with no entry only records its numbers. Lower a budget when the code gets faster; raise one only with the reason in the commit. macOS and Windows build_s, headless_mb and desktop_mb raised 2026-11-21 for ceesafec 0.84.1, whose builds on those runners are twice the size and time (run 44886852410: macOS 37 to 57 s, 1.78 and 1.93 MB; Windows 29 to 39 s, 2.24 and 2.43 MB), with the same rule; the cause is open (CEESAFE-FINDINGS.md Q4).",
+  "_about": "tools/bench.py's budgets, by system: the most each number may be before CI fails. Set from GitHub's runners (macOS and Windows: run 44569611440; Linux: run 44600968881, 2026-11-19): times about twice what they measured, sizes and memory about a third more, since runners vary; idle_redraws and incremental_differs are correctness, with no headroom. A system with no entry only records its numbers. Lower a budget when the code gets faster; raise one only with the reason in the commit. macOS and Windows build_s, headless_mb and desktop_mb were raised for ceesafec 0.84.1 on 2026-11-21 and set back the same day with 0.85.0 (ADR 0199, CEESAFE-FINDINGS.md Q4), which run 44899965736 measured at macOS 14.0 s, 0.69 and 0.84 MB, Windows 16.9 s, 0.98 and 1.16 MB.",
   "macos": {
-    "build_s": 75,
-    "headless_mb": 2.4,
-    "desktop_mb": 2.6,
+    "build_s": 25,
+    "headless_mb": 0.8,
+    "desktop_mb": 1.0,
     "frame_ms_dashboard_1x": 35,
     "frame_ms_dashboard_2x": 130,
     "frame_ms_effects_1x": 30,
@@ -25,9 +25,9 @@
     "incremental_differs": 0
   },
   "windows": {
-    "build_s": 60,
-    "headless_mb": 3.0,
-    "desktop_mb": 3.2,
+    "build_s": 35,
+    "headless_mb": 1.1,
+    "desktop_mb": 1.3,
     "frame_ms_dashboard_1x": 50,
     "frame_ms_dashboard_2x": 180,
     "frame_ms_effects_1x": 40,
