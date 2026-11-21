@@ -36,11 +36,13 @@ is newer than the package's.
 
 ## iOS
 
-`./build-ios-simulator.sh run` builds the counter for the iOS simulator and launches it on the booted one: the archive
-for `arm64-apple-ios17.0-simulator`, the module and the counter compiled with `swiftc`, an ad hoc signed `.app`.
-`ClayWind.run` starts the application (`ceesafe_window_start`, CeeSafe ADR 0200): the first call runs it and does not
-return, and the launched application runs `main.swift`'s top-level code again, where `run` goes on. So keep what comes
-before `run` to declarations. It needs ceesafec 0.86.0 or later.
+`./build-ios.sh simulator run` builds the counter for the iOS simulator and launches it on the booted one;
+`./build-ios.sh device run` builds it for an iPhone or iPad, signs it with the keychain's Apple Development identity
+and the newest provisioning profile for `org.claywind.swiftcounter` or a wildcard one (as claywind-pack signs), and
+installs and launches it on the connected device (`DEVICE` names another; `IDENTITY` and `PROFILE` override the
+choice). `ClayWind.run` starts the application (`ceesafe_window_start`, CeeSafe ADR 0200): the first call runs it and
+does not return, and the launched application runs `main.swift`'s top-level code again, where `run` goes on. So keep
+what comes before `run` to declarations. It needs ceesafec 0.86.0 or later.
 
 ## The API
 

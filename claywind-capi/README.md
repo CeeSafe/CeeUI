@@ -53,6 +53,6 @@ A host:
 - Swift: `bindings/swift`, a Swift package over this header with the example in Swift (its README).
 - Rust: `bindings/rust`, a crate over this header with the example in Rust (its README).
 - Kotlin: `bindings/kotlin`, JNI over this header with the example in Kotlin (its README).
-- iOS and Android: the Swift binding on the iOS simulator (`bindings/swift/build-ios-simulator.sh`) and the Kotlin
+- iOS and Android: the Swift binding on the iOS simulator (`bindings/swift/build-ios.sh`) and the Kotlin
   binding as an Android app (`bindings/kotlin/build-android.sh`), with CeeSafe 0.86.0's host windows (its ADR 0200).
 - Next: the bindings on an iPhone and an Android phone; Linux and Windows machines.

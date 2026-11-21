@@ -106,7 +106,7 @@ jobs:
           # On the Mac, the phones too (CeeSafe ADR 0200): the Swift counter for the iOS simulator, and the Kotlin
           # counter as an Android app, with the runner's Xcode and Android SDK.
           if [ "$(uname -s)" = Darwin ]; then
-            claywind-capi/bindings/swift/build-ios-simulator.sh
+            claywind-capi/bindings/swift/build-ios.sh simulator
             KOTLINC="$RUNNER_TEMP/kotlinc/bin/kotlinc" claywind-capi/bindings/kotlin/build-android.sh
           fi
 
