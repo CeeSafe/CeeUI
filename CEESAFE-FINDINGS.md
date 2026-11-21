@@ -477,4 +477,9 @@ The other gaps (I2–I8) still need CeeSafe's runtime.
   The headless host, stripped: macOS 0.76 MB with 0.78.0, 1.78 MB with 0.84.1; Windows 1.06 to 2.24 MB; Linux 0.95
   either way. Build time on macOS 16 s to 37 s. On a Mac with Apple clang 21 the same 0.84.1 makes it 0.99 MB in 23 s,
   smaller than 0.78.0's 1.35 MB, at the same ClayWind commit, so it depends on the runner (its clang, or its core
-  count). Being measured: ClayWind's CI prints the binary's segments.
+  count). Measured on CI (run 44886852410): the growth is code (macOS __TEXT 1.7 MB, Apple clang 17), mostly in the
+  functions that build many `Style` values (the demo's dashboard 236 KB against 97 KB with clang 21). The runner images
+  were the same as the last good run's, the generated C is the same as 0.78.0's (Controls.button identical, the new
+  CEE_POLLS and chunk lines compiled out) and so are the C flags; what is left is how clang 17 and the Windows runner's
+  LLVM compile 0.84's runtime header or build. ClayWind's macOS and Windows budgets were raised for it on 2026-11-21;
+  next: clang 17 locally, both versions' output compiled and compared.
