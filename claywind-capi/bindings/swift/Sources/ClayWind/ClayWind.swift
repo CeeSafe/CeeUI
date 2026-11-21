@@ -144,8 +144,13 @@ public enum ClayWind {
 
     /// Opens a window and runs it until it is closed, calling `frame` for each frame. Call it on the main thread. It
     /// starts CeeSafe's runtime the first time.
+    ///
+    /// On iOS the window lives in the application, which `run` starts (CeeSafe ADR 0200): the first call runs it and
+    /// does not return, and the launched application runs the program's top-level code again, where `run` goes on.
+    /// So what `main.swift` does before `run` happens twice on iOS: keep it to declarations.
     @discardableResult
     public static func run(title: String, width: Int32, height: Int32, frame: @escaping (Frame) -> Void) -> RunResult {
+        ceesafe_window_start()
         if !runtimeStarted {
             var config = ceesafe_config()
             config.size = UInt32(MemoryLayout<ceesafe_config>.size)

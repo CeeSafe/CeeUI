@@ -2,18 +2,29 @@
 // The C example (examples/counter.c) in Kotlin: a counter, a theme switch, a greeting typed into a text field and a
 // short list, laid out each frame from the program's state. build.sh builds and runs it.
 
+package org.claywind.counter
+
 import org.claywind.ClayWind
 import org.claywind.RunResult
 import kotlin.system.exitProcess
 
 fun main() {
+    val result = counter()
+    if (result != RunResult.Closed) {
+        System.err.println("counter: ClayWind stopped ($result)")
+        exitProcess(1)
+    }
+}
+
+/** The counter's window, until it is closed: the desktop's `main` runs it, and on Android the activity (android/). */
+fun counter(): RunResult {
     var count = 0
     var dark = true
     var name = "World"
     val done = booleanArrayOf(true, false, false)
     val tasks = listOf("Build claywind-capi", "Link it from C", "Call it from Kotlin")
 
-    val result = ClayWind.run("ClayWind from Kotlin", 520, 520) {
+    return ClayWind.run("ClayWind from Kotlin", 520, 520) {
         isDark = dark
         row(gap = 12f) {
             heading("ClayWind from Kotlin")
@@ -37,9 +48,5 @@ fun main() {
             label("Steps")
             tasks.forEachIndexed { k, task -> done[k] = checkbox("task-$k", task, done[k]) }
         }
-    }
-    if (result != RunResult.Closed) {
-        System.err.println("counter: ClayWind stopped ($result)")
-        exitProcess(1)
     }
 }

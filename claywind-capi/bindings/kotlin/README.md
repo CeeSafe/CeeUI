@@ -35,11 +35,26 @@ the JDK from `JAVA_HOME` (else `/usr/libexec/java_home`) and `kotlinc` from `KOT
 copy. The example runs as:
 
 ```sh
-java -XstartOnFirstThread --enable-native-access=ALL-UNNAMED -Djava.library.path=build -cp build/counter.jar CounterKt
+java -XstartOnFirstThread --enable-native-access=ALL-UNNAMED -Djava.library.path=build -cp build/counter.jar org.claywind.counter.CounterKt
 ```
 
 `-XstartOnFirstThread` is required on macOS: AppKit's window lives on the process's first thread, where the JVM
 otherwise does not run `main`.
+
+## Android
+
+`./build-android.sh` builds the counter as an APK for arm64-v8a (`build/android/ClayWindCounter.apk`), with the NDK
+and the Android SDK (`ANDROID_HOME`, else `~/Library/Android/sdk`):
+
+- claywind-capi's archive for Android, position-independent, and the JNI library over it (`libclaywind_jni.so`);
+- the app's activity, `android/CounterActivity.kt`, is a `NativeActivity` whose library is the JNI library. CeeSafe's
+  runtime calls that library's `main` on a thread of its own (CeeSafe ADR 0200), which calls the activity's
+  `fun claywindMain()`: the app's Kotlin, run there with its own classes. Android's views are not to be touched from
+  it; the app ends when it returns;
+- the Kotlin (the binding, the counter, the activity) compiled against `android.jar` and turned into dex with Kotlin's
+  standard library by `d8`, packed by `aapt2`, aligned and signed with the debug key.
+
+`adb install build/android/ClayWindCounter.apk` installs it. It needs ceesafec 0.86.0 or later.
 
 ## The API
 
@@ -58,6 +73,6 @@ otherwise does not run `main`.
 
 Checked on macOS 27 with JDK 25 and Android Studio's kotlinc, with real mouse and key events: typed text reached the
 Kotlin `String` and its greeting, Add one counted, a step's checkbox ticked, the Dark checkbox switched the theme, and
-closing the window ended the program. A field started with "Wörld 😀" kept both through an edit. Not checked: the
-exception path, Linux and Windows, and Android, where a ClayWind app is a CeeSafe program packed by claywind-pack
-rather than a Kotlin activity calling this library.
+closing the window ended the program. A field started with "Wörld 😀" kept both through an edit. On the Android
+emulator (API 37, arm64): taps counted on Add one, text typed with `adb shell input text` reached the Kotlin `String`
+and its greeting, a step ticked and Dark switched the theme. Not checked: the exception path, Windows, and a phone.

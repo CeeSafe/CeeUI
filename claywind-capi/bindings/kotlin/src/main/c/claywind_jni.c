@@ -10,6 +10,10 @@
 #include "ceesafe/embed.h"
 #include "claywind.h"
 
+#if defined(__ANDROID__)
+#include "ceesafe/android.h"
+#endif
+
 /* A byte array's contents for the length of a call; NULL with length 0 for a null array. */
 typedef struct bytes {
     JNIEnv *env;
@@ -201,3 +205,35 @@ JNIEXPORT void JNICALL Java_org_claywind_Native_requestFrame(JNIEnv *env, jclass
     (void)cls;
     claywind_request_frame(FRAME(f));
 }
+
+#if defined(__ANDROID__)
+/* Android (CeeSafe ADR 0200): this library is the app's NativeActivity's, and the runtime calls its `main` on a thread
+   of its own once the activity is made; the process ends when it returns. It calls the activity's `claywindMain()`,
+   the app's Kotlin, which runs ClayWind there: the activity's own class finds the app's classes, which a native
+   thread's FindClass would not. */
+int main(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
+    JavaVM *vm = ceesafe_android_vm();
+    jobject activity = ceesafe_android_activity();
+    JNIEnv *env = NULL;
+    if (vm == NULL || activity == NULL || (*vm)->AttachCurrentThread(vm, &env, NULL) != JNI_OK) {
+        return 1;
+    }
+    int code = 0;
+    jclass type = (*env)->GetObjectClass(env, activity);
+    jmethodID entry = (*env)->GetMethodID(env, type, "claywindMain", "()V");
+    if (entry == NULL) {
+        code = 1; /* the activity has no `fun claywindMain()`: NoSuchMethodError, printed below */
+    } else {
+        (*env)->CallVoidMethod(env, activity, entry);
+    }
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env);
+        (*env)->ExceptionClear(env);
+        code = 1;
+    }
+    (*vm)->DetachCurrentThread(vm);
+    return code;
+}
+#endif

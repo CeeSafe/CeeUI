@@ -14,10 +14,11 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # The release ClayWind was last tested with and is formatted by. 0.85.0 or later: functions passing a Style by value
-  # are kept out of line (CeeSafe ADR 0199, CEESAFE-FINDINGS.md Q4); 0.84.0: claywind-pack passes --arch for each
-  # Android ABI (ADR 0192); on Linux, 0.77's runtime left the browser host's input unread when its frames ran behind.
-  CEESAFE_VERSION: v0.85.0
+  # The release ClayWind was last tested with and is formatted by. 0.86.0 or later: the C API's bindings open windows
+  # on iOS and Android as host programs (CeeSafe ADR 0200); 0.85.0: functions passing a Style by value are kept out of
+  # line (ADR 0199, CEESAFE-FINDINGS.md Q4); 0.84.0: claywind-pack passes --arch for each Android ABI (ADR 0192); on
+  # Linux, 0.77's runtime left the browser host's input unread when its frames ran behind.
+  CEESAFE_VERSION: v0.86.0
 
 defaults:
   run:
@@ -102,6 +103,12 @@ jobs:
           # A shared library on Linux takes position-independent objects (CEESAFE-FINDINGS.md Q3).
           if [ "$(uname -s)" = Linux ]; then (cd claywind-capi && ceesafec build --cflag -fPIC); fi
           KOTLINC="$RUNNER_TEMP/kotlinc/bin/kotlinc" claywind-capi/bindings/kotlin/build.sh
+          # On the Mac, the phones too (CeeSafe ADR 0200): the Swift counter for the iOS simulator, and the Kotlin
+          # counter as an Android app, with the runner's Xcode and Android SDK.
+          if [ "$(uname -s)" = Darwin ]; then
+            claywind-capi/bindings/swift/build-ios-simulator.sh
+            KOTLINC="$RUNNER_TEMP/kotlinc/bin/kotlinc" claywind-capi/bindings/kotlin/build-android.sh
+          fi
 
       - name: Tests
         working-directory: claywind-tests

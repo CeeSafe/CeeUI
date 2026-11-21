@@ -34,6 +34,14 @@ swift build
 Without `MACOSX_DEPLOYMENT_TARGET` the archive is built for the Mac's own macOS version, and the linker warns that it
 is newer than the package's.
 
+## iOS
+
+`./build-ios-simulator.sh run` builds the counter for the iOS simulator and launches it on the booted one: the archive
+for `arm64-apple-ios17.0-simulator`, the module and the counter compiled with `swiftc`, an ad hoc signed `.app`.
+`ClayWind.run` starts the application (`ceesafe_window_start`, CeeSafe ADR 0200): the first call runs it and does not
+return, and the launched application runs `main.swift`'s top-level code again, where `run` goes on. So keep what comes
+before `run` to declarations. It needs ceesafec 0.86.0 or later.
+
 ## The API
 
 - `ClayWind.run(title:width:height:frame:)` opens a window and runs it until it is closed (`RunResult`). It starts
@@ -47,4 +55,6 @@ is newer than the package's.
 ## Status
 
 Checked on macOS 27 with real mouse and key events: typed text reached the Swift `String` and its greeting, Add one
-counted, and the Dark checkbox switched the theme. Linux and Windows are not set up; Kotlin and Rust come next.
+counted, and the Dark checkbox switched the theme. On the iOS 26 simulator (iPhone 17 Pro) the counter is laid out
+inside the safe area; its input has not been driven there (no Simulator app on the machine checked), so taps and the
+soft keyboard are for a device. Not checked on an iPhone yet.

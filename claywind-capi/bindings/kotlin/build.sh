@@ -41,5 +41,5 @@ echo "built $library and $out/counter.jar"
 if [ "${1:-}" = "run" ]; then
     # shellcheck disable=SC2086 # empty off macOS
     exec "$java_home/bin/java" $first_thread --enable-native-access=ALL-UNNAMED \
-        -Djava.library.path="$out" -cp "$out/counter.jar" CounterKt
+        -Djava.library.path="$out" -cp "$out/counter.jar" org.claywind.counter.CounterKt
 fi
