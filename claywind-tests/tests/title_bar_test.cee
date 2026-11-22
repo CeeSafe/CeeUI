@@ -8,9 +8,16 @@ fn barFrame(
     ui: borrow mut Ui,
     platform: borrow mut FakePlatform,
     systemButtons: Rect,
+) -> Result<TitleBarPress, TestFailure> => barFrameMaximized(mut ui, mut platform, systemButtons, false);
+
+fn barFrameMaximized(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    systemButtons: Rect,
+    maximized: bool,
 ) -> Result<TitleBarPress, TestFailure> {
     ui.begin(mut platform);
-    let press = TitleBar.drawWith(mut ui, "Title", false, systemButtons);
+    let press = TitleBar.drawWith(mut ui, "Title", maximized, systemButtons);
     let metrics = FixedAdvance { unused: 0 };
     let ok = match (ui.endFrame(mut platform, metrics)) {
         Ok() => true,
@@ -22,8 +29,8 @@ fn barFrame(
 
 @test
 fn theBarHasItsOwnButtonsWhereTheSystemHasNone() -> Result<void, TestFailure> {
-    var storage = [0u8; 1048576];
-    let memory = FixedBufferAllocator.over(mut storage);
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
     var ui = Ui.create(memory, UiCapacity.of(64))!;
     var platform = platformAt(600.0, 400.0, -1.0, -1.0);
     barFrame(mut ui, mut platform, Rect.zero())?;
@@ -37,8 +44,8 @@ fn theBarHasItsOwnButtonsWhereTheSystemHasNone() -> Result<void, TestFailure> {
 
 @test
 fn besideTheSystemsButtonsTheBarLeavesThemClearAndDrawsNone() -> Result<void, TestFailure> {
-    var storage = [0u8; 1048576];
-    let memory = FixedBufferAllocator.over(mut storage);
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
     var ui = Ui.create(memory, UiCapacity.of(64))!;
     var platform = platformAt(600.0, 400.0, -1.0, -1.0);
     let lights = Rect { x: 0.0, y: 0.0, w: 82.0, h: 36.0 };
@@ -57,4 +64,25 @@ fn besideTheSystemsButtonsTheBarLeavesThemClearAndDrawsNone() -> Result<void, Te
     Check.isTrue(l.minimize.w == 0.0 && l.maximize.w == 0.0 && l.close.w == 0.0, "no buttons of its own")?;
     let clear = ui.boxOf("titleBar~system")!;
     return Check.isTrue(clear.x == 0.0 && clear.w == 82.0, "the system's area left clear");
+}
+
+@test
+fn restoreIsPressedAtItsMiddleOverItsGlyph() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(600.0, 400.0, -1.0, -1.0);
+    barFrameMaximized(mut ui, mut platform, Rect.zero(), true)?;
+    let r = TitleBar.layout(ui)!.maximize;
+    // The middle, where the Restore glyph's squares float over the button.
+    platform.pointerState.position = Vec2 { x: r.x + r.w / 2.0, y: r.y + r.h / 2.0 };
+    barFrameMaximized(mut ui, mut platform, Rect.zero(), true)?;
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    barFrameMaximized(mut ui, mut platform, Rect.zero(), true)?;
+    platform.pointerState.pressed = false;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    let press = barFrameMaximized(mut ui, mut platform, Rect.zero(), true)?;
+    return Check.isTrue(press.maximize, "Restore pressed");
 }
