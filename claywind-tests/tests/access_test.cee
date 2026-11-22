@@ -178,3 +178,32 @@ fn aScreenReadersActionsReachTheControls() -> Result<void, TestFailure> {
     accessStep(mut ui, mut platform, mut app)?;
     return Check.isTrue(app.fruit == 1 && app.page == 1, "the radio and the tab are chosen");
 }
+
+/// The keys reach the tabs (CeeSafe ADR 0207's step 2 found them out of reach, so a screen reader that follows the
+/// focus never heard "tab 1 of 2"): the open tab is a Tab stop, the focus on it is reported, and Right opens the next
+/// one, which takes the focus.
+@test
+fn tabsAreReachedByTheKeysAndReportTheirFocus() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(800.0, 600.0, -1.0, -1.0);
+    var app = newAccessApp();
+    accessStep(mut ui, mut platform, mut app)?;
+    var steps = 0;
+    while (!nodeNamed(ui, "One")?.has(ACCESS_FOCUSED) && steps < 12) {
+        platform.pressed = 1u64 << (keyIndex(Key.Tab) as u64);
+        accessStep(mut ui, mut platform, mut app)?;
+        platform.pressed = 0;
+        accessStep(mut ui, mut platform, mut app)?;
+        steps += 1;
+    }
+    Check.isTrue(nodeNamed(ui, "One")?.has(ACCESS_FOCUSED), "Tab reaches the open tab")?;
+    platform.pressed = 1u64 << (keyIndex(Key.Right) as u64);
+    accessStep(mut ui, mut platform, mut app)?;
+    platform.pressed = 0;
+    accessStep(mut ui, mut platform, mut app)?;
+    Check.isTrue(app.page == 1, "Right opens the next tab")?;
+    let two = nodeNamed(ui, "Two")?;
+    return Check.isTrue(two.has(ACCESS_FOCUSED) && two.has(ACCESS_SELECTED), "which has the focus");
+}

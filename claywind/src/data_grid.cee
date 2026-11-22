@@ -63,6 +63,7 @@ impl Controls {
         selected: borrow mut (usize?),
     ) -> DataGrid {
         let h = hashId(id);
+        ui.registerFocusable(h); // a Tab stop: the arrows, Page Up and Down, Home and End choose its row
         let headId = subId(id, "head", -1);
         let columns = titles.length.min(widths.length).min(GRID_COLUMNS);
         let rowH = rowHeight.max(1.0);
@@ -174,6 +175,8 @@ impl Controls {
         // A table to a screen reader (CeeSafe ADR 0207): the titles' row, then every row, the ones not drawn too.
         let table = ui.access(tableId, AccessRole.Table, "".bytes());
         ui.accessSize(table, truncate<u32>(count + 1), truncate<u32>(columns));
+        // With the focus, the chosen row is what a screen reader is on; with none chosen, the table.
+        ui.accessFlag(table, ACCESS_FOCUSED, focused && selected == null);
         ui.open(
             Style.row().idHash(headId).w(Size.grow()).h(
                 Size.fixed(rowH),
@@ -256,6 +259,7 @@ impl Controls {
         ui.open(style);
         let node = ui.access(row, AccessRole.Row, name.bytes());
         ui.accessFlag(node, ACCESS_SELECTED, on);
+        ui.accessFlag(node, ACCESS_FOCUSED, on && ui.hasFocus(grid.key));
         ui.accessPlace(node, truncate<u32>(i + 2), 0); // under the titles' row
         return on;
     }

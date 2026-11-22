@@ -218,17 +218,29 @@ public struct Controls {
         height: SizingAxis,
     ) -> bool {
         let h = hashId(id);
+        ui.registerFocusable(h); // a Tab stop: Up and Down choose the row
+        let focused = ui.hasFocus(h);
         var changed = false;
+        if (focused && items.length > 0) {
+            if (ui.keyHit(Key.Down) && selected + 1 < items.length) {
+                selected += 1;
+                changed = true;
+            } else if (ui.keyHit(Key.Up) && selected > 0 && selected <= items.length) {
+                selected -= 1;
+                changed = true;
+            }
+        }
         ui.open(
             Style.box().idHash(h).w(Size.grow()).h(height).bg(
                 ui.tone(SLATE_800),
             ).rounded(Radius.Md).scroll(ScrollAxis.Vertical)
-                .border(1.0, ui.tone(SLATE_600)).p(space(1.0)),
+                .border(1.0, if (focused) BLUE_500 else ui.tone(SLATE_600)).p(space(1.0)),
         );
         // The rows are a list's items to a screen reader: "3 of 12" (CeeSafe ADR 0207).
         let list = subId(id, "list", 0);
         ui.open(Style.column().idHash(list).w(Size.grow()).gap(space(1.0)));
-        let _ = ui.access(list, AccessRole.List, "".bytes());
+        let listNode = ui.access(list, AccessRole.List, "".bytes());
+        ui.accessFlag(listNode, ACCESS_FOCUSED, focused && selected >= items.length);
         for (i in 0..items.length) {
             let row = subId(id, "", truncate<i64>(i));
             let isSelected = i == selected;
@@ -241,9 +253,11 @@ public struct Controls {
             if (ui.pressedOn(row)) {
                 selected = i;
                 changed = true;
+                ui.setFocus(h);
             }
             let node = ui.access(row, AccessRole.ListItem, items[i].bytes());
             ui.accessFlag(node, ACCESS_SELECTED, i == selected);
+            ui.accessFlag(node, ACCESS_FOCUSED, focused && i == selected); // what a screen reader is on
             ui.label(items[i], Text.of().color(if (isSelected) WHITE else ui.tone(SLATE_200)));
             ui.close();
         }
@@ -275,13 +289,16 @@ public struct Controls {
         for (i in 0..items.length) {
             let row = subId(id, "", truncate<i64>(i));
             let on = i < selected.length && selected[i];
+            ui.registerFocusable(row); // each row a Tab stop, as a checkbox is; Space or Enter flips it
             var style = Style.box().idHash(row).w(Size.grow()).px(space(3.0)).py(space(2.0)).rounded(Radius.Sm)
-                .cursor(Cursor.Pointer).bg(if (on) BLUE_600 else NONE);
+                .cursor(Cursor.Pointer).bg(if (on) BLUE_600 else NONE).isFocused(ui.hasFocus(row)).focus(
+                Style.of().ring(2.0, BLUE_400, 2.0),
+            );
             if (!on) {
                 style = style.hover(Style.of().bg(ui.tone(SLATE_700)));
             }
             ui.open(style);
-            if (ui.pressedOn(row) && i < selected.length) {
+            if ((ui.pressedOn(row) || ui.activatedByKey(row)) && i < selected.length) {
                 selected[i] = !selected[i];
                 changed = true;
             }
@@ -385,11 +402,26 @@ public struct Controls {
         var changed = false;
         ui.open(Style.row().idHash(h).gap(space(1.0)));
         let _ = ui.access(h, AccessRole.TabList, "".bytes()); // "tab 2 of 4" (CeeSafe ADR 0207)
+        // The open tab is the bar's Tab stop; with the focus on it, Left and Right open the one beside it.
+        let n = items.length;
+        if (n > 0 && active < n && ui.hasFocus(subId(id, "", truncate<i64>(active)))) {
+            let step = if (ui.keyHit(Key.Right)) 1 else if (ui.keyHit(Key.Left)) n - 1 else 0;
+            if (step != 0) {
+                active = (active + step) % n;
+                changed = true;
+                ui.setFocus(subId(id, "", truncate<i64>(active)));
+            }
+        }
         for (i in 0..items.length) {
             let tab = subId(id, "", truncate<i64>(i));
             let on = i == active;
+            if (on) {
+                ui.registerFocusable(tab);
+            }
             var style = Style.box().idHash(tab).px(space(3.0)).py(space(2.0)).roundedT(Radius.Md).cursor(Cursor.Pointer)
-                .bg(if (on) ui.tone(SLATE_700) else NONE);
+                .bg(if (on) ui.tone(SLATE_700) else NONE).isFocused(ui.hasFocus(tab)).focus(
+                Style.of().ring(2.0, BLUE_400, 2.0),
+            );
             if (!on) {
                 style = style.hover(Style.of().bg(ui.tone(SLATE_800)));
             }
@@ -397,6 +429,7 @@ public struct Controls {
             if (ui.pressedOn(tab)) {
                 active = i;
                 changed = true;
+                ui.setFocus(tab);
             }
             let node = ui.access(tab, AccessRole.Tab, items[i].bytes());
             ui.accessFlag(node, ACCESS_SELECTED, i == active);
