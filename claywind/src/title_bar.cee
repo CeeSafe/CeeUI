@@ -116,10 +116,14 @@ public struct TitleBar {
             // Over the button, they let the pointer through to it (passthrough), or a click at the button's middle
             // would land on them and press nothing.
             ui.open(Style.box().size(Size.fixed(12.0)));
-            ui.open(Style.box().absolute().passthrough().z(TITLE_BAR_Z + 1).top(0.0).left(3.0).size(Size.fixed(9.0)).borderSides(
-                BorderWidth { left: 0.0, right: 1.25, top: 1.25, bottom: 0.0, betweenChildren: 0.0 },
-                ink,
-            ));
+            ui.open(
+                Style.box().absolute().passthrough().z(TITLE_BAR_Z + 1).top(0.0).left(3.0).size(
+                    Size.fixed(9.0),
+                ).borderSides(
+                    BorderWidth { left: 0.0, right: 1.25, top: 1.25, bottom: 0.0, betweenChildren: 0.0 },
+                    ink,
+                ),
+            );
             ui.close();
             ui.open(
                 Style.box().absolute().passthrough().z(TITLE_BAR_Z + 1).top(3.0).left(0.0).size(Size.fixed(9.0)).border(
