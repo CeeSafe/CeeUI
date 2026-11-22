@@ -284,7 +284,8 @@ fn sizeOneParent(l: borrow mut LayoutTree, parent: usize, xAxis: bool) {
     let parentPadding =
         if (xAxis) layout.padding.left + layout.padding.right else layout.padding.top + layout.padding.bottom;
     let sizingAlongAxis = (xAxis && layout.isRow()) || (!xAxis && !layout.isRow());
-    let clipsThisAxis = (xAxis && p.decl.clip.horizontal) || (!xAxis && p.decl.clip.vertical);
+    // A scroll panel lets its children overflow it on its scrolling axes; one that only hides overflow does not.
+    let clipsThisAxis = !p.decl.clip.hides && ((xAxis && p.decl.clip.horizontal) || (!xAxis && p.decl.clip.vertical));
     var innerContentSize: f32 = 0.0;
     var totalPaddingAndChildGaps = parentPadding;
     var growContainerCount: usize = 0;

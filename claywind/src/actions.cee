@@ -165,6 +165,9 @@ fn builtinCommand(action: u32) -> EditCommand? {
     if (action == hashId("redo")) {
         return EditCommand.Redo;
     }
+    if (action == hashId("delete")) {
+        return EditCommand.Delete;
+    }
     return null;
 }
 

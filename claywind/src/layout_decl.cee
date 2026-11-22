@@ -263,8 +263,11 @@ public struct Clip {
     public horizontal: bool;
     public vertical: bool;
     public childOffset: Vec2;
+    /// Overflow hidden only (`Style.clip`): the children's drawing is cut at the edges, but this is no scroll panel,
+    /// so a child that grows fills it, as in CSS, and does not grow past it to its content.
+    public hides: bool;
 
-    public fn none() -> Clip => Clip { horizontal: false, vertical: false, childOffset: Vec2.zero() };
+    public fn none() -> Clip => Clip { horizontal: false, vertical: false, childOffset: Vec2.zero(), hides: false };
     public fn any(this) -> bool => this.horizontal || this.vertical;
 }
 

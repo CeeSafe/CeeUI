@@ -200,6 +200,7 @@ fn configure(d: borrow mut Decl, key: Slice<u8>, v: Slice<u8>) {
             horizontal: field(v, 0) != 0.0,
             vertical: field(v, 1) != 0.0,
             childOffset: Vec2 { x: field(v, 2), y: field(v, 3) },
+            hides: false,
         };
     } else if (same(key, "fl")) {
         d.floating.attachTo = if (field(v, 0) == 3.0) AttachTo.Root else AttachTo.Parent;

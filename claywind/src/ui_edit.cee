@@ -49,6 +49,8 @@ public enum EditCommand {
     /// Undo the last edit, and Redo it again (a text editor's history).
     Undo,
     Redo,
+    /// Remove the selection, as Cut does but without the clipboard (an edit menu's Delete).
+    Delete,
 }
 
 fn commandBit(c: EditCommand) -> u32 => match (c) {
@@ -58,9 +60,19 @@ fn commandBit(c: EditCommand) -> u32 => match (c) {
     EditCommand.SelectAll => 8,
     EditCommand.Undo => 16,
     EditCommand.Redo => 32,
+    EditCommand.Delete => 64,
 };
 
 impl<region r> Ui<r> {
+    /// Hosts: whether the system clipboard has text now. A host reads it when a menu that offers Paste may open (a
+    /// secondary press), not each frame: on some systems reading the clipboard asks another program for it.
+    public fn setClipboardHasText(borrow mut this, has: bool) {
+        this.clipboardText = has;
+    }
+
+    /// Whether the system clipboard had text when the host last looked (`setClipboardHasText`).
+    public fn clipboardHasText(borrow this) -> bool => this.clipboardText;
+
     /// Hosts: the user gave editing command `c` this frame (the focused text field acts on it).
     public fn editCommand(borrow mut this, c: EditCommand) {
         this.commands |= commandBit(c);

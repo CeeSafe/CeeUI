@@ -186,6 +186,10 @@ public struct DemoApp {
     radioSel: usize;
     filesChecked: [bool; 6];
     ctxOpen: bool;
+    /// The editor's own menu (Cut, Copy, Paste, Delete, Select All), on a secondary press over it, and whether its
+    /// text had a selection then.
+    editMenuOpen: bool;
+    editorSelects: bool;
     ctxX: f32;
     ctxY: f32;
     controlsTab: usize;
@@ -265,6 +269,8 @@ public struct DemoApp {
         radioSel: 0,
         filesChecked: [false; 6],
         ctxOpen: false,
+        editMenuOpen: false,
+        editorSelects: false,
         ctxX: 0.0,
         ctxY: 0.0,
         controlsTab: 0,
@@ -606,6 +612,7 @@ public fn demoFrameWith<M: TextMetrics, J: DemoJobs>(
         Some(act) => { app.clicks += (truncate<i32>(act)) + 1; }
         null => {}
     }
+    let _ = Controls.editMenu(mut ui, "editMenu", mut app.editMenuOpen, app.ctxX, app.ctxY, app.editorSelects);
     ui.close();
     if (app.drawsMenuBar) {
         ui.close();
@@ -634,7 +641,16 @@ fn update(ui: borrow mut Ui, app: borrow mut DemoApp) {
     }
     let p = ui.pointer();
     if (p.secondaryPressed) {
-        app.ctxOpen = true;
+        // Over the editor, its own menu, and the editor takes the focus, so the choice acts on it; elsewhere the
+        // demo's.
+        if (app.activeNav == NAV_EDITOR && ui.hovered("editor")) {
+            app.editMenuOpen = true;
+            app.ctxOpen = false;
+            ui.setFocus(hashId("editor"));
+        } else {
+            app.ctxOpen = true;
+            app.editMenuOpen = false;
+        }
         app.ctxX = p.position.x;
         app.ctxY = p.position.y;
     }
@@ -1668,6 +1684,7 @@ fn editorPage<M: TextMetrics>(ui: borrow mut Ui, app: borrow mut DemoApp, metric
     let looks = [plain, plain.bold().color(WHITE), plain.font(FONT_MONO).color(AMBER_400), plain.color(SKY_400)];
     ui.open(Style.column().w(Size.grow()).h(Size.grow()).rounded(Radius.Md).clip());
     let _ = Controls.richEditor(mut ui, metrics, "editor", mut doc, plain, looks[..], true);
+    app.editorSelects = doc.edit.selects(); // for its menu's Cut, Copy and Delete
     ui.close();
     ui.close();
     app.editorTyping = doc.typing;

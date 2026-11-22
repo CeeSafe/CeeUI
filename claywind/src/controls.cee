@@ -407,6 +407,21 @@ public struct Controls {
         x: f32,
         y: f32,
     ) -> usize? {
+        let all = [true; 1];
+        return Controls.contextMenuWith(mut ui, id, items, all[0..0], mut open, x, y);
+    }
+
+    /// `contextMenu` with items that can be disabled: item i is enabled when `enabled` has no i-th entry or it is
+    /// true. A disabled item is drawn dimmed, takes no hover, cannot be chosen, and says so to a screen reader.
+    public fn contextMenuWith(
+        ui: borrow mut Ui,
+        id: StringView,
+        items: Slice<StringView>,
+        enabled: Slice<bool>,
+        open: borrow mut bool,
+        x: f32,
+        y: f32,
+    ) -> usize? {
         if (!open) {
             return null;
         }
@@ -419,18 +434,16 @@ public struct Controls {
         ui.open(Style.column().w(Size.fixed(180.0)));
         for (i in 0..items.length) {
             let row = subId(id, "", truncate<i64>(i));
-            ui.open(
-                Style.box().idHash(row).w(
-                    Size.grow(),
-                ).px(space(3.0)).py(space(2.0)).rounded(Radius.Sm).cursor(Cursor.Pointer)
-                    .hover(Style.of().bg(BLUE_600)),
-            );
-            if (ui.pressedOn(row)) {
+            let on = i >= enabled.length || enabled[i];
+            let look = Style.box().idHash(row).w(Size.grow()).px(space(3.0)).py(space(2.0)).rounded(Radius.Sm);
+            ui.open(if (on) look.cursor(Cursor.Pointer).hover(Style.of().bg(BLUE_600)) else look);
+            if (on && ui.pressedOn(row)) {
                 chosen = i;
                 open = false;
             }
-            ui.access(row, AccessRole.MenuItem, items[i].bytes());
-            ui.label(items[i], Text.of().color(ui.tone(SLATE_100)));
+            let node = ui.access(row, AccessRole.MenuItem, items[i].bytes());
+            ui.accessFlag(node, ACCESS_DISABLED, !on);
+            ui.label(items[i], Text.of().color(ui.tone(if (on) SLATE_100 else SLATE_500)));
             ui.close();
         }
         ui.close();
@@ -439,6 +452,30 @@ public struct Controls {
             open = false;
         }
         return chosen;
+    }
+
+    /// A text editor's or field's menu, on a secondary press over it: Cut, Copy, Paste, Delete and Select All. Cut,
+    /// Copy and Delete are enabled with a selection (`selects`), Paste when the clipboard had text when the host last
+    /// looked (`Ui.clipboardHasText`); a choice runs the action its shortcut does ("cut", "copy", "paste", "delete",
+    /// "select-all"), which the focused editor or field acts on the next frame. Whether something was chosen.
+    public fn editMenu(
+        ui: borrow mut Ui,
+        id: StringView,
+        open: borrow mut bool,
+        x: f32,
+        y: f32,
+        selects: bool,
+    ) -> bool {
+        let items = ["Cut", "Copy", "Paste", "Delete", "Select All"];
+        let actions = ["cut", "copy", "paste", "delete", "select-all"];
+        let enabled = [selects, selects, ui.clipboardHasText(), selects, true];
+        match (Controls.contextMenuWith(mut ui, id, items[..], enabled[..], mut open, x, y)) {
+            Some(i) => {
+                ui.dispatch(actions[i]);
+                return true;
+            }
+            null => { return false; }
+        }
     }
 
     /// ClayWind_Tooltip: a floating tip beside the pointer while `targetId` is hovered.

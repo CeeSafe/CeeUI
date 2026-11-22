@@ -142,6 +142,12 @@ public struct Pane<region r> {
             safe.top += TITLE_BAR_HEIGHT;
         }
         this.platform.setSafeArea(safe);
+        // A secondary press may open an edit menu, whose Paste is enabled by whether the clipboard has text: read it
+        // then, not each frame (on Wayland and X11 it is asked of the program that holds it).
+        if (this.platform.pointerState.secondaryPressed) {
+            var text = String.create();
+            this.ui.setClipboardHasText(window.clipboardText(mut text) && text.view().length > 0);
+        }
         this.platform.setKeyboardInset(window.keyboardInset());
         return closed;
     }

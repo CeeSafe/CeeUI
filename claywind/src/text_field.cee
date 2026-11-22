@@ -333,6 +333,10 @@ impl Controls {
                     changed = replaceSelection(buf, mut len, mut edit, none[0..0]) || changed;
                 }
             }
+            if (ui.commanded(EditCommand.Delete) && edit.selects()) {
+                let none = [0u8; 1];
+                changed = replaceSelection(buf, mut len, mut edit, none[0..0]) || changed;
+            }
             if (ui.commanded(EditCommand.Paste)) {
                 var pasted = [0u8; 1024];
                 let text = ui.pastedText();

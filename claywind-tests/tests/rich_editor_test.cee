@@ -254,3 +254,84 @@ fn aRichEditorPlacesTheCaretByItsRuns() -> Result<void, TestFailure> {
     editKeyRich(mut ui, mut platform, mut doc, Key.Right)?;
     return Check.equalU64(0, doc.typing as u64);
 }
+
+/// A frame of an editor 300 by 100 over `buf`'s first `len` bytes, whose scroll offset it returns.
+fn scrollFrame(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    buf: borrow mut [u8; 1024],
+    len: usize,
+) -> Result<f32, TestFailure> {
+    let metrics = SizeAdvance { unused: 0 };
+    var starts = [0u32; 64];
+    var rows = [0u16; 64];
+    var history = [0u8; 512];
+    ui.begin(mut platform);
+    ui.open(Style.column().w(Size.fixed(300.0)).h(Size.fixed(100.0)));
+    let look = Text.of().size(14.0).leading(20.0);
+    let looks = [look];
+    var d = TextDocument.over(mut buf[..], len, mut starts[..], mut rows[..], mut history[..]);
+    // In a clipping column, as the demo's editor is (for its rounded corners).
+    ui.open(Style.column().w(Size.grow()).h(Size.grow()).rounded(Radius.Md).clip());
+    let _ = Controls.richEditor(mut ui, metrics, "ed", mut d, look, looks[..], false);
+    ui.close();
+    ui.close();
+    let ok = match (ui.endFrame(mut platform, metrics)) {
+        Ok() => true,
+        Err(_) => false,
+    };
+    Check.isTrue(ok, "the frame fits")?;
+    platform.pointerState.wheel = Vec2.zero();
+    return Ok(ui.scrollOffset("ed").y);
+}
+
+@test
+fn theWheelScrollsALongDocument() -> Result<void, TestFailure> {
+    var storage = heap(4194304);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var platform = platformAt(400.0, 300.0, 50.0, 50.0);
+    var buf = [0u8; 1024];
+    var len: usize = 0;
+    for (k in 0..40) {
+        buf[len] = 'a' + truncate<u8>(k % 26);
+        buf[len + 1] = '\n';
+        len += 2;
+    }
+    for (f in 0..3) {
+        let _ = scrollFrame(mut ui, mut platform, mut buf, len)?;
+    }
+    platform.pointerState.wheel = Vec2 { x: 0.0, y: -3.0 };
+    let _ = scrollFrame(mut ui, mut platform, mut buf, len)?;
+    let after = scrollFrame(mut ui, mut platform, mut buf, len)?;
+    return Check.isTrue(after < 0.0, "three notches down scroll a 40-line document in a 100-point editor");
+}
+
+@test
+fn aDragInTheEditorSelectsRatherThanScrolls() -> Result<void, TestFailure> {
+    var storage = heap(4194304);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var platform = platformAt(400.0, 300.0, 50.0, 30.0);
+    var buf = [0u8; 1024];
+    var len: usize = 0;
+    for (k in 0..40) {
+        buf[len] = 'a' + truncate<u8>(k % 26);
+        buf[len + 1] = '\n';
+        len += 2;
+    }
+    for (f in 0..3) {
+        let _ = scrollFrame(mut ui, mut platform, mut buf, len)?;
+    }
+    // Press, then drag 60 points down over three frames: a mouse's drag in a text view selects (Style.noDragScroll).
+    platform.pointerState.down = true;
+    platform.pointerState.pressed = true;
+    let _ = scrollFrame(mut ui, mut platform, mut buf, len)?;
+    platform.pointerState.pressed = false;
+    for (step in 1..4) {
+        platform.pointerState.position = Vec2 { x: 50.0, y: 30.0 + round<f32>(step) * 20.0 };
+        let _ = scrollFrame(mut ui, mut platform, mut buf, len)?;
+    }
+    let offset = scrollFrame(mut ui, mut platform, mut buf, len)?;
+    return Check.isTrue(offset == 0.0, "a drag in the editor did not scroll it");
+}

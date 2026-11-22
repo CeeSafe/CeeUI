@@ -651,7 +651,7 @@ public struct LayoutTree<region r> {
             background: node.decl.background,
             radius: node.decl.cornerRadius.topLeft,
             children: node.childCount,
-            scrolls: node.decl.clip.horizontal || node.decl.clip.vertical,
+            scrolls: !node.decl.clip.hides && (node.decl.clip.horizontal || node.decl.clip.vertical),
             floating: node.decl.floating.isFloating(),
             fontSize: if (node.isText) node.text.fontSize else 0.0,
             text: [0u8; 48],

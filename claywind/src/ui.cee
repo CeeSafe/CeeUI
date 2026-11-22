@@ -65,6 +65,8 @@ struct ScrollState {
     horizontal: bool;
     vertical: bool;
     openThisFrame: bool;
+    /// A mouse drag does not scroll it (`Style.noDragScroll`: a drag in a text view selects).
+    noDrag: bool;
 }
 
 /// How much a `Ui` holds.
@@ -92,6 +94,10 @@ public struct Ui<region r> {
     pointerState: Pointer;
     frameDt: f32;
     cursorWanted: Cursor;
+    /// The scroll panel whose scroll bar's thumb the pointer is dragging (0 for none), and where on the thumb it took
+    /// hold, from its top.
+    thumbDrag: u32;
+    thumbGrab: f32;
     darkMode: bool;
     screen: Dims;
     safe: Insets;
@@ -112,6 +118,8 @@ public struct Ui<region r> {
     // Text editing with the host (ui_edit.cee): this frame's edit commands, text pasted and copied, the input
     // method's composition, and the focused text field's caret.
     commands: u32;
+    /// Whether the system clipboard has text, as the host last found (an edit menu enables Paste by it).
+    clipboardText: bool;
     pasted: SliceMut<r, u8>;
     pastedLength: usize;
     copied: SliceMut<r, u8>;
@@ -200,6 +208,7 @@ public struct Ui<region r> {
             horizontal: false,
             vertical: false,
             openThisFrame: false,
+            noDrag: false,
         };
         let scrolls = memory.allocArray(capacity.scrollContainers, empty)?;
         let pressed = memory.allocArray(capacity.layout.elements, 0u32)?;
@@ -227,6 +236,8 @@ public struct Ui<region r> {
             pointerState: Pointer.at(Vec2 { x: -1.0, y: -1.0 }),
             frameDt: 0.0,
             cursorWanted: Cursor.Default,
+            thumbDrag: 0,
+            thumbGrab: 0.0,
             darkMode: false,
             screen: Dims { w: 0.0, h: 0.0 },
             safe: Insets.zero(),
@@ -242,6 +253,7 @@ public struct Ui<region r> {
             anchor: 0.0,
             focusables: FixedList<u32>.over(focusables),
             commands: 0,
+            clipboardText: false,
             pasted: pasted,
             pastedLength: 0,
             copied: copied,
@@ -471,10 +483,14 @@ public struct Ui<region r> {
             }
             null => {}
         }
-        if (decl.clip.any() && style.props.scroll != null) {
-            decl.clip.childOffset = this.scrollOffsetFor(id, decl.clip);
+        let scrolls = decl.clip.any() && style.props.scroll != null;
+        if (scrolls) {
+            decl.clip.childOffset = this.scrollOffsetFor(id, decl.clip, style.props.noDragScroll);
         }
         this.tree.open(style.elementId, decl);
+        if (scrolls) {
+            this.scrollBar(id); // its first child, floating over it
+        }
         if (enabled && hovered) {
             match (style.props.cursor) {
                 Some(c) => { this.cursorWanted = c; }
@@ -796,6 +812,30 @@ public struct Ui<region r> {
         }
     }
 
+    /// Scrolls panel `name` as little as brings its content's rows from `top` to `bottom` (points from the content's
+    /// top) into sight; when they are taller than the panel, their top. Not clamped to the content now, which may
+    /// have grown this frame (a line typed): the next frame clamps it to the content then laid out.
+    public fn scrollIntoView(borrow mut this, name: StringView, top: f32, bottom: f32) {
+        match (this.scrollSlot(hashId(name))) {
+            Some(k) => {
+                let s = this.scrolls.items[k];
+                let shownTop = -s.position.y;
+                var wanted = shownTop;
+                if (bottom > shownTop + s.size.h) {
+                    wanted = bottom - s.size.h;
+                }
+                if (top < wanted) {
+                    wanted = top;
+                }
+                if (wanted != shownTop) {
+                    this.scrolls.items[k].position.y = -wanted.max(0.0);
+                    this.requestFrame();
+                }
+            }
+            null => {}
+        }
+    }
+
     /// ScrollContainerTop.
     public fn scrollToTop(borrow mut this, name: StringView) {
         match (this.scrollSlot(hashId(name))) {
@@ -815,6 +855,50 @@ public struct Ui<region r> {
         }
     }
 
+    /// A scroll panel's vertical scroll bar, while its content is taller than it: a thumb along its right edge, as long
+    /// as the share of the content shown and as far down as it is scrolled, from the last frame's layout. Dragging the
+    /// thumb scrolls the panel; it floats over the content (z 50: under menus, popups and a title bar).
+    fn scrollBar(borrow mut this, id: u32) {
+        let k = match (this.scrollSlot(id)) {
+            Some(k) => k,
+            null => { return; }
+        };
+        let s = this.scrolls.items[k];
+        let range = s.content.h - s.size.h;
+        let track = s.area.h;
+        if (!s.vertical || range <= 0.5 || track < 24.0) {
+            if (this.thumbDrag == id) {
+                this.thumbDrag = 0;
+            }
+            return;
+        }
+        let length = (track * s.size.h / s.content.h).max(24.0).min(track);
+        let thumb = id ^ 0x5C0B0A75u32; // the thumb's id, the panel's own mixed
+        let p = this.pointerState;
+        if (this.thumbDrag == id) {
+            if (p.down) {
+                let top = (p.position.y - this.thumbGrab - s.area.y).max(0.0).min(track - length);
+                this.scrolls.items[k].position.y = -(top / (track - length).max(1.0)) * range;
+                this.requestFrame();
+            } else {
+                this.thumbDrag = 0;
+            }
+        }
+        let shown = (-this.scrolls.items[k].position.y / range).max(0.0).min(1.0);
+        let top = s.area.y + shown * (track - length);
+        if (this.thumbDrag == 0 && this.pressedOn(thumb)) {
+            this.thumbDrag = id;
+            this.thumbGrab = p.position.y - top;
+        }
+        let active = this.thumbDrag == id || this.tree.isPointerOver(thumb);
+        this.open(
+            Style.box().idHash(thumb).fixed().left(s.area.x + s.area.w - 9.0).top(top).z(50).w(Size.fixed(7.0)).h(
+                Size.fixed(length),
+            ).rounded(Radius.Full).bg(withAlpha(this.tone(SLATE_400), if (active) 200 else 110)),
+        );
+        this.close();
+    }
+
     fn scrollSlot(borrow this, id: u32) -> usize? {
         for (k in 0..this.scrolls.length()) {
             if (this.scrolls.items[k].id == id) {
@@ -825,10 +909,11 @@ public struct Ui<region r> {
     }
 
     /// The child offset for a scroll container being declared (Clay_GetScrollOffset), creating its state.
-    fn scrollOffsetFor(borrow mut this, id: u32, clip: Clip) -> Vec2 {
+    fn scrollOffsetFor(borrow mut this, id: u32, clip: Clip, noDrag: bool) -> Vec2 {
         match (this.scrollSlot(id)) {
             Some(k) => {
                 this.scrolls.items[k].openThisFrame = true;
+                this.scrolls.items[k].noDrag = noDrag;
                 this.scrolls.items[k].horizontal = clip.horizontal;
                 this.scrolls.items[k].vertical = clip.vertical;
                 return this.scrolls.items[k].position;
@@ -849,6 +934,7 @@ public struct Ui<region r> {
                     horizontal: clip.horizontal,
                     vertical: clip.vertical,
                     openThisFrame: true,
+                    noDrag: noDrag,
                 };
                 this.scrolls.push(fresh);
                 return Vec2.zero();
@@ -859,13 +945,18 @@ public struct Ui<region r> {
     /// Clay_UpdateScrollContainers with drag scrolling enabled: momentum, then wheel and drag on the deepest
     /// hovered scroll container.
     fn updateScrollContainers(borrow mut this, wheel: Vec2, dt: f32) {
-        // Fingers scroll by their pan (gestures.cee), not by Clay's drag of a pressed pointer.
-        let pointerActive = this.pointerState.down && !this.touchDriven;
+        // Fingers scroll by their pan (gestures.cee), not by Clay's drag of a pressed pointer; nor does a drag of a
+        // scroll bar's thumb drag its panel (`scrollBar` moves it).
+        let pointerActive = this.pointerState.down && !this.touchDriven && this.thumbDrag == 0;
         var best: usize? = null;
         var bestDepth: usize = 0;
         for (k in 0..this.scrolls.length()) {
             this.scrolls.items[k].openThisFrame = false;
             var s = this.scrolls.items[k];
+            if (this.thumbDrag == s.id) {
+                s.pointerActive = false; // the thumb's drag, not the panel's: no fling from it when let go
+                s.momentum = Vec2.zero();
+            }
             if (!pointerActive && s.pointerActive) {
                 let xDiff = s.position.x - s.scrollOrigin.x;
                 if (xDiff < -10.0 || xDiff > 10.0) {
@@ -913,7 +1004,7 @@ public struct Ui<region r> {
                 if (canH) {
                     s.position.x += wheel.x * 10.0;
                 }
-                if (pointerActive) {
+                if (pointerActive && !s.noDrag) {
                     s.momentum = Vec2.zero();
                     let p = this.pointerState.position;
                     if (!s.pointerActive) {

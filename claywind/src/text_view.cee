@@ -950,8 +950,13 @@ impl Controls {
         let focused = ui.hasFocus(h);
         let blink = (truncate<u64>((ui.time() * 2.0).floor()) & 1) == 0;
         // Clipped both ways, so that no row's width can widen the view (wrapped rows fit it, and the view stays as
-        // wide as its parent gives it).
-        ui.open(Style.column().id(id).w(Size.grow()).h(Size.grow()).scroll(ScrollAxis.Both).bg(ui.tone(SLATE_900)));
+        // wide as its parent gives it). Its text is selected (and, editable, typed) where the pointer is: the I-beam,
+        // as over a text field.
+        ui.open(
+            Style.column().id(id).w(Size.grow()).h(Size.grow()).scroll(ScrollAxis.Both).noDragScroll().bg(
+                ui.tone(SLATE_900),
+            ).cursor(Cursor.Text),
+        );
         let above = rowsBefore(rows[0..limit], start);
         ui.open(Style.box().w(Size.fixed(1.0)).h(Size.fixed(round<f32>(above) * lineH)));
         ui.close();
@@ -1530,6 +1535,7 @@ impl Controls {
         doc.edit.anchor = doc.edit.anchor.min(doc.len);
         doc.undo.used = doc.undo.used.min(doc.history.length);
         doc.undo.end = doc.undo.end.min(doc.history.length).max(doc.undo.used);
+        let caretAtStart = doc.edit.caret;
         let countBefore = doc.count;
         var changed = false;
         // A word the input method was still composing here when the focus left: typed text, as a text field takes it.
@@ -1551,6 +1557,9 @@ impl Controls {
             }
             if (ui.commanded(EditCommand.Cut) && doc.edit.selects()) {
                 ui.copyText(doc.buf[doc.edit.from()..doc.edit.to()]);
+                changed = replaceIn(mut doc, "".bytes(), false) || changed;
+            }
+            if (ui.commanded(EditCommand.Delete) && doc.edit.selects()) {
                 changed = replaceIn(mut doc, "".bytes(), false) || changed;
             }
             if (ui.commanded(EditCommand.Paste)) {
@@ -1647,6 +1656,15 @@ impl Controls {
                     doc.typing,
                 );
             }
+        }
+        // An edit, or a caret the keys or the pointer moved, keeps the caret's line in sight: the view scrolls as little
+        // as shows it (a line typed past the view's bottom, Down at its last row).
+        if ((changed || doc.edit.caret != caretAtStart) && ui.hasFocus(h) && doc.count > 0) {
+            let lineH = viewMeasures(look.config(), doc.count, gutter)[0];
+            let k = lineAt(doc.starts[0..doc.count], doc.count, doc.edit.caret);
+            let limit = doc.count.min(doc.rows.length);
+            let top = round<f32>(rowsBefore(doc.rows[0..limit], k)) * lineH;
+            ui.scrollIntoView(id, top, top + round<f32>(cachedRows(doc.rows[0..limit], k)) * lineH);
         }
         // The caret moved (not by an edit): typing takes the mark of the byte before it, as in a word processor.
         if (!changed && doc.edit.caret != caretBefore && doc.marks != null) {

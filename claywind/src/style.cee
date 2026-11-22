@@ -138,6 +138,8 @@ struct Props {
     baseline: bool;
     scroll: ScrollAxis?;
     clip: bool;
+    /// A scroll panel that a mouse drag does not scroll (`noDragScroll`).
+    noDragScroll: bool;
     aspect: f32?;
     divide: f32?;
     divideColor: Color?;
@@ -206,6 +208,7 @@ fn noProps() -> Props => Props {
     baseline: false,
     scroll: null,
     clip: false,
+    noDragScroll: false,
     aspect: null,
     divide: null,
     divideColor: null,
@@ -516,17 +519,17 @@ fn applyProps(d: borrow mut Decl, p: Props) {
     // Scroll axes (the child offset is filled in by the Ui from its scroll state), or overflow-hidden.
     match (p.scroll) {
         Some(ScrollAxis.Vertical) => {
-            d.clip = Clip { horizontal: false, vertical: true, childOffset: d.clip.childOffset };
+            d.clip = Clip { horizontal: false, vertical: true, childOffset: d.clip.childOffset, hides: false };
         }
         Some(ScrollAxis.Horizontal) => {
-            d.clip = Clip { horizontal: true, vertical: false, childOffset: d.clip.childOffset };
+            d.clip = Clip { horizontal: true, vertical: false, childOffset: d.clip.childOffset, hides: false };
         }
         Some(ScrollAxis.Both) => {
-            d.clip = Clip { horizontal: true, vertical: true, childOffset: d.clip.childOffset };
+            d.clip = Clip { horizontal: true, vertical: true, childOffset: d.clip.childOffset, hides: false };
         }
         null => {
             if (p.clip) {
-                d.clip = Clip { horizontal: true, vertical: true, childOffset: Vec2.zero() };
+                d.clip = Clip { horizontal: true, vertical: true, childOffset: Vec2.zero(), hides: true };
             }
         }
     }
@@ -1175,6 +1178,13 @@ public struct Style {
     public fn scroll(this, axis: ScrollAxis) -> Style {
         var s = this;
         s.props.scroll = axis;
+        return s;
+    }
+    /// A scroll panel that the mouse's drag does not scroll, so a drag in it can select (a text view, an editor);
+    /// the wheel, its scroll bar and a finger's pan still scroll it.
+    public fn noDragScroll(this) -> Style {
+        var s = this;
+        s.props.noDragScroll = true;
         return s;
     }
     /// overflow-hidden.
