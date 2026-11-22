@@ -4,7 +4,8 @@
 // (window.programTitleBar()); then the bar is drawn along the window's top over the frame, which keeps clear of it
 // because the Pane counts it in the safe area's top, and after each frame the window is told where the bar and its
 // buttons are, so the system moves it by the bar and opens its menu there, and the buttons' presses become minimize,
-// maximize or restore, and close. Elsewhere both calls do nothing.
+// maximize or restore, and close. Where the system keeps buttons of its own in the bar (macOS's traffic lights,
+// window.systemButtons()), the bar leaves them clear and draws none. Elsewhere both calls do nothing.
 //
 //     myFrame(mut pane.ui, …);
 //     let press = WindowBar.draw(mut pane.ui, window, "My app");
@@ -20,7 +21,13 @@ public struct WindowBar {
         if (!window.programTitleBar()) {
             return TitleBarPress { minimize: false, maximize: false, close: false };
         }
-        return TitleBar.draw(mut ui, title, window.maximized());
+        let theirs = window.systemButtons();
+        return TitleBar.drawWith(
+            mut ui,
+            title,
+            window.maximized(),
+            Rect { x: theirs.x, y: theirs.y, w: theirs.width, h: theirs.height },
+        );
     }
 
     /// Tells the window where the bar and its buttons were laid out, and acts on the presses: true when the close

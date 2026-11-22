@@ -32,17 +32,39 @@ public struct TitleBar {
     /// The bar, fixed along the window's top over the content (above the page's own floating elements, below its
     /// menus and popups): the title, then the buttons at the right. `maximized` chooses the maximize button's name
     /// (Restore when it is). Any place in the frame will do.
-    public fn draw(ui: borrow mut Ui, title: StringView, maximized: bool) -> TitleBarPress {
+    public fn draw(ui: borrow mut Ui, title: StringView, maximized: bool) -> TitleBarPress =>
+        TitleBar.drawWith(mut ui, title, maximized, Rect.zero());
+
+    /// The bar beside the system's own buttons (CeeSafe's `Window.systemButtons()`, macOS's traffic lights):
+    /// `systemButtons`, in points from the bar's top left, is left clear, the title after it, and when it is not
+    /// empty the bar draws no buttons of its own, which are the system's then. An empty one is `draw`'s bar.
+    public fn drawWith(
+        ui: borrow mut Ui,
+        title: StringView,
+        maximized: bool,
+        systemButtons: Rect,
+    ) -> TitleBarPress {
+        let theirs = systemButtons.w > 0.0 && systemButtons.h > 0.0;
         ui.open(
             Style.row().id("titleBar").fixed().top(0.0).left(0.0).z(TITLE_BAR_Z).w(
                 Size.fixed(ui.screenSize().w),
             ).h(Size.fixed(TITLE_BAR_HEIGHT)).alignXY(AxisAlign.Start, AxisAlign.Center).bg(ui.tone(SLATE_900)),
         );
+        if (theirs) {
+            ui.open(Style.box().id("titleBar~system").w(Size.fixed(systemButtons.x + systemButtons.w)).h(
+                Size.fixed(TITLE_BAR_HEIGHT),
+            ));
+            ui.close();
+        }
         ui.open(Style.box().px(space(3.0)));
         ui.label(title, Text.of().color(ui.tone(SLATE_200)));
         ui.close();
         ui.open(Style.box().w(Size.grow()).h(Size.fixed(TITLE_BAR_HEIGHT)));
         ui.close();
+        if (theirs) {
+            ui.close();
+            return TitleBarPress { minimize: false, maximize: false, close: false };
+        }
         let minimize = TitleBar.button(mut ui, "titleBar~minimize", "Minimize", 0, false);
         let maximize = TitleBar.button(
             mut ui,
