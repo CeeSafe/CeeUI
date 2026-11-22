@@ -135,7 +135,13 @@ public struct Pane<region r> {
     /// touch screen (iOS, Android) the window gives every finger, for the Ui's gestures, instead of a pointer.
     public fn takeEvents(borrow mut this, window: borrow mut Window) -> bool {
         let closed = this.takeQueued(mut window);
-        this.platform.setSafeArea(window.safeArea()); // after the events: a change came as one of them
+        // After the events: a change came as one of them. The program's own title bar (WindowBar, CeeSafe ADR 0206)
+        // is counted in its top, so the frame keeps clear of it as of a phone's status bar.
+        var safe = window.safeArea();
+        if (window.programTitleBar()) {
+            safe.top += TITLE_BAR_HEIGHT;
+        }
+        this.platform.setSafeArea(safe);
         this.platform.setKeyboardInset(window.keyboardInset());
         return closed;
     }

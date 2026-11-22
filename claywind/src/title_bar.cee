@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: MIT
 // A title bar the program draws (CeeSafe ADR 0206): the window's title and its minimize, maximize and close buttons,
-// in the theme, at the top of the frame. The Ui draws it and says what was pressed; where it lies (`layout`) is
-// what the window is told, so the system moves the window by the bar and opens its menu there. Platform-neutral:
-// claywind-desktop gives the layout to the window and acts on the presses.
+// in the theme, along the top of the window. It is fixed over the content, which keeps clear of it as of a phone's
+// status bar: the platform counts the bar in the safe area's top (claywind-desktop's Pane does), so a frame that
+// keeps to the safe area, and anything placed from its top, is below it. The Ui draws it and says what was pressed;
+// where it lies (`layout`) is what the window is told, so the system moves the window by the bar and opens its menu
+// there. Platform-neutral: claywind-desktop gives the layout to the window and acts on the presses.
 
 /// The bar's height in points.
 public const TITLE_BAR_HEIGHT: f32 = 36.0;
+
+/// The bar's place among floating elements: over the page's (a badge's 10), under menus and popups (500).
+public const TITLE_BAR_Z: i32 = 100;
 
 /// Which of the bar's buttons were pressed this frame (a click, or Enter or Space with the focus on it).
 public struct TitleBarPress {
@@ -24,14 +29,14 @@ public struct TitleBarLayout {
 
 /// The title bar (ADR 0206's step 4).
 public struct TitleBar {
-    /// The bar, as the first element of a column that holds the rest of the frame: the title, then the buttons at
-    /// the right. `maximized` chooses the maximize button's name (Restore when it is).
+    /// The bar, fixed along the window's top over the content (above the page's own floating elements, below its
+    /// menus and popups): the title, then the buttons at the right. `maximized` chooses the maximize button's name
+    /// (Restore when it is). Any place in the frame will do.
     public fn draw(ui: borrow mut Ui, title: StringView, maximized: bool) -> TitleBarPress {
         ui.open(
-            Style.row().id("titleBar").w(Size.grow()).h(Size.fixed(TITLE_BAR_HEIGHT)).alignXY(
-                AxisAlign.Start,
-                AxisAlign.Center,
-            ).bg(ui.tone(SLATE_900)),
+            Style.row().id("titleBar").fixed().top(0.0).left(0.0).z(TITLE_BAR_Z).w(
+                Size.fixed(ui.screenSize().w),
+            ).h(Size.fixed(TITLE_BAR_HEIGHT)).alignXY(AxisAlign.Start, AxisAlign.Center).bg(ui.tone(SLATE_900)),
         );
         ui.open(Style.box().px(space(3.0)));
         ui.label(title, Text.of().color(ui.tone(SLATE_200)));

@@ -287,9 +287,8 @@ fn main() -> i32 {
         }
         // Both windows draw the same state, so each frame runs in both: one whose frame did not change draws nothing.
         main.begin(mut window);
-        let barPress = WindowBar.open(mut main.ui, window, "ClayWind — CeeSafe");
         demoFrameWith(mut main.ui, mut app, raster, mut jobs);
-        WindowBar.close(mut main.ui, window);
+        let barPress = WindowBar.draw(mut main.ui, window, "ClayWind — CeeSafe");
         if (!main.end(mut window, raster)) {
             Console.writeErrorLine("desktop: the frame does not fit the UI capacity");
             return 1;
