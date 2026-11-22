@@ -214,6 +214,7 @@ fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
         WindowHandle.Xlib(display, xwindow) => unsafe { cw_gpu_attach(3, display, xwindow) },
         WindowHandle.UIKit(uiwindow, uiview) => unsafe { cw_gpu_attach(4, uiwindow, uiview) },
         WindowHandle.Android(native, activity) => unsafe { cw_gpu_attach(5, native, activity) },
+        WindowHandle.Wayland(display, surface) => unsafe { cw_gpu_attach(6, display, surface) },
         // A scripted window has nothing to draw into.
         WindowHandle.Scripted => -1,
     };

@@ -182,6 +182,13 @@ typedef struct {
     VkFlags flags;
     void *window; /* an ANativeWindow */
 } cw_android_surface_info;
+typedef struct {
+    VkStructureType sType;
+    const void *pNext;
+    VkFlags flags;
+    void *display; /* a wl_display */
+    void *surface; /* the window's wl_surface */
+} cw_wayland_surface_info;
 typedef VkResult(VKAPI_PTR *cw_create_surface)(VkInstance, const void *, const VkAllocationCallbacks *,
                                                 VkSurfaceKHR *);
 
@@ -209,7 +216,7 @@ static struct {
     VkQueue queue;
     uint32_t family;
     VkPhysicalDeviceMemoryProperties memory;
-    int has_xlib, has_win32, has_android, has_swapchain;
+    int has_xlib, has_win32, has_android, has_wayland, has_swapchain;
     double timestamp_period; /* nanoseconds per tick, 0 without timestamps */
     VkCommandPool commands;
     VkCommandBuffer cmd;
@@ -571,7 +578,7 @@ static int create_device(void) {
     vkEnumerateInstanceExtensionProperties(NULL, &count, NULL);
     VkExtensionProperties *available = calloc(count ? count : 1, sizeof *available);
     vkEnumerateInstanceExtensionProperties(NULL, &count, available);
-    const char *wanted[4];
+    const char *wanted[6];
     uint32_t n = 0;
     if (has_extension(available, count, VK_KHR_SURFACE_EXTENSION_NAME)) {
         wanted[n++] = VK_KHR_SURFACE_EXTENSION_NAME;
@@ -586,6 +593,10 @@ static int create_device(void) {
         g.has_android = has_extension(available, count, "VK_KHR_android_surface");
         if (g.has_android) {
             wanted[n++] = "VK_KHR_android_surface";
+        }
+        g.has_wayland = has_extension(available, count, "VK_KHR_wayland_surface");
+        if (g.has_wayland) {
+            wanted[n++] = "VK_KHR_wayland_surface";
         }
     }
     free(available);
@@ -814,7 +825,8 @@ int32_t CW_VK(init)(uint32_t atlas_width, uint32_t atlas_height, uint32_t images
     return 0;
 }
 
-/* The window to draw into: WindowHandle's kind and handles; Vulkan takes Win32's (2), Xlib's (3) and Android's (5:
+/* The window to draw into: WindowHandle's kind and handles; Vulkan takes Win32's (2), Xlib's (3), Wayland's (6: the
+   wl_display and the window's wl_surface, CeeSafe ADR 0205) and Android's (5:
    the activity's ANativeWindow, which Android replaces each time the app comes back to the screen). A second call
    lets go of the window before it (its swapchain and surface) and takes the new one; with an Android window of 0,
    the app is off the screen and there is nothing to draw into until the next call (6). */
@@ -858,6 +870,14 @@ int32_t CW_VK(attach)(int32_t kind, uint64_t first, uint64_t second) {
         cw_xlib_surface_info info = {.sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR,
                                      .display = (void *)(uintptr_t)first,
                                      .window = (unsigned long)second};
+        made = create(g.instance, &info, NULL, &g.surface);
+    } else if (kind == 6 && g.has_wayland) {
+        cw_create_surface create;
+        PFN_vkVoidFunction f = vkGetInstanceProcAddr(g.instance, "vkCreateWaylandSurfaceKHR");
+        memcpy(&create, &f, sizeof create);
+        cw_wayland_surface_info info = {.sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR,
+                                        .display = (void *)(uintptr_t)first,
+                                        .surface = (void *)(uintptr_t)second};
         made = create(g.instance, &info, NULL, &g.surface);
     } else if (kind == 2 && g.has_win32) {
         cw_create_surface create;
