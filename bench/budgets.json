@@ -1,5 +1,5 @@
 {
-  "_about": "tools/bench.py's budgets, by system: the most each number may be before CI fails. Set from GitHub's runners (macOS and Windows: run 44569611440; Linux: run 44600968881, 2026-11-19): times about twice what they measured, sizes and memory about a third more, since runners vary; idle_redraws and incremental_differs are correctness, with no headroom. A system with no entry only records its numbers. Lower a budget when the code gets faster; raise one only with the reason in the commit. macOS and Windows build_s, headless_mb and desktop_mb were raised for ceesafec 0.84.1 on 2026-11-21 and set back the same day with 0.85.0 (ADR 0199, CEESAFE-FINDINGS.md Q4), which run 44899965736 measured at macOS 14.0 s, 0.69 and 0.84 MB, Windows 16.9 s, 0.98 and 1.16 MB.",
+  "_about": "tools/bench.py's budgets, by system: the most each number may be before CI fails. Set from GitHub's runners (macOS and Windows: run 44569611440; Linux: run 44600968881, 2026-11-19): times about twice what they measured, sizes and memory about a third more, since runners vary; idle_redraws and incremental_differs are correctness, with no headroom. A system with no entry only records its numbers. Lower a budget when the code gets faster; raise one only with the reason in the commit. macOS and Windows build_s, headless_mb and desktop_mb were raised for ceesafec 0.84.1 on 2026-11-21 and set back the same day with 0.85.0 (ADR 0199, CEESAFE-FINDINGS.md Q4), which run 44899965736 measured at macOS 14.0 s, 0.69 and 0.84 MB, Windows 16.9 s, 0.98 and 1.16 MB. Linux desktop_mb raised from 1.2 to 1.4 on 2026-11-22 for ceesafec 0.93.4: the Linux runtime gained AT-SPI (ADR 0164 step 5), Wayland (ADR 0205) and the program's title bar (ADR 0206), and the desktop host grew with it from 0.94 MB (run 44600968881) to 1.21 (run 45060651034).",
   "macos": {
     "build_s": 25,
     "headless_mb": 0.8,
@@ -15,7 +15,7 @@
   "linux": {
     "build_s": 30,
     "headless_mb": 1.0,
-    "desktop_mb": 1.2,
+    "desktop_mb": 1.4,
     "frame_ms_dashboard_1x": 45,
     "frame_ms_dashboard_2x": 170,
     "frame_ms_effects_1x": 35,
