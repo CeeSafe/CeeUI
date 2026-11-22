@@ -45,7 +45,10 @@ public struct TitleBar {
         ui.close();
         let minimize = TitleBar.button(mut ui, "titleBar~minimize", "Minimize", 0, false);
         let maximize = TitleBar.button(
-            mut ui, "titleBar~maximize", if (maximized) "Restore" else "Maximize", 1,
+            mut ui,
+            "titleBar~maximize",
+            if (maximized) "Restore" else "Maximize",
+            if (maximized) 3 else 1,
             false,
         );
         let close = TitleBar.button(mut ui, "titleBar~close", "Close", 2, true);
@@ -68,8 +71,8 @@ public struct TitleBar {
         };
     }
 
-    /// One of the buttons: 46 by the bar's height, its glyph (0 a line, 1 a square, 2 a cross) in the middle, red
-    /// under the pointer for close, a lighter tone for the others.
+    /// One of the buttons: 46 by the bar's height, its glyph (0 a line, 1 a square, 2 a cross, 3 two squares, one
+    /// behind the other, for Restore) in the middle, red under the pointer for close, a lighter tone for the others.
     fn button(ui: borrow mut Ui, id: StringView, name: StringView, glyph: u32, danger: bool) -> bool {
         let h = hashId(id);
         let hover = if (danger) RED_600 else ui.tone(SLATE_700);
@@ -84,6 +87,20 @@ public struct TitleBar {
             ui.open(Style.box().size(Size.fixed(14.0)).icon(ICON_MINUS, ink, 0.0));
         } else if (glyph == 2) {
             ui.open(Style.box().size(Size.fixed(14.0)).icon(ICON_CLOSE, ink, 0.0));
+        } else if (glyph == 3) {
+            // Restore: the square in front at the lower left, and of the one behind it only what shows, its top and
+            // right edges (the button's colour changes under the pointer, so nothing may be painted over). They float
+            // in the box, so they take a z over the bar's, which floats too: at their own 0 the bar would cover them.
+            ui.open(Style.box().size(Size.fixed(12.0)));
+            ui.open(Style.box().absolute().z(TITLE_BAR_Z + 1).top(0.0).left(3.0).size(Size.fixed(9.0)).borderSides(
+                BorderWidth { left: 0.0, right: 1.25, top: 1.25, bottom: 0.0, betweenChildren: 0.0 },
+                ink,
+            ));
+            ui.close();
+            ui.open(
+                Style.box().absolute().z(TITLE_BAR_Z + 1).top(3.0).left(0.0).size(Size.fixed(9.0)).border(1.25, ink),
+            );
+            ui.close();
         } else {
             ui.open(Style.box().size(Size.fixed(10.0)).border(1.25, ink));
         }
