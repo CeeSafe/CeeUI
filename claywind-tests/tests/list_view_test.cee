@@ -145,3 +145,36 @@ fn aVirtualListStartsTheKeysAtAnEnd() -> Result<void, TestFailure> {
     Check.equalU64(49, listKey(mut ui, mut platform, mut s, Key.Up)? as u64)?;
     return Check.isTrue(rowShown(ui, 49), "and shows it");
 }
+
+/// To a screen reader the list is one of all its rows, the ones not drawn too, and a row says its place in all of
+/// them (CeeSafe ADR 0207): "row 500,001 of 1,000,000", not "3 of 14".
+@test
+fn aVirtualListIsAListOfAllItsRowsToAScreenReader() -> Result<void, TestFailure> {
+    var storage = heap(4194304);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var platform = platformAt(300.0, 200.0, -1.0, -1.0);
+    var s = ListState { count: 1000000, selected: null, first: 0, last: 0 };
+    listFrame(mut ui, mut platform, mut s)?;
+    ui.scrollBy("rows", 0.0, -10000000.0);
+    listFrame(mut ui, mut platform, mut s)?;
+    listFrame(mut ui, mut platform, mut s)?;
+    var listId: u32 = 0;
+    var listRows: u32 = 0;
+    var rows: usize = 0;
+    var placed = true;
+    for (i in 0..ui.accessCount()) {
+        let node = ui.accessAt(i);
+        if (node.role == AccessRole.List) {
+            listId = node.id;
+            listRows = node.rows;
+        } else if (node.role == AccessRole.ListItem) {
+            rows += 1;
+            placed = placed && node.parent == listId && node.row == truncate<u32>(s.first + rows);
+        }
+    }
+    Check.isTrue(listId != 0 && listRows == 1000000, "a list of a million rows")?;
+    Check.isTrue(rows > 0 && rows < 30, "of which a few are drawn")?;
+    Check.isTrue(s.first > 400000, "from the middle")?;
+    return Check.isTrue(placed, "each row in the list, at its place among all of them");
+}

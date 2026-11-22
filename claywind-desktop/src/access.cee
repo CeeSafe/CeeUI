@@ -16,6 +16,15 @@ fn windowRole(role: AccessRole) -> WindowAccessRole => match (role) {
     AccessRole.MenuItem => WindowAccessRole.MenuItem,
     AccessRole.Dropdown => WindowAccessRole.Dropdown,
     AccessRole.Image => WindowAccessRole.Image,
+    AccessRole.Group => WindowAccessRole.Group,
+    AccessRole.List => WindowAccessRole.List,
+    AccessRole.Menu => WindowAccessRole.Menu,
+    AccessRole.MenuBar => WindowAccessRole.MenuBar,
+    AccessRole.TabList => WindowAccessRole.TabList,
+    AccessRole.Table => WindowAccessRole.Table,
+    AccessRole.Row => WindowAccessRole.Row,
+    AccessRole.Cell => WindowAccessRole.Cell,
+    AccessRole.ColumnHeader => WindowAccessRole.ColumnHeader,
 };
 
 /// The reader's requests waiting in `window`, into `ui`: its next frame's controls see them.
@@ -52,11 +61,13 @@ public fn giveAccessNodes(ui: borrow Ui, window: borrow mut Window, last: borrow
             continue;
         }
         var seen = false;
+        var parentKept = node.parent == 0;
         for (k in 0..nodes.length) {
             if (nodes[k].id == node.id as u64) {
                 seen = true;
                 break;
             }
+            parentKept = parentKept || nodes[k].id == node.parent as u64;
         }
         if (seen) {
             continue;
@@ -94,6 +105,13 @@ public fn giveAccessNodes(ui: borrow Ui, window: borrow mut Window, last: borrow
             caret: truncate<u32>(node.caret.min(value.length)),
             anchor: truncate<u32>(node.anchor.min(value.length)),
             layer: node.layer,
+            // Its container, when that was given (one with no place is left out, and what it holds is the
+            // window's); its place and counts (CeeSafe ADR 0207).
+            parent: if (parentKept) node.parent as u64 else 0,
+            row: node.row,
+            column: node.column,
+            rows: node.rows,
+            columns: node.columns,
         }) is Ok();
         if (!ok) {
             return;

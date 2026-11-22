@@ -208,6 +208,11 @@ impl WebPlatform {
             return;
         }
         this.accessSum = sum;
+        // The page has no containers yet (CeeSafe ADR 0207's, which the page will give as ARIA's): the list is given
+        // as CeeSafe gives it to a system without them. Containers are left out, a table's row is a list's item and
+        // holds what is in it when it has a name, a column header is a button.
+        var namedRows = [0u32; 64];
+        var namedCount: usize = 0;
         unsafe {
             for (i in 0..ui.accessCount()) {
                 let node = ui.accessAt(i);
@@ -218,11 +223,34 @@ impl WebPlatform {
                 if (node.id == 0) {
                     continue;
                 }
+                var inNamedRow = false;
+                for (k in 0..namedCount) {
+                    inNamedRow = inNamedRow || (node.parent != 0 && namedRows[k] == node.parent);
+                }
+                if (inNamedRow) {
+                    if (accessContains(node.role) && namedCount < 64) {
+                        namedRows[namedCount] = node.id; // what it holds is the row's too
+                        namedCount += 1;
+                    }
+                    continue;
+                }
                 let label = ui.accessLabel(node);
+                var role = node.role;
+                if (role == AccessRole.Row) {
+                    role = AccessRole.ListItem;
+                    if (label.length > 0 && namedCount < 64) {
+                        namedRows[namedCount] = node.id;
+                        namedCount += 1;
+                    }
+                } else if (role == AccessRole.ColumnHeader) {
+                    role = AccessRole.Button;
+                } else if (accessContains(role)) {
+                    continue;
+                }
                 let value = ui.accessValueOf(node);
                 web_access_node(
                     node.id,
-                    truncate<u32>(accessRoleNumber(node.role)),
+                    truncate<u32>(accessRoleNumber(role)),
                     node.flags,
                     box.x,
                     box.y,

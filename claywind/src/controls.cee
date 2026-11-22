@@ -175,7 +175,10 @@ public struct Controls {
                 1.0,
                 ui.tone(SLATE_600),
             ).scroll(ScrollAxis.Vertical).p(space(1.0)));
-            ui.open(Style.column().w(Size.grow()).gap(space(1.0)));
+            // The open list's choices are a menu's items to a screen reader (CeeSafe ADR 0207).
+            let menu = subId(id, "menu", 0);
+            ui.open(Style.column().idHash(menu).w(Size.grow()).gap(space(1.0)));
+            let _ = ui.access(menu, AccessRole.Menu, "".bytes());
             for (i in 0..items.length) {
                 let row = subId(id, "", truncate<i64>(i));
                 let isSelected = i == selected;
@@ -222,7 +225,10 @@ public struct Controls {
             ).rounded(Radius.Md).scroll(ScrollAxis.Vertical)
                 .border(1.0, ui.tone(SLATE_600)).p(space(1.0)),
         );
-        ui.open(Style.column().w(Size.grow()).gap(space(1.0)));
+        // The rows are a list's items to a screen reader: "3 of 12" (CeeSafe ADR 0207).
+        let list = subId(id, "list", 0);
+        ui.open(Style.column().idHash(list).w(Size.grow()).gap(space(1.0)));
+        let _ = ui.access(list, AccessRole.List, "".bytes());
         for (i in 0..items.length) {
             let row = subId(id, "", truncate<i64>(i));
             let isSelected = i == selected;
@@ -262,7 +268,10 @@ public struct Controls {
             ).rounded(Radius.Md).scroll(ScrollAxis.Vertical)
                 .border(1.0, ui.tone(SLATE_600)).p(space(1.0)),
         );
-        ui.open(Style.column().w(Size.grow()).gap(space(1.0)));
+        // The rows are a list's items to a screen reader: "3 of 12" (CeeSafe ADR 0207).
+        let list = subId(id, "list", 0);
+        ui.open(Style.column().idHash(list).w(Size.grow()).gap(space(1.0)));
+        let _ = ui.access(list, AccessRole.List, "".bytes());
         for (i in 0..items.length) {
             let row = subId(id, "", truncate<i64>(i));
             let on = i < selected.length && selected[i];
@@ -375,6 +384,7 @@ public struct Controls {
         let h = hashId(id);
         var changed = false;
         ui.open(Style.row().idHash(h).gap(space(1.0)));
+        let _ = ui.access(h, AccessRole.TabList, "".bytes()); // "tab 2 of 4" (CeeSafe ADR 0207)
         for (i in 0..items.length) {
             let tab = subId(id, "", truncate<i64>(i));
             let on = i == active;
@@ -431,7 +441,9 @@ public struct Controls {
             Style.box().idHash(h).fixed().left(x).top(y).z(300).bg(ui.tone(SLATE_900)).p(space(1.0)).rounded(Radius.Md)
                 .border(1.0, ui.tone(SLATE_600)),
         );
-        ui.open(Style.column().w(Size.fixed(180.0)));
+        let menu = subId(id, "menu", 0);
+        ui.open(Style.column().idHash(menu).w(Size.fixed(180.0)));
+        let _ = ui.access(menu, AccessRole.Menu, "".bytes()); // its items, "2 of 5" (CeeSafe ADR 0207)
         for (i in 0..items.length) {
             let row = subId(id, "", truncate<i64>(i));
             let on = i >= enabled.length || enabled[i];

@@ -164,17 +164,23 @@ impl Controls {
             grid.total += grid.widths[c];
         }
         let focused = ui.hasFocus(h);
+        let tableId = subId(id, "table", 0);
         ui.open(
-            Style.column().w(Size.grow()).h(height).bg(ui.tone(SLATE_800)).rounded(Radius.Md).border(
+            Style.column().idHash(tableId).w(Size.grow()).h(height).bg(ui.tone(SLATE_800)).rounded(Radius.Md).border(
                 1.0,
                 if (focused) BLUE_500 else ui.tone(SLATE_600),
             ),
         );
+        // A table to a screen reader (CeeSafe ADR 0207): the titles' row, then every row, the ones not drawn too.
+        let table = ui.access(tableId, AccessRole.Table, "".bytes());
+        ui.accessSize(table, truncate<u32>(count + 1), truncate<u32>(columns));
         ui.open(
             Style.row().idHash(headId).w(Size.grow()).h(
                 Size.fixed(rowH),
             ).scroll(ScrollAxis.Horizontal).bg(ui.tone(SLATE_900)),
         );
+        let head = ui.access(headId, AccessRole.Row, "".bytes());
+        ui.accessPlace(head, 1, 0);
         for (c in 0..columns) {
             let title = subId(id, "title", truncate<i64>(c));
             let edge = subId(id, "edge", truncate<i64>(c));
@@ -184,7 +190,7 @@ impl Controls {
                     AxisAlign.Center,
                 ).gap(space(1.0)).cursor(Cursor.Pointer).clip().hover(Style.of().bg(ui.tone(SLATE_700))),
             );
-            let node = ui.access(title, AccessRole.Button, titles[c].bytes());
+            let node = ui.access(title, AccessRole.ColumnHeader, titles[c].bytes());
             let sorted = match (sort.column) {
                 Some(k) => k == c,
                 null => false,
@@ -248,8 +254,9 @@ impl Controls {
             style = style.hover(Style.of().bg(ui.tone(SLATE_700)));
         }
         ui.open(style);
-        let node = ui.access(row, AccessRole.ListItem, name.bytes());
+        let node = ui.access(row, AccessRole.Row, name.bytes());
         ui.accessFlag(node, ACCESS_SELECTED, on);
+        ui.accessPlace(node, truncate<u32>(i + 2), 0); // under the titles' row
         return on;
     }
 

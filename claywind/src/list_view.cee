@@ -136,6 +136,9 @@ impl Controls {
                 Radius.Md,
             ).border(1.0, if (ui.hasFocus(h)) BLUE_500 else ui.tone(SLATE_600)),
         );
+        // A list of all its rows to a screen reader, the ones not drawn too: "row 120 of 10,000" (CeeSafe ADR 0207).
+        let list = ui.access(h, AccessRole.List, "".bytes());
+        ui.accessSize(list, truncate<u32>(count), 0);
         // The rows above the view, as their height.
         ui.open(Style.box().w(Size.fixed(1.0)).h(Size.fixed(round<f32>(rows[0]) * rowH)));
         ui.close();
@@ -170,6 +173,7 @@ impl Controls {
         ui.open(style);
         let node = ui.access(row, AccessRole.ListItem, name.bytes());
         ui.accessFlag(node, ACCESS_SELECTED, on);
+        ui.accessPlace(node, truncate<u32>(i + 1), 0);
         return on;
     }
 

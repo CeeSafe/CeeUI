@@ -25,7 +25,39 @@ public enum AccessRole {
     /// A button that opens a list of choices and shows the chosen one.
     Dropdown,
     Image,
+    /// Containers (CeeSafe ADR 0207): what is reported inside one is its child, and a reader says where it is
+    /// ("3 of 40"). Elements that belong together under a name: a toolbar, a form's section.
+    Group,
+    /// A list's rows (`ListItem`s).
+    List,
+    /// A menu's items (`MenuItem`s), open.
+    Menu,
+    /// A menu bar's menus.
+    MenuBar,
+    /// A row of `Tab`s.
+    TabList,
+    /// A table's `Row`s, which hold its `Cell`s and `ColumnHeader`s.
+    Table,
+    Row,
+    /// A table's cell: what is drawn in it is its child.
+    Cell,
+    /// The title of a table's column, in its first row; it holds its text, as a control does.
+    ColumnHeader,
 }
+
+/// Whether elements reported inside one of `role` are its children (CeeSafe ADR 0207): a container's. A column
+/// header holds its text, as a control does.
+public fn accessContains(role: AccessRole) -> bool => match (role) {
+    AccessRole.Group => true,
+    AccessRole.List => true,
+    AccessRole.Menu => true,
+    AccessRole.MenuBar => true,
+    AccessRole.TabList => true,
+    AccessRole.Table => true,
+    AccessRole.Row => true,
+    AccessRole.Cell => true,
+    _ => false,
+};
 
 /// What a screen reader may ask of an element.
 public enum AccessAction {
@@ -65,6 +97,14 @@ public struct AccessNode {
     /// The layer it is drawn in: 0 for the page, higher over it (an open dropdown's list); where elements overlap,
     /// the point is the highest layer's (CeeSafe's `WindowAccessNode.layer`, ADR 0164 §10).
     public layer: u32;
+    /// The container it is in: its id, 0 for none (CeeSafe ADR 0207).
+    public parent: u32;
+    /// Its place in its container from 1, and a container's items, rows and columns, the ones not drawn too (a
+    /// virtual list's): 0 leaves them to be counted.
+    public row: u32;
+    public column: u32;
+    public rows: u32;
+    public columns: u32;
     element: usize; // its index in the frame's layout tree
     labelStart: usize;
     labelLength: usize;
@@ -90,6 +130,11 @@ fn emptyAccessNode() -> AccessNode => AccessNode {
     caret: 0,
     anchor: 0,
     layer: 0,
+    parent: 0,
+    row: 0,
+    column: 0,
+    rows: 0,
+    columns: 0,
     element: 0,
     labelStart: 0,
     labelLength: 0,
@@ -112,6 +157,15 @@ public fn accessRoleNumber(role: AccessRole) -> u64 => match (role) {
     AccessRole.MenuItem => 8,
     AccessRole.Dropdown => 9,
     AccessRole.Image => 10,
+    AccessRole.Group => 11,
+    AccessRole.List => 12,
+    AccessRole.Menu => 13,
+    AccessRole.MenuBar => 14,
+    AccessRole.TabList => 15,
+    AccessRole.Table => 16,
+    AccessRole.Row => 17,
+    AccessRole.Cell => 18,
+    AccessRole.ColumnHeader => 19,
 };
 
 fn accessMix(sum: u64, value: u64) -> u64 => (sum ^ value).wrappingMul(0x100000001B3);
@@ -127,12 +181,14 @@ fn accessMixBytes(sum: u64, bytes: Slice<u8>) -> u64 {
 impl<region r> Ui<r> {
     // ---- reporting, while the frame is built ------------------------------------------------------------------------
     /// The element being built is a `role` named `label`: call it after the `open` that has `id`. Text leaves inside
-    /// it are its own, and are not reported apart. Returns the node's index, for `accessValue` and the setters.
+    /// it are its own, and are not reported apart; inside a container (`accessContains`: a list, a menu, a table...)
+    /// what is reported is its child instead. Returns the node's index, for `accessValue` and the setters.
     public fn access(borrow mut this, id: u32, role: AccessRole, label: Slice<u8>) -> usize {
         let index = this.accessNodes.length();
         var node = emptyAccessNode();
         node.id = id;
         node.role = role;
+        node.parent = this.accessParent();
         node.element = this.tree.openIndex();
         node.layer = this.tree.openLayer();
         node.labelStart = this.accessBytes.length();
@@ -143,11 +199,44 @@ impl<region r> Ui<r> {
         if (!this.accessNodes.push(node)) {
             return index; // full: the element is not announced, and the setters below find no node
         }
-        if (this.accessInside == 0) {
+        if (accessContains(role)) {
+            if (this.accessOpenCount < 16) {
+                this.accessOpenIds[this.accessOpenCount] = id;
+                this.accessOpenDepths[this.accessOpenCount] = this.openDepth;
+                this.accessOpenCount += 1;
+            }
+        } else if (this.accessInside == 0) {
             this.accessInside = this.openDepth;
         }
         return index;
     }
+
+    /// Node `index`'s place in its container, from 1: an item's `row`, a cell's `row` and `column`. For a virtual
+    /// list's rows, which are not all drawn; drawn ones are counted when this is not called.
+    public fn accessPlace(borrow mut this, index: usize, row: u32, column: u32) {
+        if (index >= this.accessNodes.length()) {
+            return;
+        }
+        var node = this.accessNodes.get(index);
+        node.row = row;
+        node.column = column;
+        this.accessNodes.set(index, node);
+    }
+
+    /// Node `index`, a container, has `rows` items or rows and `columns` columns, the ones not drawn too.
+    public fn accessSize(borrow mut this, index: usize, rows: u32, columns: u32) {
+        if (index >= this.accessNodes.length()) {
+            return;
+        }
+        var node = this.accessNodes.get(index);
+        node.rows = rows;
+        node.columns = columns;
+        this.accessNodes.set(index, node);
+    }
+
+    /// The innermost container open around the element being built: its id, 0 for none.
+    fn accessParent(borrow this) -> u32 =>
+        if (this.accessOpenCount > 0) this.accessOpenIds[this.accessOpenCount - 1] else 0;
 
     /// Node `index`'s value as text: a field's text, a dropdown's choice.
     public fn accessValue(borrow mut this, index: usize, value: Slice<u8>) {
@@ -228,6 +317,9 @@ impl<region r> Ui<r> {
             sum = accessMix(sum, node.now.bits() as u64);
             sum = accessMix(sum, node.caret as u64);
             sum = accessMix(sum, node.anchor as u64);
+            sum = accessMix(sum, node.parent as u64);
+            sum = accessMix(sum, (node.row as u64) | ((node.column as u64) << 32));
+            sum = accessMix(sum, (node.rows as u64) | ((node.columns as u64) << 32));
             match (this.accessBox(node)) {
                 Some(box) => {
                     sum = accessMix(sum, box.x.bits() as u64);
@@ -299,6 +391,7 @@ impl<region r> Ui<r> {
         this.accessNodes.clear();
         this.accessBytes.clear();
         this.accessInside = 0;
+        this.accessOpenCount = 0;
         this.accessNow.clear();
         for (i in 0..this.accessWaiting.length()) {
             let p = this.accessWaiting.get(i);
@@ -322,6 +415,7 @@ impl<region r> Ui<r> {
         }
         var node = emptyAccessNode();
         node.id = id;
+        node.parent = this.accessParent();
         node.element = this.tree.nextIndex();
         node.labelStart = this.accessBytes.length();
         node.labelLength = this.pushAccessBytes(utf8);
@@ -332,6 +426,9 @@ impl<region r> Ui<r> {
     fn closeAccess(borrow mut this) {
         if (this.accessInside != 0 && this.openDepth <= this.accessInside) {
             this.accessInside = 0;
+        }
+        while (this.accessOpenCount > 0 && this.openDepth <= this.accessOpenDepths[this.accessOpenCount - 1]) {
+            this.accessOpenCount -= 1; // the container ends with its element
         }
     }
 

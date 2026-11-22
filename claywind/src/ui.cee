@@ -149,6 +149,10 @@ public struct Ui<region r> {
     accessNodes: FixedList<r, AccessNode>;
     accessBytes: FixedList<r, u8>;
     accessInside: u32;
+    // The containers open around the element being built (CeeSafe ADR 0207): their ids and depths, innermost last.
+    accessOpenIds: [u32; 16];
+    accessOpenDepths: [u32; 16];
+    accessOpenCount: usize;
     accessNow: FixedList<r, PendingAccess>;
     accessWaiting: FixedList<r, PendingAccess>;
     // Actions (actions.cee): the bindings, this frame's keystrokes and the actions they triggered, the key contexts
@@ -277,6 +281,9 @@ public struct Ui<region r> {
             accessNodes: FixedList<AccessNode>.over(accessNodes),
             accessBytes: FixedList<u8>.over(accessBytes),
             accessInside: 0,
+            accessOpenIds: [0u32; 16],
+            accessOpenDepths: [0u32; 16],
+            accessOpenCount: 0,
             accessNow: FixedList<PendingAccess>.over(accessNow),
             accessWaiting: FixedList<PendingAccess>.over(accessWaiting),
             bindings: FixedList<Binding>.over(bindings),

@@ -98,8 +98,11 @@ fn aFramesElementsAreListedForAScreenReader() -> Result<void, TestFailure> {
     app.nameLen = 2;
     app.fruit = 1;
     accessStep(mut ui, mut platform, mut app)?;
-    Check.isTrue(ui.accessCount() == 9, "a heading, a button, a checkbox, a field, a slider, two radios, two tabs")?;
-    let labels = ["Settings", "Save", "I agree", "Your name", "Volume", "Apple", "Pear", "One", "Two"];
+    Check.isTrue(
+        ui.accessCount() == 10,
+        "a heading, a button, a checkbox, a field, a slider, two radios, a tab bar and its two tabs",
+    )?;
+    let labels = ["Settings", "Save", "I agree", "Your name", "Volume", "Apple", "Pear", "", "One", "Two"];
     let roles = [
         AccessRole.Text,
         AccessRole.Button,
@@ -108,6 +111,7 @@ fn aFramesElementsAreListedForAScreenReader() -> Result<void, TestFailure> {
         AccessRole.Slider,
         AccessRole.Radio,
         AccessRole.Radio,
+        AccessRole.TabList,
         AccessRole.Tab,
         AccessRole.Tab,
     ];
@@ -127,6 +131,10 @@ fn aFramesElementsAreListedForAScreenReader() -> Result<void, TestFailure> {
     Check.isTrue(!nodeNamed(ui, "Apple")?.has(ACCESS_CHECKED), "the first radio is not chosen")?;
     Check.isTrue(nodeNamed(ui, "Pear")?.has(ACCESS_CHECKED), "the second is")?;
     Check.isTrue(nodeNamed(ui, "One")?.has(ACCESS_SELECTED), "the first tab is open")?;
+    // The tabs are the tab bar's (CeeSafe ADR 0207); what is outside it is the window's.
+    let bar = ui.accessAt(7);
+    Check.isTrue(nodeNamed(ui, "One")?.parent == bar.id && nodeNamed(ui, "Two")?.parent == bar.id, "in the tab bar")?;
+    Check.isTrue(bar.parent == 0 && nodeNamed(ui, "Save")?.parent == 0, "the bar and the rest are the window's")?;
     // Reading order is top to bottom here.
     let first = ui.accessBox(ui.accessAt(0))!;
     let second = ui.accessBox(ui.accessAt(1))!;
