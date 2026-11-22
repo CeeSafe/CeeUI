@@ -1,0 +1,63 @@
+// SPDX-License-Identifier: MIT
+// ClayWind's title bar on a window that lets the program draw it (CeeSafe ADR 0206, ClayWind's step 4). A window
+// opened with WindowStyle.ProgramTitleBar has no title bar of the system's where the system allows it
+// (window.programTitleBar()); then the frame is a column whose first element is the bar, and after each frame the
+// window is told where the bar and its buttons are, so the system moves it by the bar and opens its menu there, and
+// the buttons' presses become minimize, maximize or restore, and close. Elsewhere the three calls do nothing.
+//
+//     let press = WindowBar.open(mut pane.ui, window, "My app");
+//     myFrame(mut pane.ui, …);
+//     WindowBar.close(mut pane.ui, window);
+//     if (!pane.end(mut window, raster)) { … }
+//     if (WindowBar.act(mut window, pane.ui, press)) { return 0; } // closed by its button
+
+import claywind;
+
+/// The program's title bar on a desktop window.
+public struct WindowBar {
+    /// Opens the frame's column and draws the bar in it, when the window has the program's title bar; no press
+    /// otherwise.
+    public fn open(ui: borrow mut Ui, window: borrow Window, title: StringView) -> TitleBarPress {
+        if (!window.programTitleBar()) {
+            return TitleBarPress { minimize: false, maximize: false, close: false };
+        }
+        ui.open(Style.column().id("windowBarFrame").w(Size.grow()).h(Size.grow()));
+        return TitleBar.draw(mut ui, title, window.maximized());
+    }
+
+    /// Closes the column `open` opened.
+    public fn close(ui: borrow mut Ui, window: borrow Window) {
+        if (window.programTitleBar()) {
+            ui.close();
+        }
+    }
+
+    /// Tells the window where the bar and its buttons were laid out, and acts on the presses: true when the close
+    /// button was pressed (the program then drops the window).
+    public fn act(window: borrow mut Window, ui: borrow Ui, press: TitleBarPress) -> bool {
+        if (!window.programTitleBar()) {
+            return false;
+        }
+        match (TitleBar.layout(ui)) {
+            Some(l) => {
+                window.setTitleBar(WindowTitleBar {
+                    height: l.height,
+                    minimize: WindowBar.area(l.minimize),
+                    maximize: WindowBar.area(l.maximize),
+                    close: WindowBar.area(l.close),
+                    menu: WindowArea { x: 0.0, y: 0.0, width: 0.0, height: 0.0 },
+                });
+            }
+            null => {}
+        }
+        if (press.minimize) {
+            window.minimize();
+        }
+        if (press.maximize) {
+            window.toggleMaximized();
+        }
+        return press.close;
+    }
+
+    fn area(r: Rect) -> WindowArea => WindowArea { x: r.x, y: r.y, width: r.w, height: r.h };
+}

@@ -2,7 +2,7 @@
 name = "claywind_desktop"
 version = "0.1.0"
 kind = "library"
-ceesafec = ">=0.72.0" # WindowAccessNode.layer (CeeSafe ADR 0164 §10)
+ceesafec = ">=0.93.2" # Window.openStyled and setTitleBar (CeeSafe ADR 0206)
 
 [dependencies]
 claywind = { path = "../claywind" }

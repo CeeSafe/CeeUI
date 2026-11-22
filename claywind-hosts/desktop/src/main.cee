@@ -123,7 +123,15 @@ fn main() -> i32 {
         Some(r) => r.height,
         null => START_HEIGHT,
     };
-    var window = match (Window.open("ClayWind — CeeSafe", startWidth, startHeight)) {
+    // ClayWind draws the title bar where the system lets it (CeeSafe ADR 0206: Wayland so far); elsewhere the
+    // system's bar stays.
+    var window = match (Window.openStyled(
+        "ClayWind — CeeSafe",
+        startWidth,
+        startHeight,
+        WindowSurface.Frames,
+        WindowStyle.ProgramTitleBar,
+    )) {
         Ok(w) => w,
         Err(e) => {
             Console.writeError("desktop: cannot open a window: ");
@@ -279,10 +287,15 @@ fn main() -> i32 {
         }
         // Both windows draw the same state, so each frame runs in both: one whose frame did not change draws nothing.
         main.begin(mut window);
+        let barPress = WindowBar.open(mut main.ui, window, "ClayWind — CeeSafe");
         demoFrameWith(mut main.ui, mut app, raster, mut jobs);
+        WindowBar.close(mut main.ui, window);
         if (!main.end(mut window, raster)) {
             Console.writeErrorLine("desktop: the frame does not fit the UI capacity");
             return 1;
+        }
+        if (WindowBar.act(mut window, main.ui, barPress)) {
+            return 0; // its close button
         }
         if (systemFonts.supplyFrame(mut raster, main.ui) > 0) {
             main.damage.invalidate(); // the same commands draw other glyphs now (the next frame lays them out)
