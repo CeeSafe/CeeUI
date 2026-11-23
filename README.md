@@ -345,9 +345,8 @@ sleeping while nothing changes.
   name, value, state, a text field's caret), and take its presses, focus and steps. Lists, menus, the menu bar, tabs
   and the data grid are containers (CeeSafe ADR 0207): a reader hears "list, 6 items", "tab, 2 of 5" and a table of
   10,001 rows and 4 columns with its column headers, and where the focus is in each; the keys reach them all. With
-  CeeSafe 0.94.3 the demo is read and worked by VoiceOver on macOS, NVDA on Windows, Orca on Linux and TalkBack on
-  Android (on an emulator, its speech from its log); on iOS the same tree is given to VoiceOver, checked through UIKit
-  in the Simulator and not yet by ear on a phone. The data grid's rows hold
+  CeeSafe 0.94.3 the demo is read and worked by VoiceOver on macOS and on an iPhone, NVDA on Windows, Orca on Linux
+  and TalkBack on an Android phone. The data grid's rows hold
   a cell a column, so a desktop reader moves along a row and says the column's title; on a phone a row is read
   whole, as its lists' rows are. Not there: the place of a list's row on iOS, which has none to give; dragging; a reader setting a field's text itself;
   reading by character in a field outside macOS; TalkBack's focus rectangle (the window's surface is the app's). A
