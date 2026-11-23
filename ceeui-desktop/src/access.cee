@@ -1,0 +1,122 @@
+// SPDX-License-Identifier: MIT
+// Accessibility (roadmap P5): the Ui's elements for a screen reader go to the window (CeeSafe's ADR 0164), and what
+// the reader asks comes back as the Ui's actions. The window is told only when the list changed.
+
+import ceeui;
+
+fn windowRole(role: AccessRole) -> WindowAccessRole => match (role) {
+    AccessRole.Text => WindowAccessRole.Text,
+    AccessRole.Button => WindowAccessRole.Button,
+    AccessRole.Checkbox => WindowAccessRole.Checkbox,
+    AccessRole.Radio => WindowAccessRole.Radio,
+    AccessRole.TextField => WindowAccessRole.TextField,
+    AccessRole.Slider => WindowAccessRole.Slider,
+    AccessRole.Tab => WindowAccessRole.Tab,
+    AccessRole.ListItem => WindowAccessRole.ListItem,
+    AccessRole.MenuItem => WindowAccessRole.MenuItem,
+    AccessRole.Dropdown => WindowAccessRole.Dropdown,
+    AccessRole.Image => WindowAccessRole.Image,
+    AccessRole.Group => WindowAccessRole.Group,
+    AccessRole.List => WindowAccessRole.List,
+    AccessRole.Menu => WindowAccessRole.Menu,
+    AccessRole.MenuBar => WindowAccessRole.MenuBar,
+    AccessRole.TabList => WindowAccessRole.TabList,
+    AccessRole.Table => WindowAccessRole.Table,
+    AccessRole.Row => WindowAccessRole.Row,
+    AccessRole.Cell => WindowAccessRole.Cell,
+    AccessRole.ColumnHeader => WindowAccessRole.ColumnHeader,
+};
+
+/// The reader's requests waiting in `window`, into `ui`: its next frame's controls see them.
+public fn takeAccessActions(ui: borrow mut Ui, window: borrow mut Window) {
+    loop {
+        match (window.takeAccessAction()) {
+            Some(request) => {
+                let action = match (request.action) {
+                    WindowAccessAction.Press => AccessAction.Press,
+                    WindowAccessAction.Focus => AccessAction.Focus,
+                    WindowAccessAction.Increment => AccessAction.Increment,
+                    WindowAccessAction.Decrement => AccessAction.Decrement,
+                };
+                let _ = ui.accessAct(truncate<u32>(request.id), action);
+            }
+            null => { break; }
+        }
+    }
+}
+
+/// The frame `ui` just laid out, as `window`'s elements, if it is not what the window has (`last`, which is
+/// updated). An element with no place, with the id 0 or with an id an earlier one has is left out: the window
+/// takes each id once. Out of memory, the window keeps what it had.
+public fn giveAccessNodes(ui: borrow Ui, window: borrow mut Window, last: borrow mut u64) {
+    let sum = ui.accessSum();
+    if (sum == last) {
+        return;
+    }
+    var nodes = Vector<WindowAccessNode>.create();
+    var text = Vector<u8>.create();
+    for (i in 0..ui.accessCount()) {
+        let node = ui.accessAt(i);
+        if (node.id == 0) {
+            continue;
+        }
+        var seen = false;
+        var parentKept = node.parent == 0;
+        for (k in 0..nodes.length) {
+            if (nodes[k].id == node.id as u64) {
+                seen = true;
+                break;
+            }
+            parentKept = parentKept || nodes[k].id == node.parent as u64;
+        }
+        if (seen) {
+            continue;
+        }
+        let box = match (ui.accessBox(node)) {
+            Some(b) => b,
+            null => { continue; }
+        };
+        let labelStart = truncate<u32>(text.length);
+        let label = ui.accessLabel(node);
+        let value = ui.accessValueOf(node);
+        var ok = true;
+        for (b in label) {
+            ok = ok && text.push(b) is Ok();
+        }
+        let valueStart = truncate<u32>(text.length);
+        for (b in value) {
+            ok = ok && text.push(b) is Ok();
+        }
+        ok = ok && nodes.push(WindowAccessNode {
+            id: node.id as u64,
+            role: windowRole(node.role),
+            flags: node.flags, // the Ui's flags are the window's, bit for bit
+            x: box.x,
+            y: box.y,
+            width: box.w,
+            height: box.h,
+            min: node.min as f64,
+            max: node.max as f64,
+            now: node.now as f64,
+            labelStart: labelStart,
+            labelLength: truncate<u32>(label.length),
+            valueStart: valueStart,
+            valueLength: truncate<u32>(value.length),
+            caret: truncate<u32>(node.caret.min(value.length)),
+            anchor: truncate<u32>(node.anchor.min(value.length)),
+            layer: node.layer,
+            // Its container, when that was given (one with no place is left out, and what it holds is the
+            // window's); its place and counts (CeeSafe ADR 0207).
+            parent: if (parentKept) node.parent as u64 else 0,
+            row: node.row,
+            column: node.column,
+            rows: node.rows,
+            columns: node.columns,
+        }) is Ok();
+        if (!ok) {
+            return;
+        }
+    }
+    window.setAccessNodes(nodes.view(), text.view());
+    last = sum;
+}

@@ -1,0 +1,386 @@
+// SPDX-License-Identifier: MIT
+// Grapheme clusters and line breaks against Unicode's own test files (LineBreakTest.txt, GraphemeBreakTest.txt from
+// https://www.unicode.org/Public/<version>/ucd/auxiliary/), in the directory CEEUI_UCD names; skipped without
+// it. And a few cases that always run.
+
+import ceeui;
+
+/// One test line: its code points and, before each, whether the test breaks there (the first is sot's).
+struct Case {
+    cps: [u32; 64];
+    breaks: [bool; 65];
+    count: usize;
+}
+
+/// The test cases of `text`'s next line from `at` (÷ / × and hex code points; comments skipped), or null at the end.
+fn parseCase(text: Slice<u8>, at: borrow mut usize) -> Case? {
+    while (at < text.length) {
+        var c = Case { cps: [0u32; 64], breaks: [false; 65], count: 0 };
+        var i: usize = at;
+        var lineEnd = i;
+        while (lineEnd < text.length && text[lineEnd] != '\n') {
+            lineEnd += 1;
+        }
+        at = lineEnd + 1;
+        var any = false;
+        while (i < lineEnd && text[i] != '#') {
+            let b = text[i];
+            if (b == 0xC3 && i + 1 < lineEnd && text[i + 1] == 0xB7) { // ÷
+                c.breaks[c.count] = true;
+                i += 2;
+                continue;
+            }
+            if (b == 0xC3 && i + 1 < lineEnd && text[i + 1] == 0x97) { // ×
+                c.breaks[c.count] = false;
+                i += 2;
+                continue;
+            }
+            if ((b >= '0' && b <= '9') || (b >= 'A' && b <= 'F')) {
+                var v: u32 = 0;
+                while (i < lineEnd && ((text[i] >= '0' && text[i] <= '9') || (text[i] >= 'A' && text[i] <= 'F'))) {
+                    let d = text[i];
+                    v = v * 16 + (if (d <= '9') (d - '0') as u32 else (d - 'A') as u32 + 10);
+                    i += 1;
+                }
+                if (c.count < 64) {
+                    c.cps[c.count] = v;
+                    c.count += 1;
+                }
+                any = true;
+                continue;
+            }
+            i += 1;
+        }
+        if (any) {
+            return c;
+        }
+    }
+    return null;
+}
+
+fn ucdFile(name: StringView) -> Vector<u8> {
+    let dir = match (Environment.variable("CEEUI_UCD")) {
+        Some(d) => d,
+        null => { return Vector<u8>.create(); }
+    };
+    var path = [0u8; 512];
+    var w = TextWriter.create(mut path[..]);
+    w.text(dir);
+    w.byte('/');
+    w.text(name);
+    let n = w.written().length;
+    return match (StringView.fromUtf8(path[0..n])) {
+        Some(p) => readFile(p),
+        null => Vector<u8>.create(),
+    };
+}
+
+/// A case's code points as UTF-8 into `out`, and each one's byte offset (plus the end) into `offsets`.
+fn encodeCase(c: borrow Case, out: borrow mut [u8; 256], offsets: borrow mut [usize; 65]) -> usize {
+    var n: usize = 0;
+    for (k in 0..c.count) {
+        offsets[k] = n;
+        var b = [0u8; 4];
+        let len = encodeUtf8(c.cps[k], mut b);
+        for (j in 0..len) {
+            out[n + j] = b[j];
+        }
+        n += len;
+    }
+    offsets[c.count] = n;
+    return n;
+}
+
+@test
+fn lineBreaksPassUnicodesTests() -> Result<void, TestFailure> {
+    let file = ucdFile("LineBreakTest.txt");
+    if (file.length == 0) {
+        Console.writeLine("  (CEEUI_UCD not set or LineBreakTest.txt missing: skipped)");
+        return Ok();
+    }
+    var at: usize = 0;
+    var cases: u32 = 0;
+    var failed: u32 = 0;
+    var bytes = [0u8; 256];
+    var offsets = [0usize; 65];
+    var breaks = [0u8; 256];
+    var scratch = [0u32; 512];
+    loop {
+        let c = match (parseCase(file.view(), mut at)) {
+            Some(x) => x,
+            null => { break; }
+        };
+        cases += 1;
+        let n = encodeCase(c, mut bytes, mut offsets);
+        let ok = lineBreaks(bytes[0..n], mut breaks[0..n], mut scratch[..]);
+        var good = ok;
+        for (k in 1..c.count) {
+            let got = breaks[offsets[k]] != BREAK_NONE;
+            if (got != c.breaks[k]) {
+                good = false;
+            }
+        }
+        if (!good) {
+            failed += 1;
+            if (failed <= 12) {
+                Console.write("  line break case ");
+                Console.write(cases);
+                Console.write(":");
+                for (k in 0..c.count) {
+                    Console.write(if (c.breaks[k]) " ÷ " else " × ");
+                    var hex = [0u8; 8];
+                    var hw = TextWriter.create(mut hex[..]);
+                    hw.hex(c.cps[k] as u64, 4);
+                    Console.write(StringView.fromUtf8(hw.written())!);
+                }
+                Console.write("  got");
+                for (k in 1..c.count) {
+                    Console.write(if (breaks[offsets[k]] != BREAK_NONE) " ÷" else " ×");
+                }
+                Console.writeLine("");
+            }
+        }
+    }
+    Console.write("  ");
+    Console.write(cases - failed);
+    Console.write(" of ");
+    Console.write(cases);
+    Console.writeLine(" line break cases pass");
+    return Check.isTrue(failed == 0, "every LineBreakTest.txt case passes");
+}
+
+@test
+fn graphemesPassUnicodesTests() -> Result<void, TestFailure> {
+    let file = ucdFile("GraphemeBreakTest.txt");
+    if (file.length == 0) {
+        Console.writeLine("  (CEEUI_UCD not set or GraphemeBreakTest.txt missing: skipped)");
+        return Ok();
+    }
+    var at: usize = 0;
+    var cases: u32 = 0;
+    var failed: u32 = 0;
+    var bytes = [0u8; 256];
+    var offsets = [0usize; 65];
+    loop {
+        let c = match (parseCase(file.view(), mut at)) {
+            Some(x) => x,
+            null => { break; }
+        };
+        cases += 1;
+        let n = encodeCase(c, mut bytes, mut offsets);
+        // The boundaries graphemeEnd walks to, against the test's.
+        var expected = [false; 257];
+        for (k in 1..c.count) {
+            expected[offsets[k]] = c.breaks[k];
+        }
+        var good = true;
+        var start: usize = 0;
+        var walked = [false; 257];
+        while (start < n) {
+            let end = graphemeEnd(bytes[0..n], start);
+            if (end <= start) {
+                good = false;
+                break;
+            }
+            if (end < n) {
+                walked[end] = true;
+            }
+            start = end;
+        }
+        for (k in 1..c.count) {
+            if (walked[offsets[k]] != expected[offsets[k]]) {
+                good = false;
+            }
+        }
+        if (!good) {
+            failed += 1;
+            if (failed <= 12) {
+                Console.write("  grapheme case ");
+                Console.writeLine(cases);
+            }
+        }
+    }
+    Console.write("  ");
+    Console.write(cases - failed);
+    Console.write(" of ");
+    Console.write(cases);
+    Console.writeLine(" grapheme cases pass");
+    return Check.isTrue(failed == 0, "every GraphemeBreakTest.txt case passes");
+}
+
+@test
+fn graphemesAndBreaksOnCommonText() -> Result<void, TestFailure> {
+    // e + combining acute is one cluster; a flag is two regional indicators; a family emoji is one ZWJ sequence.
+    let accent = "e\u{301}x".bytes();
+    Check.equalU64(3, graphemeEnd(accent, 0) as u64)?;
+    Check.equalU64(0, graphemeBefore(accent, 3) as u64)?;
+    let flags = "\u{1F1EF}\u{1F1F5}\u{1F1FA}\u{1F1F8}".bytes();
+    Check.equalU64(8, graphemeEnd(flags, 0) as u64)?;
+    let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}!".bytes();
+    Check.equalU64(18, graphemeEnd(family, 0) as u64)?;
+    // Breaks: after spaces, between ideographs, not before a closing comma; a newline is mandatory.
+    let text = "ab cd 中文，字\ne".bytes();
+    var breaks = [0u8; 64];
+    var scratch = [0u32; 128];
+    Check.isTrue(lineBreaks(text, mut breaks[0..text.length], mut scratch[..]), "fits")?;
+    Check.equalU64(BREAK_NONE as u64, breaks[1] as u64)?; // a|b
+    Check.equalU64(BREAK_ALLOWED as u64, breaks[3] as u64)?; // "ab |cd"
+    Check.equalU64(BREAK_ALLOWED as u64, breaks[6] as u64)?; // "cd |中"
+    Check.equalU64(BREAK_ALLOWED as u64, breaks[9] as u64)?; // 中|文
+    Check.equalU64(BREAK_NONE as u64, breaks[12] as u64)?; // 文|，
+    Check.equalU64(BREAK_ALLOWED as u64, breaks[15] as u64)?; // ，|字
+    return Check.equalU64(BREAK_MANDATORY as u64, breaks[19] as u64); // \n|e
+}
+
+/// The text of each Command.Text of a laid-out tree, in order, joined by '|'.
+fn lineTexts(t: borrow LayoutTree, out: borrow mut [u8; 256]) -> usize {
+    var n: usize = 0;
+    for (i in 0..t.commandCount()) {
+        match (t.command(i)) {
+            Command.Text(_, run) => {
+                if (n > 0) {
+                    out[n] = '|';
+                    n += 1;
+                }
+                let s = t.textBytes(run);
+                for (b in s) {
+                    out[n] = b;
+                    n += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    return n;
+}
+
+fn linesAre(t: borrow LayoutTree, want: StringView) -> bool {
+    var got = [0u8; 256];
+    let n = lineTexts(t, mut got);
+    let w = want.bytes();
+    if (n != w.length) {
+        return false;
+    }
+    for (k in 0..n) {
+        if (got[k] != w[k]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Lays `text` out in a box `width` wide with 10px-per-byte metrics.
+fn layOut(t: borrow mut LayoutTree, width: f32, text: StringView, clamp: usize) -> Result<void, TestFailure> {
+    t.begin(1000.0, 1000.0);
+    t.open(hashId("wrapbox"), sized(SizingAxis.fixed(width), SizingAxis.fit()));
+    var config = TextConfig.of(16.0);
+    config.lineClamp = clamp;
+    t.text(text.bytes(), config);
+    t.close();
+    return finishTree(mut t);
+}
+
+@test
+fn textWrapsAtUnicodeBreakOpportunities() -> Result<void, TestFailure> {
+    var storage = [0u8; 524288];
+    let memory = FixedBufferAllocator.over(mut storage);
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    // CJK breaks between ideographs (30px each here), but not before the closing comma.
+    layOut(mut t, 70.0, "中文字符，好", 0)?;
+    Check.isTrue(linesAre(t, "中文|字|符，|好"), "ideographs wrap one by one; a comma stays with its ideograph")?;
+    // After a hyphen.
+    layOut(mut t, 60.0, "well-known", 0)?;
+    Check.isTrue(linesAre(t, "well-|known"), "a line breaks after a hyphen")?;
+    // Every kind of hard line break, without its characters on the line.
+    layOut(mut t, 500.0, "a\r\nb\rc\u{2028}d\u{85}e", 0)?;
+    Check.isTrue(linesAre(t, "a|b|c|d|e"), "CRLF, CR, LS and NEL break lines")?;
+    // Clay's words where it breaks at spaces: a line ends before its space.
+    layOut(mut t, 70.0, "aa bb cc", 0)?;
+    Check.isTrue(linesAre(t, "aa bb|cc"), "spaces break as before")?;
+    // A clamped line is trimmed between characters, never inside one.
+    layOut(mut t, 100.0, "中文字符中文字符中文字符", 1)?;
+    var got = [0u8; 256];
+    let n = lineTexts(t, mut got);
+    var at: usize = 0;
+    var clean = true;
+    while (at < n) {
+        let cp = decodeUtf8(got[0..n], at);
+        clean = clean && cp[0] != 0xFFFD;
+        at += cp[1] as usize;
+    }
+    Check.isTrue(clean && n >= 3 && got[n - 1] == '.', "the ellipsized line is whole characters and ...")?;
+    return Ok();
+}
+
+@test
+fn wordsPassUnicodesTests() -> Result<void, TestFailure> {
+    let file = ucdFile("WordBreakTest.txt");
+    if (file.length == 0) {
+        Console.writeLine("  (CEEUI_UCD not set or WordBreakTest.txt missing: skipped)");
+        return Ok();
+    }
+    var at: usize = 0;
+    var cases: u32 = 0;
+    var failed: u32 = 0;
+    var bytes = [0u8; 256];
+    var offsets = [0usize; 65];
+    loop {
+        let c = match (parseCase(file.view(), mut at)) {
+            Some(x) => x,
+            null => { break; }
+        };
+        cases += 1;
+        let n = encodeCase(c, mut bytes, mut offsets);
+        // wordBoundary before each code point, and the boundaries wordEnd walks to, against the test's.
+        var good = true;
+        var walked = [false; 257];
+        var start: usize = 0;
+        while (start < n) {
+            let end = wordEnd(bytes[0..n], start);
+            if (end <= start) {
+                good = false;
+                break;
+            }
+            walked[end] = true;
+            start = end;
+        }
+        for (k in 1..c.count) {
+            let o = offsets[k];
+            if (wordBoundary(bytes[0..n], o) != c.breaks[k] || walked[o] != c.breaks[k]) {
+                good = false;
+            }
+        }
+        if (!good) {
+            failed += 1;
+            if (failed <= 12) {
+                Console.write("  word case ");
+                Console.writeLine(cases);
+            }
+        }
+    }
+    Console.write("  ");
+    Console.write(cases - failed);
+    Console.write(" of ");
+    Console.write(cases);
+    Console.writeLine(" word cases pass");
+    return Check.isTrue(failed == 0, "every WordBreakTest.txt case passes");
+}
+
+@test
+fn wordsOnCommonText() -> Result<void, TestFailure> {
+    // "can't stop 3.14": can't is one word (WB6, WB7), 3.14 one number (WB11, WB12), the spaces their own segments.
+    let text = "can't stop 3.14".bytes();
+    Check.equalU64(5, wordEnd(text, 0) as u64)?;
+    Check.equalU64(6, wordEnd(text, 5) as u64)?;
+    Check.equalU64(10, wordEnd(text, 6) as u64)?;
+    Check.equalU64(15, wordEnd(text, 11) as u64)?;
+    Check.equalU64(6, wordStart(text, 8) as u64)?;
+    Check.isTrue(isWordLike(text, 0, 5), "can't is a word")?;
+    Check.isTrue(!isWordLike(text, 5, 6), "a space is not")?;
+    // Arabic letters are one word; 中文 is two ideographs, each its own word-like segment.
+    let arabic = "\u{645}\u{631}\u{62D}\u{628}\u{627} x".bytes();
+    Check.equalU64(10, wordEnd(arabic, 0) as u64)?;
+    let han = "\u{4E2D}\u{6587}".bytes();
+    Check.equalU64(3, wordEnd(han, 0) as u64)?;
+    return Check.isTrue(isWordLike(han, 0, 3), "an ideograph is a word");
+}

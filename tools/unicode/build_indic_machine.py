@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Builds claywind/src/indic_machine_data.cee: the state tables of HarfBuzz's Indic syllable machine (Ragel output,
-src/hb-ot-shaper-indic-machine.hh, MIT licence; see THIRD_PARTY_NOTICES), which claywind/src/indic.cee runs.
+"""Builds ceeui/src/indic_machine_data.cee: the state tables of HarfBuzz's Indic syllable machine (Ragel output,
+src/hb-ot-shaper-indic-machine.hh, MIT licence; see THIRD_PARTY_NOTICES), which ceeui/src/indic.cee runs.
 
     python3 tools/unicode/build_indic_machine.py HARFBUZZ_SRC
 """
@@ -43,7 +43,7 @@ def main():
             lines.append("    " + ", ".join(str(v) for v in values[k:k + 16]) + ",")
         lines += ["];", ""]
     here = os.path.dirname(os.path.abspath(__file__))
-    out = os.path.join(here, "..", "..", "claywind", "src", "indic_machine_data.cee")
+    out = os.path.join(here, "..", "..", "ceeui", "src", "indic_machine_data.cee")
     open(out, "w", encoding="utf-8").write("\n".join(lines))
     print(f"build_indic_machine.py -> {os.path.relpath(out)}")
 

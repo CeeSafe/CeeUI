@@ -1,8 +1,0 @@
-[package]
-name = "claywind_tasks"
-version = "0.1.0"
-kind = "library"
-ceesafec = ">=0.50.0"
-
-[dependencies]
-claywind = { path = "../claywind" }

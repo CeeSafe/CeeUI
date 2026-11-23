@@ -5,11 +5,11 @@ menus, file dialogs, background work, several windows, and saving and restoring 
 
 ## State is a struct
 
-ClayWind keeps no copy of your data. The app's state is a struct of your own, and the frame reads it to declare
+CeeUI keeps no copy of your data. The app's state is a struct of your own, and the frame reads it to declare
 the window and writes to it when a control reports a change.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Settings {
     public sound: bool;
@@ -33,7 +33,7 @@ public fn settingsFrame(ui: borrow mut Ui, app: borrow mut Settings) {
 A control takes the value it edits as `mut`, changes it in place, and returns whether it changed. There is nothing
 to subscribe to and nothing to keep in step: the next frame reads the struct again.
 
-What ClayWind does keep between frames is small and is kept by element id: the focus, scroll offsets, and
+What CeeUI does keep between frames is small and is kept by element id: the focus, scroll offsets, and
 transitions under way. [A frame](./frame) explains this.
 
 ## When a frame runs
@@ -47,7 +47,7 @@ changes without input needs to ask:
 | `ui.requestFrameAfter(seconds)` | A frame that many seconds from now, unless one comes sooner |
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Clock {
     public shown: f64;
@@ -72,7 +72,7 @@ A frame forgets the requests of the frame before, so a frame that still needs a 
 change, so code outside a control's result does not need to call `requestFrame` itself.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Inbox {
     public unread: u32;
@@ -101,7 +101,7 @@ public fn inboxFrame(ui: borrow mut Ui, inbox: borrow mut Model<Inbox>, arrived:
 `version()` lets a view skip work: keep the version you last computed from, and redo the work only when it differs.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Report {
     public rows: Model<u32>;
@@ -129,7 +129,7 @@ An action is a name. A key binding ties a keystroke to an action, and a frame as
 this frame.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Editor {
     public bound: bool;
@@ -202,7 +202,7 @@ A binding with a context applies only while the focused element is inside an ele
 `ui.keyContext(name)` names the element that was opened last.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Workspace {
     public bound: bool;
@@ -285,7 +285,7 @@ Menus are made of actions. An app describes them once, to a `MenuBuilder`: `menu
 separators after it belong to that menu.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public fn appMenu<B: MenuBuilder>(m: borrow mut B) {
     m.menu("File");
@@ -303,11 +303,11 @@ public fn appMenu<B: MenuBuilder>(m: borrow mut B) {
 An item names an action. Choosing it triggers the action, so `ui.action("save")` is true for the menu and for the
 shortcut alike. The item shows the action's key binding as its shortcut; there is no second place to declare it.
 
-The function is generic so the same description can feed any builder. `MenuModel` is the builder ClayWind
-provides: it keeps the description, for a host to turn into the system's menus or for ClayWind to draw.
+The function is generic so the same description can feed any builder. `MenuModel` is the builder CeeUI
+provides: it keeps the description, for a host to turn into the system's menus or for CeeUI to draw.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public fn describe<B: MenuBuilder>(m: borrow mut B) {
     m.menu("View");
@@ -336,7 +336,7 @@ A `MenuModel` holds up to 96 parts and 2,048 bytes of titles. What does not fit 
 
 ### The system's menus
 
-On macOS the menus go in the menu bar, and on Windows in the window's menu. `claywind-desktop` builds them from the
+On macOS the menus go in the menu bar, and on Windows in the window's menu. `ceeui-desktop` builds them from the
 model, and passes the chosen items back as actions. This is the demo's desktop host:
 
 ```ceesafe skip
@@ -370,13 +370,13 @@ Each turn of the loop, before the frame, it takes what was chosen:
 `systemMenu` reads each item's shortcut with `ui.bindingForHash`, which is why the menus are set after the bindings
 exist.
 
-### A menu bar ClayWind draws
+### A menu bar CeeUI draws
 
 Where the system has no menu bar (X11, for one), `window.setMenu` fails and the app draws the same menus in its
 window with `Controls.menuBar`.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public fn notesMenu<B: MenuBuilder>(m: borrow mut B) {
     m.menu("File");
@@ -416,7 +416,7 @@ the next frame. A press outside, or Escape, closes the menu.
 secondary press, and gets the chosen item's index.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Files {
     public menuOpen: bool;
@@ -515,19 +515,19 @@ writes the file to a temporary folder and calls `exportFile`. See [Phones](./pho
 
 ## Background work
 
-Work that takes long runs on a thread of its own, so frames keep running. The `claywind-tasks` package has `Task<T>`
+Work that takes long runs on a thread of its own, so frames keep running. The `ceeui-tasks` package has `Task<T>`
 for this. A job sends values of type `T` to the UI thread. Each one wakes the window, and the frame takes them with
 `poll`.
 
 ```toml
 [dependencies]
-claywind_tasks = { path = "../claywind-tasks" }
+ceeui_tasks = { path = "../ceeui-tasks" }
 ```
 
 Create a `Task` with the window's waker. The first argument is how many values a job may send ahead of the UI:
 
 ```ceesafe skip
-import claywind_tasks;
+import ceeui_tasks;
 
 var primes = Task<PrimeCount>.create(8, window.waker())!;
 ```
@@ -585,7 +585,7 @@ Each window has its own `Ui` and its own `Damage`. The windows can share one `Ra
 The raster keeps each window's last frame in a `RasterFrame` while it draws another's, so every window is still
 redrawn only where it changed.
 
-With `claywind-desktop`, a `Pane` is one window's `Ui`, `Damage`, input and kept frame. The demo's host makes two,
+With `ceeui-desktop`, a `Pane` is one window's `Ui`, `Damage`, input and kept frame. The demo's host makes two,
 each with its own id and memory:
 
 ```ceesafe skip
@@ -622,7 +622,7 @@ then sleeps until either window needs a frame:
         }
 ```
 
-The full code is in `claywind-hosts/desktop/src/main.cee`. [A desktop host](./desktop) explains a `Pane`.
+The full code is in `ceeui-hosts/desktop/src/main.cee`. [A desktop host](./desktop) explains a `Pane`.
 
 ## Saving and restoring state
 
@@ -630,7 +630,7 @@ A snapshot is the app's state as bytes. `SnapshotWriter` writes values into a bu
 `SnapshotReader` reads them back in the same order.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 /// Change this when what `save` writes changes.
 const STATE_VERSION: u32 = 1;
@@ -681,8 +681,8 @@ an index saved by an older build may be past the end now.
 
 ### Hot reload
 
-Snapshots are what keeps an app where it was across a hot reload. `claywind-dev` starts the app with `--hot DIR`,
-and `claywind-desktop` has the app's side:
+Snapshots are what keeps an app where it was across a hot reload. `ceeui-dev` starts the app with `--hot DIR`,
+and `ceeui-desktop` has the app's side:
 
 | Function | What it does |
 |---|---|
@@ -693,7 +693,7 @@ and `claywind-desktop` has the app's side:
 | `watch.reloadAsked()` | Whether a new build is waiting for this one to save and end |
 
 The demo wraps the snapshot and these calls in two functions of its own, `hotSave` and `hotRestore`, in
-`claywind-demo-tasks/src/hot.cee`. This is its `hotSave`:
+`ceeui-demo-tasks/src/hot.cee`. This is its `hotSave`:
 
 ```ceesafe skip
 public fn hotSave(dir: StringView, size: WindowSize, dark: bool, app: borrow DemoApp) -> bool {
@@ -728,5 +728,5 @@ take over, then ends:
 ```
 
 The same snapshot serves a phone, where the system may end an app that is off the screen: the demo saves when it
-leaves the screen and starts from what it saved. [Tools](./tools#hot-reload) covers `claywind-dev`, and
+leaves the screen and starts from what it saved. [Tools](./tools#hot-reload) covers `ceeui-dev`, and
 [Phones](./phones) the app's life on a phone.

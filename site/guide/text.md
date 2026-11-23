@@ -1,7 +1,7 @@
 # Text
 
 This page covers showing text: labels and their look, writing numbers into text, rich labels, fonts and fallbacks,
-wrapping and truncation, and which scripts ClayWind shapes. Editing text is on [Editing text](./editing).
+wrapping and truncation, and which scripts CeeUI shapes. Editing text is on [Editing text](./editing).
 
 ## Labels
 
@@ -169,7 +169,7 @@ The cut falls between grapheme clusters, never inside a character. Clamping appl
 
 ## Fonts
 
-ClayWind reads and draws TrueType and OpenType (CFF) fonts itself, from single fonts and collections (`.ttc`). The
+CeeUI reads and draws TrueType and OpenType (CFF) fonts itself, from single fonts and collections (`.ttc`). The
 host loads fonts into the `Raster` before the first frame, each under a font id. A label names a font by that id.
 
 | Font id | What a host loads there | Size when `size` is not set |
@@ -195,7 +195,7 @@ ui.label("let x = 1;", Text.of().font(FONT_MONO).size(14.0));
 does not parse or does not fit the Raster's font memory.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public fn loadFaces(raster: borrow mut Raster, regular: Slice<u8>, bold: Slice<u8>, mono: Slice<u8>) -> bool {
     return raster.loadFont(FONT_18, regular) && raster.loadFont(FONT_BOLD, bold) &&
@@ -205,7 +205,7 @@ public fn loadFaces(raster: borrow mut Raster, regular: Slice<u8>, bold: Slice<u
 
 `raster.loadFontFace(id, bytes, face)` loads one face of a collection.
 
-A desktop host made from the template does not call these itself. `claywind-desktop`'s `loadSystemFonts` finds a
+A desktop host made from the template does not call these itself. `ceeui-desktop`'s `loadSystemFonts` finds a
 regular, a bold and a monospaced face among the system's fonts and loads them:
 
 ```ceesafe skip
@@ -222,7 +222,7 @@ A character the run's font lacks is taken from a fallback chain: a list of font 
 font in the chain, Chinese, Japanese and Korean draw inside a Latin run.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 const FONT_CJK: u32 = 6;
 const FONT_EMOJI: u32 = 7;
@@ -241,7 +241,7 @@ The chain holds up to 24 fonts. A character no font has is drawn as the missing-
 
 ### System fonts as fallbacks
 
-The `claywind-fonts` package finds fallbacks among the operating system's own fonts, so a host need not ship
+The `ceeui-fonts` package finds fallbacks among the operating system's own fonts, so a host need not ship
 them. After a frame is laid out, `SystemFonts.supplyFrame` looks at the frame's text, loads a system face for each
 character the loaded fonts lack, and adds it to the fallback chain. It returns how many faces it loaded; when that
 is not zero, the host lays the frame out again.
@@ -258,12 +258,12 @@ is not zero, the host lays the frame out again.
 ```
 
 The catalog of system fonts is built the first time a character is missing, not at startup.
-`SystemFonts.supply(mut raster, utf8, fontId)` does the same for one text. `claywind-fonts` reads files, which
-the `claywind` package itself does not, so it is for hosts with a file system.
+`SystemFonts.supply(mut raster, utf8, fontId)` does the same for one text. `ceeui-fonts` reads files, which
+the `ceeui` package itself does not, so it is for hosts with a file system.
 
-## What text ClayWind handles
+## What text CeeUI handles
 
-ClayWind shapes, breaks and draws text itself, on every platform alike. It does not call the system's text
+CeeUI shapes, breaks and draws text itself, on every platform alike. It does not call the system's text
 engine.
 
 | Area | What is handled |

@@ -1,11 +1,11 @@
 # A frame
 
-This page covers how a frame runs: its four steps, how elements are named, what ClayWind keeps between frames,
+This page covers how a frame runs: its four steps, how elements are named, what CeeUI keeps between frames,
 when a frame runs, and the memory a `Ui` works in.
 
 ## The four steps
 
-ClayWind is immediate mode. Every frame:
+CeeUI is immediate mode. Every frame:
 
 1. the host gives `Ui.begin` a `Platform`, which supplies the input and the clock;
 2. the app declares its elements and controls;
@@ -15,7 +15,7 @@ ClayWind is immediate mode. Every frame:
 Here are the four steps as one function. A host calls it in a loop.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public fn runFrame<M: TextMetrics, B: Backend>(
     ui: borrow mut Ui,
@@ -44,7 +44,7 @@ public fn runFrame<M: TextMetrics, B: Backend>(
 | 4 | `ui.renderInto(mut backend)` | Sends the commands to a backend, in paint order. |
 
 A `Platform` is an interface the host implements: the screen's size, the pointer, the keys, the clock.
-`claywind-desktop` has `DesktopPlatform` over a window, and `claywind-demo` has `ScriptPlatform`, which plays
+`ceeui-desktop` has `DesktopPlatform` over a window, and `ceeui-demo` has `ScriptPlatform`, which plays
 scripted input for tests.
 
 `TextMetrics` measures text for layout, and a `Backend` draws commands. `Raster`, the software renderer, is both,
@@ -101,7 +101,7 @@ if (Controls.button(mut ui, "save", "Save")) {
 }
 ```
 
-The name is the control's id. A frame keeps no widget objects, so the id is how ClayWind knows this frame's
+The name is the control's id. A frame keeps no widget objects, so the id is how CeeUI knows this frame's
 button is the same button as last frame's: the one that has the focus, the one that was pressed, the one whose
 hover is fading. Two controls in one window need two names.
 
@@ -122,7 +122,7 @@ for (i in 0u64..3) {
 
 ## What is kept between frames
 
-The app's state is the app's. ClayWind keeps only what a frame cannot rebuild, each piece by element id:
+The app's state is the app's. CeeUI keeps only what a frame cannot rebuild, each piece by element id:
 
 | Kept | Used for |
 |---|---|
@@ -185,7 +185,7 @@ ui.requestFrameAfter(1.0);
 A frame forgets the requests of the frame before. A frame that still needs a later frame asks again:
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Banner {
     public shownUntil: f64;
@@ -211,7 +211,7 @@ State held in a `Model` asks for the frame itself when it changes; [An app](./ap
 A `Ui` holds a fixed number of elements, set when it is created.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public fn smallUi<region r>(memory: borrow(r) FixedBufferAllocator) -> Result<Ui<r>, AllocError> {
     var capacity = UiCapacity.of(2048); // room for 2,048 elements
@@ -257,7 +257,7 @@ A `Ui` takes all its memory once, from a `FixedBufferAllocator` over bytes the h
 allocator for its whole life.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public fn run() -> i32 {
     var storage = Vector<u8>.create();

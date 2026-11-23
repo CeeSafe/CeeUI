@@ -1,8 +1,0 @@
-[package]
-name = "claywind_desktop"
-version = "0.1.0"
-kind = "library"
-ceesafec = ">=0.93.5" # WindowAccessNode's containers (CeeSafe ADR 0207), Window.openStyled (ADR 0206)
-
-[dependencies]
-claywind = { path = "../claywind" }

@@ -1,0 +1,133 @@
+// SPDX-License-Identifier: MIT
+// The demo (ceeui_demo, the port of main.c) driven by its scripted platform: every nav tab lays out within
+// capacity, and scripted input reaches the app state. Pixel parity with the C build is checked outside the suite
+// (~/dev/ClayWind/tests/demo_compare.py, which needs ThorVG).
+
+import ceeui;
+import ceeui_demo;
+
+/// Runs `frames` frames of the demo on `tab` with `script`; false when a frame does not fit.
+fn runDemo(tab: usize, script: StringView, frames: u32, app: borrow mut DemoApp) -> bool {
+    var storage = heap(8388608);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(2048))!;
+    ui.setDarkMode(true);
+    var platform = ScriptPlatform.create(script.bytes(), Dims { w: 1024.0, h: 640.0 });
+    let metrics = MetricMeasure { unused: 0 };
+    app.selectTab(tab);
+    for (f in 0..frames) {
+        platform.beginFrame();
+        ui.begin(mut platform);
+        demoFrame(mut ui, mut app, metrics);
+        let ok = match (ui.endFrame(mut platform, metrics)) {
+            Ok() => true,
+            Err(_) => false,
+        };
+        if (!ok) {
+            return false;
+        }
+        platform.endFrame();
+    }
+    return true;
+}
+
+@test
+fn everyTabLaysOut() -> Result<void, TestFailure> {
+    for (tab in 0usize..6) {
+        var app = DemoApp.create();
+        Check.isTrue(runDemo(tab, "", 3, mut app), "the tab fits the UI capacity")?;
+        Check.equalU64(tab as u64, app.activeNav as u64)?;
+    }
+    return Ok();
+}
+
+@test
+fn scriptedInputReachesTheApp() -> Result<void, TestFailure> {
+    // Down twice then Enter moves the nav focus to Effects and opens it; time advances 1/60 s a frame.
+    var app = DemoApp.create();
+    Check.isTrue(runDemo(0, "2:key:down;3:key:down;4:key:enter", 30, mut app), "fits")?;
+    Check.equalU64(2, app.activeNav as u64)?;
+    Check.equalU64(2, app.focusedNav as u64)?;
+    expect("elapsed after 30 frames", app.elapsed, 0.5)?;
+    return Ok();
+}
+
+/// Lays out the inspector window's frame (`frames` times) in a Ui as small as the desktop host gives it.
+fn runInspector(app: borrow mut DemoApp, frames: u32) -> bool {
+    var storage = heap(4194304);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(512))!;
+    ui.setDarkMode(true);
+    var platform = ScriptPlatform.create("".bytes(), Dims { w: 340.0, h: 600.0 });
+    let metrics = MetricMeasure { unused: 0 };
+    for (f in 0..frames) {
+        platform.beginFrame();
+        ui.begin(mut platform);
+        inspectorFrame(mut ui, mut app);
+        let ok = match (ui.endFrame(mut platform, metrics)) {
+            Ok() => true,
+            Err(_) => false,
+        };
+        if (!ok) {
+            return false;
+        }
+        platform.endFrame();
+    }
+    return true;
+}
+
+@test
+fn theInspectorFitsItsWindow() -> Result<void, TestFailure> {
+    var app = DemoApp.create();
+    return Check.isTrue(runInspector(mut app, 3), "the inspector fits the UI capacity the desktop host gives it");
+}
+
+/// Whether the Controls page offers to open the Live state panel in a window.
+fn offersWindow(opens: bool) -> bool {
+    var storage = heap(8388608);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(2048))!;
+    var platform = ScriptPlatform.create("".bytes(), Dims { w: 1024.0, h: 640.0 });
+    let metrics = MetricMeasure { unused: 0 };
+    var app = DemoApp.create();
+    app.setOpensWindows(opens);
+    app.selectTab(1);
+    for (f in 0..2) {
+        platform.beginFrame();
+        ui.begin(mut platform);
+        demoFrame(mut ui, mut app, metrics);
+        ui.endFrame(mut platform, metrics)!;
+        platform.endFrame();
+    }
+    return ui.boxOfHash(hashId("ci-pop")) != null;
+}
+
+@test
+fn onlyAHostWithWindowsOffersOne() -> Result<void, TestFailure> {
+    Check.isTrue(offersWindow(true), "the desktop host's panel offers a window")?;
+    return Check.isTrue(!offersWindow(false), "a host without windows offers none");
+}
+
+@test
+fn theDragTabLaysOut() -> Result<void, TestFailure> {
+    for (takes in [false, true]) {
+        var storage = heap(8388608);
+        let memory = FixedBufferAllocator.over(mut storage.viewMut());
+        var ui = Ui.create(memory, UiCapacity.of(2048))!;
+        var platform = ScriptPlatform.create("".bytes(), Dims { w: 1024.0, h: 640.0 });
+        let metrics = MetricMeasure { unused: 0 };
+        var app = DemoApp.create();
+        app.setTakesFileDrops(takes);
+        app.selectTab(1);
+        app.selectControlsTab(4);
+        for (f in 0..2) {
+            platform.beginFrame();
+            ui.begin(mut platform);
+            demoFrame(mut ui, mut app, metrics);
+            Check.isTrue(ui.endFrame(mut platform, metrics).isOk(), "the Drag tab fits")?;
+            platform.endFrame();
+        }
+        Check.isTrue((ui.boxOfHash(hashId("ci-files-drop")) != null) == takes, "the files' place only where files come")?;
+    }
+    return Ok();
+}

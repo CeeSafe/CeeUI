@@ -1,0 +1,193 @@
+// SPDX-License-Identifier: MIT
+// Shaping against HarfBuzz: the cases tools/shaping/hb_cases.py wrote (text in a font, and hb-shape's glyphs for it)
+// in the file CEEUI_SHAPE_CASES names; skipped without it. Each case's glyphs must match HarfBuzz's: the same
+// glyphs in the same order, at the same places (to a font unit).
+
+import ceeui;
+
+/// The `k`-th tab-separated field of `line`.
+fn caseField(line: Slice<u8>, k: usize) -> Slice<u8> {
+    var start: usize = 0;
+    var n: usize = 0;
+    for (i in 0..line.length + 1) {
+        if (i == line.length || line[i] == '\t') {
+            if (n == k) {
+                return line[start..i];
+            }
+            n += 1;
+            start = i + 1;
+        }
+    }
+    return line[0..0];
+}
+
+fn sameBytes(a: Slice<u8>, b: Slice<u8>) -> bool {
+    if (a.length != b.length) {
+        return false;
+    }
+    for (i in 0..a.length) {
+        if (a[i] != b[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// A signed decimal number at `at` in `s`, and where it ends.
+fn number(s: Slice<u8>, at: usize) -> [i64; 2] {
+    var i = at;
+    var negative = false;
+    if (i < s.length && s[i] == '-') {
+        negative = true;
+        i += 1;
+    }
+    var v: i64 = 0;
+    while (i < s.length && s[i] >= '0' && s[i] <= '9') {
+        v = v * 10 + ((s[i] - '0') as i64);
+        i += 1;
+    }
+    return [if (negative) 0 - v else v, truncate<i64>(i)];
+}
+
+@test
+fn shapingMatchesHarfBuzz() -> Result<void, TestFailure> {
+    let path = match (Environment.variable("CEEUI_SHAPE_CASES")) {
+        Some(p) => p,
+        null => {
+            Console.writeLine("  (CEEUI_SHAPE_CASES not set: skipped)");
+            return Ok();
+        }
+    };
+    let file = readFile(path);
+    let text = file.view();
+    var storage = heap(134217728);
+    var cases: u32 = 0;
+    var failed: u32 = 0;
+    var fontCases: u32 = 0;
+    var fontFailed: u32 = 0;
+    var at: usize = 0;
+    var currentFont = Vector<u8>.create();
+    var utf8 = [0u8; 1024];
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 128];
+    // One Raster per font: a font cannot be unloaded.
+    var memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(16, 16);
+    c.imagePixels = 4;
+    c.fontBytes = 67108864;
+    var ras = Raster.create(memory, c)!;
+    var loaded = false;
+    while (at < text.length) {
+        var end = at;
+        while (end < text.length && text[end] != '\n') {
+            end += 1;
+        }
+        let line = text[at..end];
+        at = end + 1;
+        if (line.length == 0) {
+            continue;
+        }
+        let fontPath = caseField(line, 0);
+        if (!loaded || !sameBytes(fontPath, currentFont.view())) {
+            if (loaded) {
+                Console.write("  ");
+                Console.write(StringView.fromUtf8(currentFont.view())!);
+                Console.write(": ");
+                Console.write(fontCases - fontFailed);
+                Console.write(" of ");
+                Console.writeLine(fontCases);
+            }
+            fontCases = 0;
+            fontFailed = 0;
+            currentFont.clear();
+            for (b in fontPath) {
+                currentFont.push(b)!;
+            }
+            let bytes = readFile(StringView.fromUtf8(fontPath)!);
+            memory = FixedBufferAllocator.over(mut storage.viewMut());
+            ras = Raster.create(memory, c)!;
+            let face = number(caseField(line, 1), 0)[0];
+            loaded = ras.loadFontFace(0, bytes.view(), truncate<u32>(face));
+            if (!loaded) {
+                Console.write("  cannot load ");
+                Console.writeLine(StringView.fromUtf8(fontPath)!);
+                return Check.fail("a case's font loads");
+            }
+        }
+        let upem = round<f32>(number(caseField(line, 2), 0)[0]);
+        // The text, from its code points.
+        let hex = caseField(line, 3);
+        var n: usize = 0;
+        var i: usize = 0;
+        while (i < hex.length) {
+            var v: u32 = 0;
+            while (i < hex.length && hex[i] != ' ') {
+                let d = hex[i];
+                v = v * 16 + (if (d <= '9') (d - '0') as u32 else (d - 'A') as u32 + 10);
+                i += 1;
+            }
+            i += 1;
+            var b = [0u8; 4];
+            let len = encodeUtf8(v, mut b);
+            for (j in 0..len) {
+                utf8[n + j] = b[j];
+            }
+            n += len;
+        }
+        let run = ras.shapeRun(utf8[0..n], 0, upem, 0.0, mut out[..])!;
+        // HarfBuzz's glyphs: id:x:y;...
+        let want = caseField(line, 4);
+        var ok = true;
+        var k: usize = 0;
+        var p: usize = 0;
+        while (p < want.length) {
+            let id = number(want, p);
+            let x = number(want, truncate<usize>(id[1]) + 1);
+            let y = number(want, truncate<usize>(x[1]) + 1);
+            p = truncate<usize>(y[1]) + 1;
+            if (k >= run.count || (out[k].glyph as i64) != id[0] ||
+                (out[k].x - round<f32>(x[0])).abs() > 1.5 || (0.0 - out[k].y - round<f32>(y[0])).abs() > 1.5) {
+                ok = false;
+            }
+            k += 1;
+        }
+        if (k != run.count) {
+            ok = false;
+        }
+        cases += 1;
+        fontCases += 1;
+        if (!ok) {
+            failed += 1;
+            fontFailed += 1;
+            if (failed <= 25) {
+                Console.write("  ");
+                Console.write(StringView.fromUtf8(hex)!);
+                Console.write("\n    want ");
+                Console.write(StringView.fromUtf8(want)!);
+                Console.write("\n    got  ");
+                for (g in 0..run.count) {
+                    Console.write(out[g].glyph);
+                    Console.write(":");
+                    Console.write(out[g].x);
+                    Console.write(":");
+                    Console.write(0.0 - out[g].y);
+                    Console.write(";");
+                }
+                Console.writeLine("");
+            }
+        }
+    }
+    if (loaded) {
+        Console.write("  ");
+        Console.write(StringView.fromUtf8(currentFont.view())!);
+        Console.write(": ");
+        Console.write(fontCases - fontFailed);
+        Console.write(" of ");
+        Console.writeLine(fontCases);
+    }
+    Console.write("  ");
+    Console.write(cases - failed);
+    Console.write(" of ");
+    Console.write(cases);
+    Console.writeLine(" cases shape as HarfBuzz does");
+    return Check.isTrue(failed == 0, "every case matches HarfBuzz");
+}

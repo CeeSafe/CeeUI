@@ -2,7 +2,7 @@
 
 ## Clay
 
-The layout engine (claywind/src/layout_*.cee) is a port, altered for CeeSafe,
+The layout engine (ceeui/src/layout_*.cee) is a port, altered for CeeSafe,
 of the ClayWind fork of Clay 0.14 (https://github.com/nicbarker/clay), which is
 distributed under the zlib/libpng license:
 
@@ -31,7 +31,7 @@ distribution.
 
 ## Unicode Character Database
 
-claywind/src/unicode_data.cee is generated (by tools/unicode/build_tables.py) from the Unicode Character
+ceeui/src/unicode_data.cee is generated (by tools/unicode/build_tables.py) from the Unicode Character
 Database (https://www.unicode.org/Public/UCD/), which is distributed under the Unicode License v3:
 
 ```text
@@ -78,8 +78,8 @@ authorization of the copyright holder.
 
 ## HarfBuzz
 
-`claywind/src/indic.cee` ports HarfBuzz's Indic shaper (src/hb-ot-shaper-indic.cc), and its generated data
-(`claywind/src/indic_data.cee`, `claywind/src/indic_machine_data.cee`) comes from HarfBuzz's Indic table and
+`ceeui/src/indic.cee` ports HarfBuzz's Indic shaper (src/hb-ot-shaper-indic.cc), and its generated data
+(`ceeui/src/indic_data.cee`, `ceeui/src/indic_machine_data.cee`) comes from HarfBuzz's Indic table and
 syllable machine (`tools/unicode/build_indic.py`, `tools/unicode/build_indic_machine.py`). Other shaping
 behaviour (ZWJ handling in contexts, mark and cursive offsets) follows HarfBuzz's. From HarfBuzz 15.1.0,
 https://github.com/harfbuzz/harfbuzz:

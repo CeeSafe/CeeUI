@@ -1,0 +1,18 @@
+[package]
+name = "gpu"
+version = "0.1.0"
+kind = "executable"
+windowed = true # a GUI program: no console window on Windows (CeeSafe ADR 0151)
+ceesafec = ">=0.93.0" # WindowHandle.Wayland (CeeSafe ADR 0205)
+c = ["src/metal.c", "src/vulkan.c", "src/d3d12.c"]
+include-dirs = ["src"]
+
+[target.windows]
+include-dirs = ["$VULKAN_SDK/Include"] # the Vulkan SDK's headers; Linux's are the system's (libvulkan-dev)
+
+[dependencies]
+ceeui = { path = "../../ceeui" }
+ceeui_demo = { path = "../../ceeui-demo" }
+ceeui_fonts = { path = "../../ceeui-fonts" }
+ceeui_demo_tasks = { path = "../../ceeui-demo-tasks" }
+ceeui_desktop = { path = "../../ceeui-desktop" }

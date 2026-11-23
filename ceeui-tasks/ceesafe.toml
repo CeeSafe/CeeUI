@@ -1,0 +1,8 @@
+[package]
+name = "ceeui_tasks"
+version = "0.1.0"
+kind = "library"
+ceesafec = ">=0.50.0"
+
+[dependencies]
+ceeui = { path = "../ceeui" }

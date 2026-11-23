@@ -1,7 +1,0 @@
-[package]
-name = "claywind"
-version = "0.1.0"
-kind = "library"
-profile = "freestanding"
-
-[dependencies]

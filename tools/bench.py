@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""ClayWind's benchmark harness (roadmap P0): measures the demo on this machine and checks each number against its
+"""CeeUI's benchmark harness (roadmap P0): measures the demo on this machine and checks each number against its
 budget for this system in bench/budgets.json.
 
-What it measures, all through the headless host (claywind-hosts/headless, the software renderer) and the desktop
+What it measures, all through the headless host (ceeui-hosts/headless, the software renderer) and the desktop
 host's binary:
 
   build_s              a clean build of the headless host (out/ removed first), in seconds
@@ -39,12 +39,12 @@ import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HEADLESS = os.path.join(ROOT, "claywind-hosts", "headless")
-DESKTOP = os.path.join(ROOT, "claywind-hosts", "desktop")
+HEADLESS = os.path.join(ROOT, "ceeui-hosts", "headless")
+DESKTOP = os.path.join(ROOT, "ceeui-hosts", "desktop")
 EXE = ".exe" if os.name == "nt" else ""
 BENCH_FRAMES = 200
 IDLE_FRAMES = 60
-TABS = 6  # claywind-demo's NAV_COUNT
+TABS = 6  # ceeui-demo's NAV_COUNT
 DASHBOARD, CONTROLS, EFFECTS = 0, 1, 2
 
 
@@ -98,10 +98,10 @@ def build(package, clean):
 
 
 def headless(env, **extra):
-    """Runs the headless host with `env` and `extra` CLAYWIND_ variables; its output."""
+    """Runs the headless host with `env` and `extra` CEEUI_ variables; its output."""
     run = dict(env)
     for key, value in extra.items():
-        run["CLAYWIND_" + key] = str(value)
+        run["CEEUI_" + key] = str(value)
     done = subprocess.run([os.path.join(HEADLESS, "out", "headless" + EXE)], env=run, capture_output=True,
                           text=True, timeout=600)
     if done.returncode != 0:
@@ -136,7 +136,7 @@ def peak_mb(env):
              "subprocess.run(sys.argv[1:], check=True, capture_output=True)\n"
              "peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss\n"
              "print(peak / 1e6 if sys.platform == 'darwin' else peak / 1e3)\n")
-    run = dict(env, CLAYWIND_BENCH=str(BENCH_FRAMES), CLAYWIND_PIXEL_RATIO="2")
+    run = dict(env, CEEUI_BENCH=str(BENCH_FRAMES), CEEUI_PIXEL_RATIO="2")
     done = subprocess.run([sys.executable, "-c", probe, os.path.join(HEADLESS, "out", "headless" + EXE)], env=run,
                           capture_output=True, text=True, check=True)
     return float(done.stdout.strip())
@@ -186,9 +186,9 @@ def main():
     os_name = system()
     numbers = {}
     with tempfile.TemporaryDirectory() as work:
-        env = dict(os.environ, CLAYWIND_FONT_DIR=fonts(work))
+        env = dict(os.environ, CEEUI_FONT_DIR=fonts(work))
         for name in list(env):
-            if name.startswith("CLAYWIND_") and name != "CLAYWIND_FONT_DIR":
+            if name.startswith("CEEUI_") and name != "CEEUI_FONT_DIR":
                 del env[name]
         if not args.skip_build:
             numbers["build_s"] = build(HEADLESS, clean=True)
@@ -222,7 +222,7 @@ def main():
             mark = " over"
         shown = f"{value:.2f}" if isinstance(value, float) else str(value)
         rows.append(f"| {name:24} | {shown:>10} | {('-' if budget is None else str(budget)):>10} |{mark}")
-    title = f"ClayWind benchmarks on {os_name} ({platform.machine()})"
+    title = f"CeeUI benchmarks on {os_name} ({platform.machine()})"
     print(title)
     print("\n".join(rows))
     if differ:

@@ -1,0 +1,325 @@
+// SPDX-License-Identifier: MIT
+// ceeui-dev: hot reload for a CeeUI app (roadmap P3 step 7). Run it in the app's package directory:
+//
+//   cd ceeui-hosts/desktop && ../../ceeui-dev/out/ceeui_dev
+//
+// It builds the app, runs it with `--hot out/hot`, and watches the sources: the package's `src` and those of every
+// package it depends on by path (its ceesafe.toml's `path = "…"`, and theirs). When a source changes, it builds
+// again, into a new executable (a running program's file is never overwritten). A build that fails prints its errors
+// and the app keeps running; one that succeeds touches out/hot/reload, the app saves its state in out/hot/state and
+// ends, and the new build starts from that state. When the app ends by itself (its window closed), so does this.
+
+/// How often the sources are looked at.
+const POLL_MS: u64 = 300;
+
+/// Up to this many package directories are watched.
+const MAX_PACKAGES: usize = 32;
+
+/// The text of the file at `path`, or empty.
+fn readText(path: StringView) -> Vector<u8> {
+    var bytes = Vector<u8>.create();
+    match (File.open(path)) {
+        Ok(f) => {
+            var file = f;
+            var chunk = [0u8; 8192];
+            loop {
+                let n = match (file.read(mut chunk[..])) {
+                    Ok(k) => k,
+                    Err(_) => 0,
+                };
+                if (n == 0) {
+                    break;
+                }
+                for (i in 0usize..n) {
+                    bytes.push(chunk[i])!;
+                }
+            }
+        }
+        Err(_) => {}
+    }
+    return bytes;
+}
+
+/// `a/b`.
+fn joined(a: StringView, b: StringView) -> String {
+    var s = String.create();
+    s.append(a)!;
+    s.append("/")!;
+    s.append(b)!;
+    return s;
+}
+
+/// `path` with its `.` parts dropped and each `name/..` folded away (`./../../ceeui-demo/../ceeui` is
+/// `../../ceeui`), so a package reached by two paths is watched once.
+fn normalized(path: StringView) -> String {
+    let b = path.bytes();
+    var parts = Vector<StringView>.create();
+    var start: usize = 0;
+    for (i in 0..b.length + 1) {
+        if (i == b.length || b[i] == '/') {
+            let part = StringView.fromUtf8(b[start..i]) ?? "";
+            if (part.length == 0 || part == ".") {
+                // nothing
+            } else if (part == ".." && parts.length > 0 && parts[parts.length - 1] != "..") {
+                let dropped = parts.pop();
+            } else {
+                parts.push(part)!;
+            }
+            start = i + 1;
+        }
+    }
+    var s = String.create();
+    for (k in 0..parts.length) {
+        if (k > 0) {
+            s.append("/")!;
+        }
+        s.append(parts[k])!;
+    }
+    if (s.view().length == 0) {
+        s.append(".")!;
+    }
+    return s;
+}
+
+/// The values of `key = "…"` on the lines of `toml` (a package's name, its path dependencies): what the quotes
+/// after `key` hold, for each line where `key` comes before them.
+fn quotedAfter(toml: Slice<u8>, key: StringView, into: borrow mut Vector<String>) {
+    let k = key.bytes();
+    var line: usize = 0;
+    while (line < toml.length) {
+        var end = line;
+        while (end < toml.length && toml[end] != '\n') {
+            end += 1;
+        }
+        // Find `key`, then the next quoted text.
+        var i = line;
+        while (i + k.length <= end) {
+            var same = true;
+            for (j in 0..k.length) {
+                if (toml[i + j] != k[j]) {
+                    same = false;
+                    break;
+                }
+            }
+            if (same) {
+                var q = i + k.length;
+                while (q < end && toml[q] != '"') {
+                    q += 1;
+                }
+                var e = q + 1;
+                while (e < end && toml[e] != '"') {
+                    e += 1;
+                }
+                if (q < end && e < end) {
+                    match (StringView.fromUtf8(toml[q + 1..e])) {
+                        Some(v) => { into.push(String.from(v)!)!; }
+                        null => {}
+                    }
+                }
+                break;
+            }
+            i += 1;
+        }
+        line = end + 1;
+    }
+}
+
+/// The package directories to watch: `dir` and, through each manifest's `path = "…"` dependencies, every package
+/// it depends on.
+fn packagesFrom(path: StringView, into: borrow mut Vector<String>) {
+    let here = normalized(path);
+    let dir = here.view();
+    for (p in into.view()) {
+        if (p.view() == dir) {
+            return;
+        }
+    }
+    if (into.length >= MAX_PACKAGES) {
+        return;
+    }
+    into.push(String.from(dir)!)!;
+    let manifest = joined(dir, "ceesafe.toml");
+    let toml = readText(manifest.view());
+    var paths = Vector<String>.create();
+    quotedAfter(toml.view(), "path", mut paths);
+    for (p in paths.view()) {
+        let next = joined(dir, p.view());
+        packagesFrom(next.view(), mut into);
+    }
+}
+
+/// The sources' fingerprint: how many `.cee` files there are under `dir` and when they were last changed, folded
+/// into `sum`.
+fn fingerprint(dir: StringView, sum: borrow mut u64) {
+    let names = match (Directory.list(dir)) {
+        Ok(n) => n,
+        Err(_) => { return; }
+    };
+    for (name in names.view()) {
+        let path = joined(dir, name.view());
+        match (File.kind(path.view())) {
+            Ok(Some(PathKind.Directory)) => { fingerprint(path.view(), mut sum); }
+            Ok(Some(PathKind.File)) => {
+                let n = name.view().bytes();
+                if (n.length > 4 && n[n.length - 4] == '.' && n[n.length - 3] == 'c' && n[n.length - 2] == 'e' &&
+                    n[n.length - 1] == 'e') {
+                    let stamp = match (File.modified(path.view())) {
+                        Ok(t) => t.millis(),
+                        Err(_) => 0,
+                    };
+                    // Each file's time, mixed with its name, so a rename or a new file changes the sum too.
+                    var h: u64 = 1469598103934665603;
+                    for (b in n) {
+                        h = (h ^ (b as u64)).wrappingMul(1099511628211);
+                    }
+                    sum = sum.wrappingAdd(h ^ (truncate<u64>(stamp)).wrappingMul(0x9E3779B97F4A7C15));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The fingerprint of every watched package's `src`.
+fn sourcesSum(packages: borrow Vector<String>) -> u64 {
+    var sum: u64 = 0;
+    for (p in packages.view()) {
+        let src = joined(p.view(), "src");
+        fingerprint(src.view(), mut sum);
+    }
+    return sum;
+}
+
+/// Builds the package here into `out`; whether it built.
+fn build(out: StringView) -> bool {
+    var args = Vector<StringView>.create();
+    args.push("build")!;
+    args.push("-o")!;
+    args.push(out)!;
+    return match (Process.run("ceesafec", args)) {
+        Ok(status) => status == 0,
+        Err(_) => {
+            Console.writeErrorLine("ceeui-dev: cannot run ceesafec (is it on PATH?)");
+            false
+        }
+    };
+}
+
+/// Runs the app at `exe` with `--hot hot` on a thread of its own; its exit status arrives on `done`.
+fn launch(exe: String, hot: String, done: Channel<i32>) -> Result<Thread<void>, SpawnError> {
+    return Thread.spawn(move () => {
+        var args = Vector<StringView>.create();
+        let a = args.push("--hot");
+        let b = args.push(hot.view());
+        let status = match (Process.run(exe.view(), args)) {
+            Ok(s) => s,
+            Err(_) => -1,
+        };
+        let sent = done.send(status);
+    });
+}
+
+/// The `n`th build's executable: out/<name>-hot-<n>.
+fn executable(name: StringView, n: u32) -> String {
+    var b = [0u8; 160];
+    var w = TextWriter.create(mut b[..]);
+    w.text("out/");
+    w.text(name);
+    w.text("-hot-");
+    w.decimal(n as u64);
+    return String.from(StringView.fromUtf8(w.written())!)!;
+}
+
+/// Waits `ms` milliseconds (the loop below is no task: it builds, reads files and joins threads, which block).
+async fn pause(ms: u64) -> Result<void, AsyncError> {
+    await Timer.sleep(ms)?;
+    return Ok();
+}
+
+fn sleep(ms: u64) {
+    let slept = Async.run(pause(ms));
+}
+
+/// Watches, rebuilds and restarts the app until it ends by itself.
+fn devLoop(name: String, packages: Vector<String>) -> i32 {
+    let hot = String.from("out/hot")!;
+    let reload = joined(hot.view(), "reload");
+    let ignored = Directory.create(hot.view());
+    let stale = File.remove(joined(hot.view(), "state").view()); // a fresh start: no state from an earlier session
+    var n: u32 = 1;
+    var exe = executable(name.view(), n);
+    if (!build(exe.view())) {
+        Console.writeErrorLine("ceeui-dev: the first build failed; fix it and run ceeui-dev again");
+        return 1;
+    }
+    let done = match (Channel<i32>.create(4)) {
+        Ok(c) => c,
+        Err(_) => { return 1; }
+    };
+    var app = match (launch(exe.clone()!, hot.clone()!, done.clone())) {
+        Ok(t) => t,
+        Err(_) => { return 1; }
+    };
+    Console.writeLine("ceeui-dev: running; edit a source to reload");
+    var sum = sourcesSum(packages);
+    loop {
+        sleep(POLL_MS);
+        match (done.tryRecv()) {
+            Some(status) => {
+                app.join();
+                let removed = File.remove(exe.view());
+                Console.writeLine("ceeui-dev: the app ended");
+                return status;
+            }
+            null => {}
+        }
+        let now = sourcesSum(packages);
+        if (now == sum) {
+            continue;
+        }
+        sum = now;
+        let next = executable(name.view(), n + 1);
+        Console.writeLine("ceeui-dev: a source changed; building");
+        if (!build(next.view())) {
+            Console.writeLine("ceeui-dev: the build failed; the app keeps running");
+            continue;
+        }
+        // The new build is ready: the running app saves its state and ends, then the new one starts from it.
+        let touched = match (File.create(reload.view())) {
+            Ok(f) => f.writeAt("r".bytes(), 0).isOk(),
+            Err(_) => false,
+        };
+        if (!touched) {
+            Console.writeErrorLine("ceeui-dev: cannot write out/hot/reload");
+            continue;
+        }
+        let ended = done.recv();
+        app.join();
+        let old = File.remove(exe.view());
+        n += 1;
+        exe = next;
+        app = match (launch(exe.clone()!, hot.clone()!, done.clone())) {
+            Ok(t) => t,
+            Err(_) => { return 1; }
+        };
+        Console.writeLine("ceeui-dev: reloaded");
+    }
+}
+
+fn main() -> i32 {
+    let toml = readText("ceesafe.toml");
+    var names = Vector<String>.create();
+    quotedAfter(toml.view(), "name", mut names);
+    if (names.length == 0) {
+        Console.writeErrorLine(
+            "ceeui-dev: run it in the app's package directory (no ceesafe.toml with a name here)",
+        );
+        return 2;
+    }
+    var packages = Vector<String>.create();
+    packagesFrom(".", mut packages);
+    Console.write("ceeui-dev: watching ");
+    Console.write(packages.length);
+    Console.writeLine(" packages' sources");
+    return devLoop(names[0].clone()!, packages);
+}

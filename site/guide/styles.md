@@ -33,7 +33,7 @@ A style is for an element. Text has its own builder, `Text` ([Text](./text)).
 
 Lengths are `f32` points. `space(n)` is Tailwind's spacing scale: `n * 4` points.
 
-| Tailwind | ClayWind | Points |
+| Tailwind | CeeUI | Points |
 |---|---|---|
 | `p-1` | `p(space(1.0))` | 4 |
 | `p-2.5` | `p(space(2.5))` | 10 |
@@ -205,7 +205,7 @@ ui.close();
 They are applied in that order, a later one over an earlier. A disabled element takes only its `disabled`
 variant: no hover, active, group or focus.
 
-Hover and active are found by ClayWind. Focus and disabled are the app's to say, since a style does not know
+Hover and active are found by CeeUI. Focus and disabled are the app's to say, since a style does not know
 them:
 
 ```ceesafe frame
@@ -374,7 +374,7 @@ A `TransitionSpec` says which groups of values are eased:
 A transition follows any change of the style, not only a variant's:
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public fn statusDot(ui: borrow mut Ui, online: bool) {
     ui.open(

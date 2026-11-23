@@ -1,12 +1,12 @@
 # A desktop host
 
 This page explains the host of a desktop app: the file that opens the window, sets memory aside, and runs the
-frames. It goes through the `src/main.cee` that `claywind-pack new` makes, step by step, then covers the manifest,
+frames. It goes through the `src/main.cee` that `ceeui-pack new` makes, step by step, then covers the manifest,
 Linux, the title bar, menus, file drops, the theme and the environment variables.
 
 ## What a host does
 
-The `claywind` package has no window, reads no files and allocates nothing by itself. A host supplies those:
+The `ceeui` package has no window, reads no files and allocates nothing by itself. A host supplies those:
 
 | The host gives | To |
 |---|---|
@@ -15,20 +15,20 @@ The `claywind` package has no window, reads no files and allocates nothing by it
 | Input and a clock, each frame | The `Ui`, through a `Platform` |
 | A place for the pixels | The window |
 
-On a desktop the `claywind-desktop` package does most of this over CeeSafe's `Window`. Its `Pane` holds one
+On a desktop the `ceeui-desktop` package does most of this over CeeSafe's `Window`. Its `Pane` holds one
 window's `Ui`, `Damage` and input. The same host also runs on iOS and Android; see [Phones](./phones).
 
 The host's source needs three packages:
 
 ```ceesafe skip
-import claywind;
-import claywind_desktop;
-import claywind_fonts;
+import ceeui;
+import ceeui_desktop;
+import ceeui_fonts;
 ```
 
 ## The manifest
 
-`ceesafe.toml` names the package and its dependencies. This is what `claywind-pack new tasks --claywind Clay`
+`ceesafe.toml` names the package and its dependencies. This is what `ceeui-pack new tasks --ceeui Clay`
 writes:
 
 ```toml
@@ -40,26 +40,26 @@ windowed = true # a GUI program: no console window on Windows
 ceesafec = ">=0.78.0"
 
 [dependencies]
-claywind = { path = "Clay/claywind" }
-claywind_fonts = { path = "Clay/claywind-fonts" }
-claywind_desktop = { path = "Clay/claywind-desktop" }
+ceeui = { path = "Clay/ceeui" }
+ceeui_fonts = { path = "Clay/ceeui-fonts" }
+ceeui_desktop = { path = "Clay/ceeui-desktop" }
 ```
 
 | Key | Meaning |
 |---|---|
 | `kind = "executable"` | A program with a `main` |
 | `windowed = true` | A GUI program: Windows opens no console window for it |
-| `claywind` | The toolkit: layout, styles, controls, text, the software renderer |
-| `claywind_desktop` | `Pane`, `DesktopPlatform`, the system's menus, file drops, the title bar, hot reload's side |
-| `claywind_fonts` | `SystemFonts`: fallback fonts from the system for characters the loaded fonts lack |
+| `ceeui` | The toolkit: layout, styles, controls, text, the software renderer |
+| `ceeui_desktop` | `Pane`, `DesktopPlatform`, the system's menus, file drops, the title bar, hot reload's side |
+| `ceeui_fonts` | `SystemFonts`: fallback fonts from the system for characters the loaded fonts lack |
 
-Without `--claywind PATH` the dependencies come from GitHub, and `ceesafec fetch` gets them:
+Without `--ceeui PATH` the dependencies come from GitHub, and `ceesafec fetch` gets them:
 
 ```toml
 [dependencies]
-claywind = { git = "https://github.com/CeeSafe/Clay.git", branch = "main", dir = "claywind" }
-claywind_fonts = { git = "https://github.com/CeeSafe/Clay.git", branch = "main", dir = "claywind-fonts" }
-claywind_desktop = { git = "https://github.com/CeeSafe/Clay.git", branch = "main", dir = "claywind-desktop" }
+ceeui = { git = "https://github.com/CeeSafe/Clay.git", branch = "main", dir = "ceeui" }
+ceeui_fonts = { git = "https://github.com/CeeSafe/Clay.git", branch = "main", dir = "ceeui-fonts" }
+ceeui_desktop = { git = "https://github.com/CeeSafe/Clay.git", branch = "main", dir = "ceeui-desktop" }
 ```
 
 ## The window
@@ -81,11 +81,11 @@ fn main() -> i32 {
 ```
 
 `Window` is CeeSafe's, from its standard library. It is AppKit on macOS, Win32 on Windows, and Wayland or X11 on
-Linux. `windowError` is `claywind-desktop`'s: it turns the reason a window did not open into words.
+Linux. `windowError` is `ceeui-desktop`'s: it turns the reason a window did not open into words.
 
 ## Memory
 
-All of ClayWind's memory is set aside here, once. A frame allocates nothing.
+All of CeeUI's memory is set aside here, once. A frame allocates nothing.
 
 ```ceesafe skip
     // The UI's and the renderer's memory, set aside once: a frame allocates nothing.
@@ -156,7 +156,7 @@ and the pixel ratio.
 
 ```ceesafe skip
     if (!loadSystemFonts(mut raster)) {
-        Console.writeErrorLine("__NAME__: no fonts found; set CLAYWIND_FONT_DIR");
+        Console.writeErrorLine("__NAME__: no fonts found; set CEEUI_FONT_DIR");
         return 1;
     }
     // Fonts for what the loaded ones lack (other scripts, emoji), found among the system's when a frame needs them.
@@ -168,7 +168,7 @@ monospaced one as `FONT_MONO`. It takes them from the first of these places that
 
 | Place | Faces |
 |---|---|
-| `CLAYWIND_FONT_DIR`, when set | `Arial.ttf`, `Arial Bold.ttf`, `Courier New.ttf` |
+| `CEEUI_FONT_DIR`, when set | `Arial.ttf`, `Arial Bold.ttf`, `Courier New.ttf` |
 | macOS | Arial, Arial Bold, Courier New |
 | Windows | Arial, Arial Bold, Courier New |
 | Linux with the Microsoft core fonts | Arial, Arial Bold, Courier New |
@@ -177,7 +177,7 @@ monospaced one as `FONT_MONO`. It takes them from the first of these places that
 | Fedora and others | Liberation Sans, Sans Bold, Mono |
 | iOS | Helvetica Neue, its bold, Courier New |
 
-When `CLAYWIND_FONT_DIR` is set, only that directory is tried.
+When `CEEUI_FONT_DIR` is set, only that directory is tried.
 
 To use fonts of your own, read the files and call `raster.loadFont(id, bytes)` instead. [Text](./text) covers fonts
 and font ids.
@@ -297,17 +297,17 @@ the same as on macOS and Windows. One thing can differ on Linux:
 |---|---|
 | Menus | Where the system gives no menu bar (X11), the app draws its menus in the window with `Controls.menuBar` |
 
-The title bar ClayWind draws, the next section, is the same on every desktop system.
+The title bar CeeUI draws, the next section, is the same on every desktop system.
 
 ## The title bar
 
 A window opened with `WindowStyle.ProgramTitleBar` has no title bar of the system's, where the system allows that.
-ClayWind then draws one: the title, and minimize, maximize and close buttons, in the theme. The demo's host opens
+CeeUI then draws one: the title, and minimize, maximize and close buttons, in the theme. The demo's host opens
 its window this way:
 
 ```ceesafe skip
     var window = match (Window.openStyled(
-        "ClayWind — CeeSafe",
+        "CeeUI — CeeSafe",
         startWidth,
         startHeight,
         WindowSurface.Frames,
@@ -315,12 +315,12 @@ its window this way:
     )) {
 ```
 
-`WindowBar`, in `claywind-desktop`, draws the bar after the app's frame and acts on its buttons after the layout:
+`WindowBar`, in `ceeui-desktop`, draws the bar after the app's frame and acts on its buttons after the layout:
 
 ```ceesafe skip
         main.begin(mut window);
         demoFrameWith(mut main.ui, mut app, raster, mut jobs);
-        let barPress = WindowBar.draw(mut main.ui, window, "ClayWind — CeeSafe");
+        let barPress = WindowBar.draw(mut main.ui, window, "CeeUI — CeeSafe");
         if (!main.end(mut window, raster)) {
             Console.writeErrorLine("desktop: the frame does not fit the UI capacity");
             return 1;
@@ -350,7 +350,7 @@ ui.close();
 
 The template's frame does this already. The same call keeps the content clear of a phone's status bar.
 
-`WindowBar` uses `TitleBar`, which is in `claywind` and knows nothing of windows. A host of another kind can draw
+`WindowBar` uses `TitleBar`, which is in `ceeui` and knows nothing of windows. A host of another kind can draw
 the bar itself:
 
 ```ceesafe frame
@@ -404,7 +404,7 @@ its action's key binding. When `setMenu` fails, the app draws its own bar with `
 
 ## File drops
 
-`Drops`, in `claywind-desktop`, passes files dragged from the system on to the frame, and keeps the paths of the
+`Drops`, in `ceeui-desktop`, passes files dragged from the system on to the frame, and keeps the paths of the
 last drop.
 
 Before the loop:
@@ -471,12 +471,12 @@ The built-in controls draw in the theme by themselves. The host follows it for t
             Color.hex(if (pane.ui.isDarkMode()) SLATE_950 else SLATE_50),
 ```
 
-The template starts dark. The demo's host starts dark unless `CLAYWIND_LIGHT` is set:
+The template starts dark. The demo's host starts dark unless `CEEUI_LIGHT` is set:
 
 ```ceesafe skip
     let dark = match (resumed) {
         Some(r) => r.dark,
-        null => Environment.variable("CLAYWIND_LIGHT") == null,
+        null => Environment.variable("CEEUI_LIGHT") == null,
     };
 ```
 
@@ -484,18 +484,18 @@ The template starts dark. The demo's host starts dark unless `CLAYWIND_LIGHT` is
 
 | Variable | Read by | Effect |
 |---|---|---|
-| `CLAYWIND_FONT_DIR=DIR` | `loadSystemFonts`, so the template's app and the demo | The directory that holds `Arial.ttf`, `Arial Bold.ttf` and `Courier New.ttf` |
-| `CLAYWIND_FONT_PATH=DIR` | `SystemFonts` | One more folder to search for fallback fonts |
-| `CLAYWIND_LIGHT=1` | The demo's host | Starts in light mode |
-| `CLAYWIND_DRAWN_MENUS=1` | The demo's host | Draws the menu bar in the window on every system |
+| `CEEUI_FONT_DIR=DIR` | `loadSystemFonts`, so the template's app and the demo | The directory that holds `Arial.ttf`, `Arial Bold.ttf` and `Courier New.ttf` |
+| `CEEUI_FONT_PATH=DIR` | `SystemFonts` | One more folder to search for fallback fonts |
+| `CEEUI_LIGHT=1` | The demo's host | Starts in light mode |
+| `CEEUI_DRAWN_MENUS=1` | The demo's host | Draws the menu bar in the window on every system |
 
 ```sh
-CLAYWIND_LIGHT=1 CLAYWIND_FONT_DIR=/usr/share/fonts/truetype/dejavu ./out/desktop
+CEEUI_LIGHT=1 CEEUI_FONT_DIR=/usr/share/fonts/truetype/dejavu ./out/desktop
 ```
 
 ## More in the demo's host
 
-`claywind-hosts/desktop/src/main.cee` is a fuller host. Beyond the template's it has:
+`ceeui-hosts/desktop/src/main.cee` is a fuller host. Beyond the template's it has:
 
 - a second window that shares the app's state and the raster: [Several windows](./app#several-windows);
 - the system's file dialogs: [File dialogs](./app#file-dialogs);

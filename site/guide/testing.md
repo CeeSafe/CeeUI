@@ -1,7 +1,7 @@
 # Testing an app
 
 This page shows how to test a frame without a window. A test gives the `Ui` a platform it scripts, runs frames, and
-checks the app's state and the layout. ClayWind's own tests (`claywind-tests`) work this way.
+checks the app's state and the layout. CeeUI's own tests (`ceeui-tests`) work this way.
 
 ## Why it needs no window
 
@@ -19,7 +19,7 @@ This file tests a counter: a button that adds one. It is a whole test file, with
 needs.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 /// A platform the test scripts: it sets the pointer, the keys and the clock between frames.
 struct TestPlatform {
@@ -171,7 +171,7 @@ default and must be written: `screenSize`, `frameTime`, `time`, `pointer`, `keyD
 `nextChar` and `setCursor`. The others have defaults that say "none": the safe area, the keyboard's inset,
 keystrokes, a chosen menu action, a file drag and touches.
 
-ClayWind's tests use a fuller one, `FakePlatform` in `claywind-tests/tests/ui_test.cee`. It also scripts typed
+CeeUI's tests use a fuller one, `FakePlatform` in `ceeui-tests/tests/ui_test.cee`. It also scripts typed
 characters, keystrokes with modifiers, touches, the safe area, the keyboard's inset and files dragged from the
 system. Copy it when a test needs those.
 
@@ -236,7 +236,7 @@ After a frame, the `Ui` has the list a screen reader is given. A test reads it, 
 | `node.has(ACCESS_CHECKED)` | Whether it has a state flag |
 | `ui.accessAct(id, action)` | Asks an action of an element; the next frame's controls see it |
 
-These lines are from `claywind-tests/tests/access_test.cee`. `nodeNamed` is the test's own helper, which finds a
+These lines are from `ceeui-tests/tests/access_test.cee`. `nodeNamed` is the test's own helper, which finds a
 node by its label:
 
 ```ceesafe skip
@@ -266,11 +266,11 @@ assertions returns that result, so `?` ends the test at the first failure.
 
 ## Running the tests
 
-A package names its test directories in `ceesafe.toml`. This is `claywind-tests`' own:
+A package names its test directories in `ceesafe.toml`. This is `ceeui-tests`' own:
 
 ```toml
 [package]
-name = "claywind_tests"
+name = "ceeui_tests"
 version = "0.1.0"
 kind = "executable"
 tests = ["tests"]
@@ -279,7 +279,7 @@ tests = ["tests"]
 `ceesafec test` builds the test files and runs every `@test` function:
 
 ```sh
-cd claywind-tests
+cd ceeui-tests
 ceesafec test            # add --interp to run them in CeeSafe's interpreter
 ```
 
@@ -290,7 +290,7 @@ other test files, and helpers such as `heap` and `near32` are shared the same wa
 
 Two more ways to test, both in the repository:
 
-- `claywind-demo`'s `ScriptPlatform` reads input from a script of clicks, moves, keys and typed text, a frame at a
-  time. `claywind-tests/tests/demo_test.cee` drives the demo with it.
+- `ceeui-demo`'s `ScriptPlatform` reads input from a script of clicks, moves, keys and typed text, a frame at a
+  time. `ceeui-tests/tests/demo_test.cee` drives the demo with it.
 - [The headless host](./tools#the-headless-host) writes a frame of the demo to a file, with the same scripted
   input.

@@ -111,7 +111,7 @@ A focused field may say what kind of text it takes, which chooses the keyboard, 
 reports last one frame, so make them every frame the field has the focus.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Login {
     public email: [u8; 64];
@@ -178,11 +178,11 @@ and start from that state:
 - Back on the screen, the app lays out and draws its next frame whole.
 - At a memory warning the desktop host lets go of the inspector's cached frame.
 
-`claywind-hosts/desktop/src/main.cee` shows all four.
+`ceeui-hosts/desktop/src/main.cee` shows all four.
 
 ## The GPU on a phone
 
-The GPU host (`claywind-hosts/gpu`) draws with Metal on an iPhone and with Vulkan on Android.
+The GPU host (`ceeui-hosts/gpu`) draws with Metal on an iPhone and with Vulkan on Android.
 
 - Android gives the app another window each time it is back on the screen. The host attaches again when the
   window's handle changes, and presents nothing while there is none.
@@ -192,5 +192,5 @@ The GPU host (`claywind-hosts/gpu`) draws with Metal on an iPhone and with Vulka
 
 ## Packing
 
-`claywind-pack` makes an iOS `.app`, for the simulator or signed for a device, and an Android `.apk`, from an app's
+`ceeui-pack` makes an iOS `.app`, for the simulator or signed for a device, and an Android `.apk`, from an app's
 package directory. [Packing](./tools#packing) has the commands and their options.

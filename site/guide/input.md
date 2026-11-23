@@ -38,7 +38,7 @@ Hit testing uses the last frame's layout, so a query may come before or after th
 | `ui.pressedOutside(a, b)` | The primary button went down over neither `a` nor `b` (`b` may be 0) |
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Likes {
     public count: u32;
@@ -88,7 +88,7 @@ A control that follows the pointer after a press (a slider's thumb) captures it.
 `ui.captured()` gives it back (0 for none), and the control lets go with `ui.capture(0)`.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Knob {
     public x: f32;
@@ -138,7 +138,7 @@ The keys of `Key`:
 | Function keys | `F1` to `F12` |
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Menu {
     public row: usize;
@@ -191,7 +191,7 @@ An element of your own joins in with `registerFocusable`. `Style.isFocused(on)` 
 element shows that it has the focus:
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Stars {
     public starred: bool;
@@ -222,7 +222,7 @@ keyboard focus.
 A key binding ties a keystroke to a named action. A frame asks whether the action was triggered.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Palette {
     public bound: bool;
@@ -309,7 +309,7 @@ A drop target asks `ui.dropTarget(id, kind)` each frame. It gives a `DropState`:
 | `Dropped(payload)` | One was dropped on it this frame |
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 const CARD: u32 = 1;
 
@@ -381,7 +381,7 @@ Files dragged from the system over the window are a drag of kind `DRAG_FILES`. I
 the drop. The frame keeps that number, and the app asks its host for the paths after the frame.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Inbox {
     /// The host's number for the last drop, or 0.
@@ -431,7 +431,7 @@ wherever it began:
 | `ui.pinchOn(name)` | `ui.pinch()` | `Pinch?`: `phase`, `center`, `startCenter`, `scale`, `scaleDelta` |
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Photo {
     public zoom: f32;

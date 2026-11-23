@@ -1,0 +1,51 @@
+// SPDX-License-Identifier: MIT
+// The demo's saved state, for both hosts. Hot reload (roadmap P3 step 7): started by ceeui-dev with `--hot DIR`,
+// the app reads the state its previous build saved in DIR/state (the window's size, the theme, and DemoApp.save's
+// state) and saves it there again when a new build asks. A phone (P4 step 6): the app saves the same state in its own
+// data folder each time it leaves the screen, and starts from it.
+
+import ceeui;
+import ceeui_demo;
+import ceeui_desktop;
+
+/// The format of DIR/state: the host's part (version 1) and the demo's (DEMO_STATE_VERSION).
+const HOT_STATE_VERSION: u32 = (1u32 << 16) | DEMO_STATE_VERSION;
+
+/// The state a previous build saved, as read back: the window's size, the theme, and whether the app's state came
+/// back too (it is restored into `app`).
+public struct HotStart {
+    public width: u32;
+    public height: u32;
+    public dark: bool;
+    public restored: bool;
+}
+
+/// Reads DIR/state into `app`, if it is there and of this format; null otherwise (the app starts afresh).
+public fn hotRestore(dir: StringView, app: borrow mut DemoApp) -> HotStart? {
+    let data = hotReadState(dir);
+    if (data.length == 0) {
+        return null;
+    }
+    var r = SnapshotReader.over(data.view(), HOT_STATE_VERSION);
+    let width = r.u32();
+    let height = r.u32();
+    let dark = r.bool();
+    if (!r.intact() || !app.restore(mut r)) {
+        return null;
+    }
+    return HotStart { width: width.max(320).min(4096), height: height.max(240).min(4096), dark: dark, restored: true };
+}
+
+/// Writes the window's size, the theme and `app`'s state to DIR/state; false when it could not be written.
+public fn hotSave(dir: StringView, size: WindowSize, dark: bool, app: borrow DemoApp) -> bool {
+    var buffer = [0u8; 4096];
+    var w = SnapshotWriter.over(mut buffer[..], HOT_STATE_VERSION);
+    w.u32(size.width);
+    w.u32(size.height);
+    w.bool(dark);
+    app.save(mut w);
+    if (!w.fits()) {
+        return false;
+    }
+    return hotWriteState(dir, w.written());
+}

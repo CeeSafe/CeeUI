@@ -9,7 +9,7 @@ const guide = [
   {
     text: "Start",
     items: [
-      { text: "What ClayWind is", link: "/guide/introduction" },
+      { text: "What CeeUI is", link: "/guide/introduction" },
       { text: "Getting started", link: "/guide/getting-started" },
       { text: "A frame", link: "/guide/frame" },
     ],
@@ -49,7 +49,7 @@ const guide = [
 ];
 
 export default defineConfig({
-  title: "ClayWind",
+  title: "CeeUI",
   description: "A Tailwind-flavoured immediate-mode UI toolkit in CeeSafe, for desktops, phones and the web.",
   base: "/Clay/",
   srcExclude: ["README.md"],
@@ -67,6 +67,6 @@ export default defineConfig({
     socialLinks: [{ icon: "github", link: "https://github.com/CeeSafe/Clay" }],
     search: { provider: "local" },
     outline: [2, 3],
-    footer: { message: "ClayWind is MIT licensed. Its layout engine is a port of Clay by Nic Barker (zlib)." },
+    footer: { message: "CeeUI is MIT licensed. Its layout engine is a port of Clay by Nic Barker (zlib)." },
   },
 });

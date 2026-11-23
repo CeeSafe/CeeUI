@@ -1,11 +1,11 @@
 # Accessibility
 
-This page says what a ClayWind app tells a screen reader, how a control of your own reports itself, how lists and
+This page says what a CeeUI app tells a screen reader, how a control of your own reports itself, how lists and
 tables are reported, what a reader's actions do, and what each system's reader gets.
 
 ## What a screen reader is told
 
-ClayWind draws its own pixels, so a screen reader cannot see the window's controls. Each frame, the `Ui` builds a
+CeeUI draws its own pixels, so a screen reader cannot see the window's controls. Each frame, the `Ui` builds a
 list of the frame's elements in reading order. The host gives the list to the system. Each element has:
 
 | Part | What it is |
@@ -59,7 +59,7 @@ A control with no label of its own, such as a text field, a slider or a dropdown
 with `ui.accessName` after the control:
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Settings {
     public server: [u8; 64];
@@ -96,7 +96,7 @@ then the control's.
 This is a toggle that a pointer, the keyboard and a screen reader can all work:
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public fn starToggle(ui: borrow mut Ui, starred: borrow mut bool) {
     let id = hashId("star");
@@ -193,7 +193,7 @@ A control of your own that tests `ui.pressedOn` or `ui.clicked` takes a reader's
 range adds `ui.accessStep(id)` steps to its value:
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public fn levelMeter(ui: borrow mut Ui, level: borrow mut f32) {
     let id = hashId("level");

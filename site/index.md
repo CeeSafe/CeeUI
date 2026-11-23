@@ -1,18 +1,18 @@
 ---
 layout: home
 hero:
-  name: ClayWind
+  name: CeeUI
   text: A UI toolkit in CeeSafe
   tagline: Immediate mode, styled Tailwind-fashion, drawn by its own renderer. One app for macOS, Windows, Linux, iOS, Android and the web.
   image:
     src: /dashboard.png
-    alt: The ClayWind demo's dashboard
+    alt: The CeeUI demo's dashboard
   actions:
     - theme: brand
       text: Getting started
       link: /guide/getting-started
     - theme: alt
-      text: What ClayWind is
+      text: What CeeUI is
       link: /guide/introduction
     - theme: alt
       text: GitHub

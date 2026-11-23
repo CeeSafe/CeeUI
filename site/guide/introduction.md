@@ -1,17 +1,17 @@
-# What ClayWind is
+# What CeeUI is
 
-This page says what ClayWind is, what it runs on, what is in it, and how its repository is laid out.
+This page says what CeeUI is, what it runs on, what is in it, and how its repository is laid out.
 
 ## A UI toolkit in CeeSafe
 
-ClayWind is an immediate-mode UI toolkit with Tailwind-flavoured styles. It is written in
+CeeUI is an immediate-mode UI toolkit with Tailwind-flavoured styles. It is written in
 [CeeSafe](https://ceesafe.github.io/CeeSafe/), a memory-safe systems language that compiles to C.
 
 An app is a function, the frame. It runs whenever something changed and declares the whole window from the app's
 state. There are no widget objects to create and keep in step with your data.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Hello {
     public greeted: bool;
@@ -27,7 +27,7 @@ public fn helloFrame(ui: borrow mut Ui, app: borrow mut Hello) {
 }
 ```
 
-The parts under that function are ClayWind's own:
+The parts under that function are CeeUI's own:
 
 | Part | What it is |
 |---|---|
@@ -51,8 +51,8 @@ One app runs on each of these:
 | macOS | A native window (AppKit); the software renderer, or Metal in the GPU host |
 | Windows | A native window (Win32); the software renderer, or Direct3D 12 or Vulkan in the GPU host |
 | Linux | A window on Wayland or X11; the software renderer, or Vulkan in the GPU host |
-| iOS | An app packed by `claywind-pack`; Metal in the GPU host |
-| Android | An `.apk` packed by `claywind-pack`; Vulkan in the GPU host |
+| iOS | An app packed by `ceeui-pack`; Metal in the GPU host |
+| Android | An `.apk` packed by `ceeui-pack`; Vulkan in the GPU host |
 | The web | A WebAssembly module that draws onto a canvas with the software renderer |
 
 There are three more hosts for the demo: a headless one that writes frames to files, one that streams frames to a
@@ -75,41 +75,41 @@ browser page, and one that draws a small dashboard in a terminal.
 - [An app](./app): an app's state, and background work.
 - [A desktop host](./desktop), [Phones](./phones) and [The web](./web): the hosts.
 - [Accessibility](./accessibility): what a screen reader is told.
-- [Bindings](./bindings): ClayWind from C.
+- [Bindings](./bindings): CeeUI from C.
 - [Tools](./tools): packing, hot reload and the layout inspector.
 - [Testing](./testing): the test suite.
 
 ## The packages
 
-The repository is a set of CeeSafe packages. An app depends on `claywind`, and on the hosted packages it needs.
+The repository is a set of CeeSafe packages. An app depends on `ceeui`, and on the hosted packages it needs.
 
 | Path | What it is |
 |---|---|
-| `claywind/` | The library: layout, the renderer, fonts, images, controls, `Ui`, `Style`, transitions and damage tracking |
-| `claywind-fonts/` | System font discovery for hosts: fallback fonts for the characters a frame's fonts lack |
-| `claywind-desktop/` | What a desktop app needs around ClayWind: `DesktopPlatform` over CeeSafe's `Window`, the system's fonts, `Pane`, the system's menus, file drops, and hot reload's side in the app |
-| `claywind-tasks/` | Background work for a UI: a `Task` runs jobs on threads, and their results wake the window |
-| `claywind-web/` | The web host: a ClayWind app as a WebAssembly module in a browser |
-| `claywind-capi/` | ClayWind for C: a C header, and bindings built on it |
-| `claywind-demo/` | The demo app, and `ScriptPlatform`, a scripted input source for tests |
-| `claywind-demo-tasks/` | What the demo's hosts share: its saved state and its background jobs |
-| `claywind-dev/` | Hot reload: rebuilds an app when its sources change and restarts it where it was |
-| `claywind-pack/` | Packing: an app as a macOS `.app`, an iOS `.app`, an Android `.apk` or a web page; and `new`, a new app from its template |
-| `claywind-hosts/desktop/` | The demo in a native window |
-| `claywind-hosts/headless/` | The demo rendered to files: screenshots, golden tests and benchmarks |
-| `claywind-hosts/browser/` | An HTTP and WebSocket server that streams the demo to a `<canvas>` page |
-| `claywind-hosts/terminal/` | A small dashboard drawn in a terminal, with mouse and keyboard |
-| `claywind-hosts/gpu/` | The demo drawn by the GPU: Metal, Vulkan or Direct3D 12 |
-| `claywind-hosts/web/` | The demo on the web host |
-| `claywind-tests/` | The test suite (`ceesafec test`) |
+| `ceeui/` | The library: layout, the renderer, fonts, images, controls, `Ui`, `Style`, transitions and damage tracking |
+| `ceeui-fonts/` | System font discovery for hosts: fallback fonts for the characters a frame's fonts lack |
+| `ceeui-desktop/` | What a desktop app needs around CeeUI: `DesktopPlatform` over CeeSafe's `Window`, the system's fonts, `Pane`, the system's menus, file drops, and hot reload's side in the app |
+| `ceeui-tasks/` | Background work for a UI: a `Task` runs jobs on threads, and their results wake the window |
+| `ceeui-web/` | The web host: a CeeUI app as a WebAssembly module in a browser |
+| `ceeui-capi/` | CeeUI for C: a C header, and bindings built on it |
+| `ceeui-demo/` | The demo app, and `ScriptPlatform`, a scripted input source for tests |
+| `ceeui-demo-tasks/` | What the demo's hosts share: its saved state and its background jobs |
+| `ceeui-dev/` | Hot reload: rebuilds an app when its sources change and restarts it where it was |
+| `ceeui-pack/` | Packing: an app as a macOS `.app`, an iOS `.app`, an Android `.apk` or a web page; and `new`, a new app from its template |
+| `ceeui-hosts/desktop/` | The demo in a native window |
+| `ceeui-hosts/headless/` | The demo rendered to files: screenshots, golden tests and benchmarks |
+| `ceeui-hosts/browser/` | An HTTP and WebSocket server that streams the demo to a `<canvas>` page |
+| `ceeui-hosts/terminal/` | A small dashboard drawn in a terminal, with mouse and keyboard |
+| `ceeui-hosts/gpu/` | The demo drawn by the GPU: Metal, Vulkan or Direct3D 12 |
+| `ceeui-hosts/web/` | The demo on the web host |
+| `ceeui-tests/` | The test suite (`ceesafec test`) |
 
-`claywind` itself is not hosted: it reads no files and opens no windows. A host gives it input through a
+`ceeui` itself is not hosted: it reads no files and opens no windows. A host gives it input through a
 `Platform` and takes its drawing through a `Backend`. [A frame](./frame) shows both.
 
 ## Credits
 
-ClayWind stands on [Clay](https://github.com/nicbarker/clay) by Nic Barker. The layout model, the element and
-sizing rules and the layout algorithms are Clay's. The layout engine here (`claywind/src/layout_*.cee`) is a port
+CeeUI stands on [Clay](https://github.com/nicbarker/clay) by Nic Barker. The layout model, the element and
+sizing rules and the layout algorithms are Clay's. The layout engine here (`ceeui/src/layout_*.cee`) is a port
 of them, altered for CeeSafe. Clay is under the zlib licence; its notice is in the repository's
 `THIRD_PARTY_NOTICES.md`.
 
@@ -117,4 +117,4 @@ The software renderer is written from scratch to match the output of [ThorVG](ht
 and contains none of its code. The Tailwind-style API began as
 [TomasBorquez/renderer.h](https://github.com/TomasBorquez/renderer.h).
 
-ClayWind is under the MIT licence.
+CeeUI is under the MIT licence.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Writes shaping cases for claywind-tests' shapingMatchesHarfBuzz: text in a font, and HarfBuzz's glyphs for it
+"""Writes shaping cases for ceeui-tests' shapingMatchesHarfBuzz: text in a font, and HarfBuzz's glyphs for it
 (hb-shape), for the test to shape the same text and compare glyph for glyph.
 
     python3 tools/shaping/hb_cases.py OUT_FILE [COUNT_PER_FONT] [SEED]

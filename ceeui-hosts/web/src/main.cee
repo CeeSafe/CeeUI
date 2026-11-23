@@ -1,0 +1,57 @@
+// SPDX-License-Identifier: MIT
+// The demo in a browser (roadmap P5): a WebAssembly module on the web host (ceeui-web), packed by
+// `ceeui-pack web` (build.sh). `run` is the program: it loops for as long as the page lives.
+
+import ceeui;
+import ceeui_demo;
+import ceeui_web;
+
+/// Runs the demo until the page goes: 0 when memory or a font is missing, and otherwise it does not return. The
+/// page's fonts are a regular, a bold and a monospaced face, in that order.
+@export("run")
+fn run() -> i32 {
+    var uiBlock = WebBlock.take(8388608);
+    var rasterBlock = WebBlock.take(WEB_RASTER_BYTES);
+    var damageBlock = WebBlock.take(4194304);
+    let uiStorage = uiBlock.bytes();
+    let rasterStorage = rasterBlock.bytes();
+    let damageStorage = damageBlock.bytes();
+    if (uiStorage.length == 0 || rasterStorage.length == 0 || damageStorage.length == 0) {
+        return 0;
+    }
+    let uiMemory = FixedBufferAllocator.over(mut uiStorage);
+    let rasterMemory = FixedBufferAllocator.over(mut rasterStorage);
+    let damageMemory = FixedBufferAllocator.over(mut damageStorage);
+    var ui = match (Ui.create(uiMemory, UiCapacity.of(2048))) {
+        Ok(u) => u,
+        Err(_) => { return 0; }
+    };
+    var raster = match (Raster.create(rasterMemory, webRasterCapacity())) {
+        Ok(r) => r,
+        Err(_) => { return 0; }
+    };
+    var damage = match (Damage.create(damageMemory, 16384)) {
+        Ok(d) => d,
+        Err(_) => { return 0; }
+    };
+    let fonts = WebFonts.open();
+    if (!raster.loadFont(FONT_18, fonts.font(0)) || !raster.loadFont(FONT_BOLD, fonts.font(1)) ||
+        !raster.loadFont(FONT_MONO, fonts.font(2))) {
+        return 0;
+    }
+    var platform = WebPlatform.open();
+    var app = DemoApp.create();
+    ui.setDarkMode(true);
+    ui.setSecondaryIsCommand(platform.apple);
+    loop {
+        platform.beginFrame(mut ui);
+        ui.begin(mut platform);
+        platform.editInto(mut ui);
+        demoFrame(mut ui, mut app, raster);
+        match (ui.endFrame(mut platform, raster)) {
+            Ok() => { platform.show(ui, mut raster, mut damage, Color.hex(pageBg(ui))); }
+            Err(_) => {} // a frame that does not fit the Ui's capacity is not shown
+        }
+        platform.finishFrame(ui);
+    }
+}

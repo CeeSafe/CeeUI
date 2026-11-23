@@ -1,0 +1,10 @@
+[package]
+name = "ceeui_web"
+version = "0.1.0"
+kind = "library"
+profile = "freestanding"
+ceesafec = ">=0.66.0"
+c = ["src/host.c"]
+
+[dependencies]
+ceeui = { path = "../ceeui" }

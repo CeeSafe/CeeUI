@@ -1,6 +1,6 @@
 # The web
 
-This page covers the web host, `claywind-web`: a ClayWind app as a WebAssembly module in a browser. It says how an
+This page covers the web host, `ceeui-web`: a CeeUI app as a WebAssembly module in a browser. It says how an
 app is written for it, how it is built and served, what a page gets, and what is not there.
 
 ## The web host
@@ -21,9 +21,9 @@ of the page, and the two share memory. That is why the page must be cross-origin
 
 ## An app for the web
 
-A web app is a library package with `profile = "freestanding"` that depends on `claywind_web` by path. It exports
+A web app is a library package with `profile = "freestanding"` that depends on `ceeui_web` by path. It exports
 one function, `run`, which loops for as long as the page lives. This is the demo's, from
-`claywind-hosts/web/src/main.cee`:
+`ceeui-hosts/web/src/main.cee`:
 
 ```ceesafe skip
 @export("run")
@@ -90,11 +90,11 @@ A canvas larger than 2880 by 1800 pixels at its pixel ratio is drawn at a lower 
 
 ## Building
 
-`claywind-pack web`, run in the app's package directory, packs the app into `out/pack/web`:
+`ceeui-pack web`, run in the app's package directory, packs the app into `out/pack/web`:
 
 ```sh
-cd claywind-hosts/web
-../../claywind-pack/out/claywind_pack web --name "ClayWind" \
+cd ceeui-hosts/web
+../../ceeui-pack/out/ceeui_pack web --name "CeeUI" \
     --font Arial.ttf --font "Arial Bold.ttf" --font "Courier New.ttf" \
     --fallback "Arial Unicode.ttf"
 ```
@@ -118,15 +118,15 @@ page beside the module:
 It needs a clang with the `wasm64` target and `wasm-ld`. The clang is the one named by `CLANG`, else Homebrew's
 llvm, else `clang`. The linker is the one named by `WASM_LD`, else `wasm-ld`.
 
-For the demo, `claywind-hosts/web/build.sh` builds `claywind-pack` and runs it with the demo's three fonts and a
+For the demo, `ceeui-hosts/web/build.sh` builds `ceeui-pack` and runs it with the demo's three fonts and a
 fallback. `FONT_DIR` says where the fonts are.
 
 ```sh
-cd claywind-hosts/web
+cd ceeui-hosts/web
 sh build.sh
 ```
 
-[Packing](./tools#packing) has `claywind-pack`'s other targets.
+[Packing](./tools#packing) has `ceeui-pack`'s other targets.
 
 ## Serving
 

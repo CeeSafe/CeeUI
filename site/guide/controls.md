@@ -1,6 +1,6 @@
 # Controls
 
-This page lists ClayWind's controls: what each one is, how to call it, and what the call returns. Lists of many
+This page lists CeeUI's controls: what each one is, how to call it, and what the call returns. Lists of many
 rows, grids and charts are on [Lists, grids and charts](./lists-grids-charts); text fields with a selection and
 editors are on [Editing text](./editing).
 
@@ -10,7 +10,7 @@ A control is a function of `Controls`, called each frame. It draws itself, reads
 what the user did.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Settings {
     public sound: bool;
@@ -30,7 +30,7 @@ public fn settingsFrame(ui: borrow mut Ui, app: borrow mut Settings) {
 Three things hold for every control:
 
 - **The first argument is the `Ui`**, passed as `mut ui`.
-- **The second is the control's id**, a name unique in the window. ClayWind keeps the focus, hover transitions
+- **The second is the control's id**, a name unique in the window. CeeUI keeps the focus, hover transitions
   and the control's place by id. Two controls with one id act as one. A control's parts take ids made from its id.
 - **The state lives in the app.** A control keeps no value of its own. The app passes the value as `mut field`,
   and the control changes it there. Most controls return `true` in the frame the value changed.
@@ -67,7 +67,7 @@ The controls draw in the `Ui`'s theme: dark or light, by `ui.setDarkMode`.
 release over the button. Tab reaches it, and Enter or Space presses it.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Counter {
     public count: u64;
@@ -91,7 +91,7 @@ public fn counterFrame(ui: borrow mut Ui, app: borrow mut Counter) {
 returns `true` in the frame it flipped. Space or Enter flips it while it has the focus.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Notify {
     public email: bool;
@@ -114,7 +114,7 @@ public fn notifyFrame(ui: borrow mut Ui, app: borrow mut Notify) {
 index of the chosen one. It returns `true` when the choice changed.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Appearance {
     public theme: usize;
@@ -137,7 +137,7 @@ selects it.
 returns `true` when another tab was opened. The app draws the open tab's content itself.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Pages {
     public tab: usize;
@@ -164,7 +164,7 @@ The open tab is the row's Tab stop. With the focus on it, Left and Right open th
 track captures the pointer, and the value follows it until release. It returns `true` when the value changed.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Audio {
     public volume: f32;
@@ -191,7 +191,7 @@ button. The buttons, and Up and Down while it has the focus, change the value by
 It returns `true` when the value changed.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Order {
     public quantity: i32;
@@ -215,7 +215,7 @@ that does not fit the buffer is not taken. There are two:
 Both return `true` when the text changed, and both give up the focus on Enter.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Note {
     public text: [u8; 64];
@@ -235,7 +235,7 @@ A text control is as wide as its container, so put it in an element of the width
 the caret and the selection. A frame gets the metrics from its host and passes them on.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Profile {
     public name: [u8; 64];
@@ -260,7 +260,7 @@ below it, above everything else. A press on an item chooses it and closes the li
 It returns `true` when the choice changed.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Ticket {
     public priority: usize;
@@ -284,7 +284,7 @@ its container.
 `selected` is that row's index and `height` the list's height. It returns `true` when the selection changed.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Files {
     public current: usize;
@@ -309,7 +309,7 @@ A listbox builds every item each frame. For hundreds of rows or more, or rows th
 `bool`. It returns `true` when one flipped.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Stage {
     public staged: [bool; 4];
@@ -332,7 +332,7 @@ menu, sets `open` to false.
 The app opens the menu, usually on a secondary (right) press, and keeps where it was opened.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Canvas {
     public menuOpen: bool;
@@ -370,7 +370,7 @@ only, test `ui.secondaryPressedOn(hashId("canvas"))`.
 enabled. A disabled item is dimmed and cannot be chosen.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Clip {
     public menuOpen: bool;
@@ -411,7 +411,7 @@ tooltips last in the frame, so that they float above the rest.
 opening a list of items. `open` says which menu is open, 0 for none, and the app keeps it between frames.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Shell {
     public menus: MenuModel;

@@ -1,0 +1,266 @@
+// SPDX-License-Identifier: MIT
+// Controls.dataGrid: 1,000 rows 20 points tall under a header, three columns 300 points wide in all, in a view
+// 250 wide and 220 tall (the header, then 200 of rows).
+
+import ceeui;
+
+struct GridState {
+    widths: [f32; 3];
+    sort: GridSort;
+    selected: usize?;
+    count: usize;
+    sortChanged: bool;
+    first: usize;
+    last: usize;
+}
+
+fn gridState() -> GridState => GridState {
+    widths: [100.0f32, 80.0, 120.0],
+    sort: GridSort.none(),
+    selected: null,
+    count: 1000,
+    sortChanged: false,
+    first: 0,
+    last: 0,
+};
+
+fn gridFrame(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    s: borrow mut GridState,
+) -> Result<void, TestFailure> {
+    let titles = ["Name", "Size", "Kind"];
+    ui.begin(mut platform);
+    ui.open(Style.column().w(Size.fixed(250.0)).h(Size.fixed(220.0)));
+    let grid = Controls.dataGrid(
+        mut ui,
+        "orders",
+        titles[..],
+        mut s.widths[..],
+        s.count,
+        20.0,
+        Size.grow(),
+        mut s.sort,
+        mut s.selected,
+    );
+    for (i in grid.first..grid.last) {
+        Controls.gridRow(mut ui, grid, i, mut s.selected, "row");
+        for (c in 0usize..3) {
+            Controls.gridCell(mut ui, grid, c);
+            ui.label(titles[c], Text.of().size(12.0));
+            ui.close();
+        }
+        ui.close();
+    }
+    Controls.endDataGrid(mut ui, grid);
+    ui.close();
+    s.sortChanged = grid.sortChanged;
+    s.first = grid.first;
+    s.last = grid.last;
+    let ok = finish(mut ui, mut platform);
+    platform.pressed = 0;
+    platform.pointerState.pressed = false;
+    platform.pointerState.released = false;
+    return ok;
+}
+
+/// A press at (x, y) on the screen, then its release at (toX, y), a frame each.
+fn gridDrag(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    s: borrow mut GridState,
+    x: f32,
+    y: f32,
+    toX: f32,
+) -> Result<bool, TestFailure> {
+    platform.pointerState.position = Vec2 { x: x, y: y };
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    gridFrame(mut ui, mut platform, mut s)?;
+    let changed = s.sortChanged;
+    platform.pointerState.position = Vec2 { x: toX, y: y };
+    gridFrame(mut ui, mut platform, mut s)?;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    gridFrame(mut ui, mut platform, mut s)?;
+    return Ok(changed);
+}
+
+fn gridKey(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    s: borrow mut GridState,
+    k: Key,
+) -> Result<usize, TestFailure> {
+    platform.pressed = 1u64 << (keyIndex(k) as u64);
+    gridFrame(mut ui, mut platform, mut s)?;
+    gridFrame(mut ui, mut platform, mut s)?;
+    return Ok(s.selected ?? 9999999);
+}
+
+fn sortedBy(s: borrow GridState, column: usize, descending: bool) -> bool => match (s.sort.column) {
+    Some(c) => c == column && s.sort.descending == descending,
+    null => false,
+};
+
+@test
+fn aDataGridsTitlesSortByTheirColumn() -> Result<void, TestFailure> {
+    var storage = heap(16777216);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(1024))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var s = gridState();
+    gridFrame(mut ui, mut platform, mut s)?;
+    gridFrame(mut ui, mut platform, mut s)?;
+    Check.isTrue(!s.sortChanged && s.sort.column == null, "unsorted at first")?;
+    let size = ui.boxOf("orders~title1")!;
+    Check.isTrue((size.w - 80.0).abs() < 0.5, "the Size column is 80 wide")?;
+    // Pressing a title sorts by it, ascending; again, descending; another title, that one ascending.
+    Check.isTrue(gridDrag(mut ui, mut platform, mut s, size.x + 20.0, size.y + 10.0, size.x + 20.0)?, "sorted")?;
+    Check.isTrue(sortedBy(s, 1, false), "by Size, ascending")?;
+    Check.isTrue(!s.sortChanged, "only the frame it was pressed in says so")?;
+    gridDrag(mut ui, mut platform, mut s, size.x + 20.0, size.y + 10.0, size.x + 20.0)?;
+    Check.isTrue(sortedBy(s, 1, true), "then descending")?;
+    let name = ui.boxOf("orders~title0")!;
+    gridDrag(mut ui, mut platform, mut s, name.x + 20.0, name.y + 10.0, name.x + 20.0)?;
+    return Check.isTrue(sortedBy(s, 0, false), "another column starts ascending");
+}
+
+@test
+fn aDataGridsColumnsAreResizedByTheirEdge() -> Result<void, TestFailure> {
+    var storage = heap(16777216);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(1024))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var s = gridState();
+    gridFrame(mut ui, mut platform, mut s)?;
+    gridFrame(mut ui, mut platform, mut s)?;
+    let edge = ui.boxOf("orders~edge0")!;
+    // Dragged 40 to the right: the Name column 140 wide; it does not sort.
+    let sorted = gridDrag(mut ui, mut platform, mut s, edge.x + 3.0, edge.y + 10.0, edge.x + 43.0)?;
+    Check.isTrue(!sorted && s.sort.column == null, "an edge's drag does not sort")?;
+    Check.isTrue((s.widths[0] - 140.0).abs() < 1.0, "wider by the drag")?;
+    let size = ui.boxOf("orders~title1")!;
+    Check.isTrue((size.x - ui.boxOf("orders~title0")!.x - 140.0).abs() < 1.0, "the next column moved over")?;
+    // Dragged far left: no narrower than the least.
+    let again = ui.boxOf("orders~edge0")!;
+    gridDrag(mut ui, mut platform, mut s, again.x + 3.0, again.y + 10.0, again.x - 300.0)?;
+    return Check.isTrue((s.widths[0] - 32.0).abs() < 0.5, "the narrowest a column goes");
+}
+
+@test
+fn aDataGridsHeaderFollowsItsRowsSideways() -> Result<void, TestFailure> {
+    var storage = heap(16777216);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(1024))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var s = gridState();
+    gridFrame(mut ui, mut platform, mut s)?;
+    gridFrame(mut ui, mut platform, mut s)?;
+    let before = ui.boxOf("orders~title2")!.x;
+    // The rows are 300 wide in a view 250 wide: they scroll 50 sideways, and the header with them.
+    ui.scrollBy("orders", -100.0, 0.0);
+    gridFrame(mut ui, mut platform, mut s)?;
+    gridFrame(mut ui, mut platform, mut s)?;
+    Check.isTrue((ui.scrollOffset("orders").x + 50.0).abs() < 1.5, "as far as the rows go")?;
+    let after = ui.boxOf("orders~title2")!.x;
+    return Check.isTrue((before - after - 50.0).abs() < 1.5, "the Kind title moved with them");
+}
+
+@test
+fn aDataGridSelectsRowsAndDrawsOnlyThoseInView() -> Result<void, TestFailure> {
+    var storage = heap(16777216);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(1024))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var s = gridState();
+    gridFrame(mut ui, mut platform, mut s)?;
+    gridFrame(mut ui, mut platform, mut s)?;
+    Check.isTrue(s.first == 0 && s.last >= 10 && s.last <= 16, "a screenful of 1,000 rows")?;
+    // A press on the second row (below the header) selects it.
+    let body = ui.boxOf("orders")!;
+    gridDrag(mut ui, mut platform, mut s, body.x + 30.0, body.y + 30.0, body.x + 30.0)?;
+    Check.equalU64(1, (s.selected ?? 99) as u64)?;
+    Check.isTrue(s.sort.column == null, "a row's press does not sort")?;
+    Check.equalU64(2, gridKey(mut ui, mut platform, mut s, Key.Down)? as u64)?;
+    Check.equalU64(999, gridKey(mut ui, mut platform, mut s, Key.End)? as u64)?;
+    Check.equalU64(1000, s.last as u64)?;
+    let top = (0.0 - ui.scrollOffset("orders").y) / 20.0;
+    return Check.isTrue(top >= 989.5 && top <= 990.5, "scrolled to show the last row");
+}
+
+@test
+fn aDataGridsCellsAreTheirRowsByColumn() -> Result<void, TestFailure> {
+    var storage = heap(16777216);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(1024))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var s = gridState();
+    gridFrame(mut ui, mut platform, mut s)?;
+    gridFrame(mut ui, mut platform, mut s)?;
+    // To a screen reader (CeeSafe ADR 0207): a table, its titles' row, then each drawn row with a cell a column;
+    // a cell is its row's, at its column, and what is drawn in it is the cell's.
+    var rows = 0usize;
+    var cells = 0usize;
+    var texts = 0usize;
+    var row = 0u32;
+    var cell = 0u32;
+    var column = 0u32;
+    for (i in 0..ui.accessCount()) {
+        let node = ui.accessAt(i);
+        match (node.role) {
+            AccessRole.Row => {
+                rows += 1;
+                row = node.id;
+                column = 0;
+            }
+            AccessRole.Cell => {
+                cells += 1;
+                column += 1;
+                cell = node.id;
+                Check.isTrue(node.parent == row, "a cell is in the row before it")?;
+                Check.equalU64(column as u64, node.column as u64)?;
+            }
+            AccessRole.Text => {
+                texts += 1;
+                Check.isTrue(node.parent == cell, "a cell's text is the cell's")?;
+            }
+            _ => {}
+        }
+    }
+    Check.isTrue(rows >= 11, "the titles' row and a screenful of rows")?;
+    Check.equalU64((rows - 1) as u64 * 3, cells as u64)?;
+    return Check.equalU64(cells as u64, texts as u64);
+}
+
+@test
+fn aScreenReadersPressOnARowSelectsIt() -> Result<void, TestFailure> {
+    var storage = heap(16777216);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(1024))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var s = gridState();
+    gridFrame(mut ui, mut platform, mut s)?;
+    gridFrame(mut ui, mut platform, mut s)?;
+    // The fourth node that is a row: the titles' row, then rows 0, 1 and 2.
+    var seen = 0usize;
+    var third = 0u32;
+    for (i in 0..ui.accessCount()) {
+        let node = ui.accessAt(i);
+        if (node.role == AccessRole.Row) {
+            seen += 1;
+            if (seen == 4) {
+                third = node.id;
+            }
+        }
+    }
+    Check.isTrue(ui.accessAct(third, AccessAction.Press), "the press is taken")?;
+    gridFrame(mut ui, mut platform, mut s)?;
+    gridFrame(mut ui, mut platform, mut s)?;
+    Check.equalU64(2, (s.selected ?? 99) as u64)?;
+    // A page gives the selected row its focus, and tells the app so: the row stays chosen.
+    Check.isTrue(ui.accessAct(third, AccessAction.Focus), "the focus is taken")?;
+    gridFrame(mut ui, mut platform, mut s)?;
+    gridFrame(mut ui, mut platform, mut s)?;
+    return Check.equalU64(2, (s.selected ?? 99) as u64);
+}

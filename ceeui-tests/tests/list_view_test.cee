@@ -1,0 +1,180 @@
+// SPDX-License-Identifier: MIT
+// Controls.virtualList: a million rows 20 points tall in a view 200 tall, driven by a scripted platform.
+
+import ceeui;
+
+struct ListState {
+    count: usize;
+    selected: usize?;
+    /// The rows the last frame drew.
+    first: usize;
+    last: usize;
+}
+
+fn listFrame(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    s: borrow mut ListState,
+) -> Result<void, TestFailure> {
+    ui.begin(mut platform);
+    ui.open(Style.column().w(Size.fixed(300.0)).h(Size.fixed(200.0)));
+    let list = Controls.virtualList(mut ui, "rows", s.count, 20.0, Size.grow(), mut s.selected);
+    for (i in list.first..list.last) {
+        var buffer = [0u8; 24];
+        var w = TextWriter.create(mut buffer[..]);
+        w.text("Row ");
+        w.decimal(i as u64);
+        let on = Controls.virtualRow(mut ui, list, i, mut s.selected, "row");
+        ui.labelBytes(w.written(), Text.of().size(14.0).color(if (on) WHITE else SLATE_200));
+        ui.close();
+    }
+    Controls.endVirtualList(mut ui, list);
+    ui.close();
+    s.first = list.first;
+    s.last = list.last;
+    let ok = finish(mut ui, mut platform);
+    platform.pressed = 0;
+    platform.pointerState.pressed = false;
+    platform.pointerState.released = false;
+    return ok;
+}
+
+fn listKey(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    s: borrow mut ListState,
+    k: Key,
+) -> Result<usize, TestFailure> {
+    platform.pressed = 1u64 << (keyIndex(k) as u64);
+    listFrame(mut ui, mut platform, mut s)?;
+    // The scroll it asked for shows in the next frame.
+    listFrame(mut ui, mut platform, mut s)?;
+    return Ok(s.selected ?? 9999999);
+}
+
+fn listClick(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    s: borrow mut ListState,
+    y: f32,
+) -> Result<void, TestFailure> {
+    let box = ui.boxOf("rows")!;
+    platform.pointerState.position = Vec2 { x: box.x + 40.0, y: box.y + y };
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    listFrame(mut ui, mut platform, mut s)?;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    return listFrame(mut ui, mut platform, mut s);
+}
+
+/// Whether row `i` is shown whole in the view.
+fn rowShown(ui: borrow Ui, i: usize) -> bool {
+    let top = (0.0 - ui.scrollOffset("rows").y) / 20.0;
+    let row = round<f32>(i);
+    return row >= top - 0.01 && row + 1.0 <= top + 10.0 + 0.01;
+}
+
+@test
+fn aVirtualListDrawsOnlyTheRowsInView() -> Result<void, TestFailure> {
+    var storage = heap(4194304);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var s = ListState { count: 1000000, selected: null, first: 0, last: 0 };
+    listFrame(mut ui, mut platform, mut s)?;
+    listFrame(mut ui, mut platform, mut s)?;
+    Check.equalU64(0, s.first as u64)?;
+    Check.isTrue(s.last >= 10 && s.last <= 16, "a screenful and a few more")?;
+    // The list is as tall as all its rows: it scrolls to the end.
+    ui.scrollToBottom("rows");
+    listFrame(mut ui, mut platform, mut s)?;
+    Check.isTrue((0.0 - ui.scrollOffset("rows").y - 19999800.0).abs() < 2.0, "scrolled a million rows down")?;
+    Check.equalU64(1000000, s.last as u64)?;
+    return Check.isTrue(s.first >= 999980 && s.first <= 999990, "only the last rows drawn");
+}
+
+@test
+fn aVirtualListSelectsWithThePointerAndTheKeys() -> Result<void, TestFailure> {
+    var storage = heap(4194304);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var s = ListState { count: 1000000, selected: null, first: 0, last: 0 };
+    listFrame(mut ui, mut platform, mut s)?;
+    // A press on the third row selects it and focuses the list.
+    listClick(mut ui, mut platform, mut s, 50.0)?;
+    Check.equalU64(2, (s.selected ?? 99) as u64)?;
+    Check.isTrue(ui.hasFocusNamed("rows"), "the list has the focus")?;
+    Check.equalU64(3, listKey(mut ui, mut platform, mut s, Key.Down)? as u64)?;
+    Check.equalU64(2, listKey(mut ui, mut platform, mut s, Key.Up)? as u64)?;
+    // A page is a screenful less one row: nine.
+    Check.equalU64(11, listKey(mut ui, mut platform, mut s, Key.PageDown)? as u64)?;
+    Check.isTrue(rowShown(ui, 11), "the list scrolled to show it")?;
+    Check.equalU64(999999, listKey(mut ui, mut platform, mut s, Key.End)? as u64)?;
+    Check.isTrue(rowShown(ui, 999999), "the last row shown")?;
+    Check.equalU64(1000000, s.last as u64)?;
+    Check.equalU64(999990, listKey(mut ui, mut platform, mut s, Key.PageUp)? as u64)?;
+    Check.isTrue(rowShown(ui, 999990), "still shown")?;
+    Check.equalU64(0, listKey(mut ui, mut platform, mut s, Key.Home)? as u64)?;
+    Check.isTrue(rowShown(ui, 0), "back at the top")?;
+    // Rows that go leave the selection on the last one left.
+    s.count = 5;
+    s.selected = 7;
+    listFrame(mut ui, mut platform, mut s)?;
+    Check.equalU64(4, (s.selected ?? 99) as u64)?;
+    s.count = 0;
+    listFrame(mut ui, mut platform, mut s)?;
+    return Check.isTrue(s.selected == null, "no rows, no selection");
+}
+
+@test
+fn aVirtualListStartsTheKeysAtAnEnd() -> Result<void, TestFailure> {
+    var storage = heap(4194304);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var s = ListState { count: 50, selected: null, first: 0, last: 0 };
+    listFrame(mut ui, mut platform, mut s)?;
+    // Keys do nothing until the list has the focus.
+    listKey(mut ui, mut platform, mut s, Key.Down)?;
+    Check.isTrue(s.selected == null, "unfocused, nothing moves")?;
+    ui.setFocus(hashId("rows"));
+    Check.equalU64(0, listKey(mut ui, mut platform, mut s, Key.Down)? as u64)?;
+    s.selected = null;
+    Check.equalU64(49, listKey(mut ui, mut platform, mut s, Key.Up)? as u64)?;
+    return Check.isTrue(rowShown(ui, 49), "and shows it");
+}
+
+/// To a screen reader the list is one of all its rows, the ones not drawn too, and a row says its place in all of
+/// them (CeeSafe ADR 0207): "row 500,001 of 1,000,000", not "3 of 14".
+@test
+fn aVirtualListIsAListOfAllItsRowsToAScreenReader() -> Result<void, TestFailure> {
+    var storage = heap(4194304);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var platform = platformAt(300.0, 200.0, -1.0, -1.0);
+    var s = ListState { count: 1000000, selected: null, first: 0, last: 0 };
+    listFrame(mut ui, mut platform, mut s)?;
+    ui.scrollBy("rows", 0.0, -10000000.0);
+    listFrame(mut ui, mut platform, mut s)?;
+    listFrame(mut ui, mut platform, mut s)?;
+    var listId: u32 = 0;
+    var listRows: u32 = 0;
+    var rows: usize = 0;
+    var placed = true;
+    for (i in 0..ui.accessCount()) {
+        let node = ui.accessAt(i);
+        if (node.role == AccessRole.List) {
+            listId = node.id;
+            listRows = node.rows;
+        } else if (node.role == AccessRole.ListItem) {
+            rows += 1;
+            placed = placed && node.parent == listId && node.row == truncate<u32>(s.first + rows);
+        }
+    }
+    Check.isTrue(listId != 0 && listRows == 1000000, "a list of a million rows")?;
+    Check.isTrue(rows > 0 && rows < 30, "of which a few are drawn")?;
+    Check.isTrue(s.first > 400000, "from the middle")?;
+    return Check.isTrue(placed, "each row in the list, at its place among all of them");
+}

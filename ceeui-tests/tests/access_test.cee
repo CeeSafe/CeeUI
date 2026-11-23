@@ -1,0 +1,209 @@
+// SPDX-License-Identifier: MIT
+// Accessibility (ceeui/src/access.cee, roadmap P5): the frame's elements as a screen reader is given them, and
+// the reader's actions as the controls see them.
+
+import ceeui;
+
+/// The state the scene's controls edit.
+struct AccessApp {
+    saved: u32;
+    agree: bool;
+    name: [u8; 32];
+    nameLen: usize;
+    volume: f32;
+    fruit: usize;
+    page: usize;
+}
+
+fn accessScene(ui: borrow mut Ui, app: borrow mut AccessApp) {
+    ui.open(Style.column().id("root").w(Size.grow()).h(Size.grow()).p(space(4.0)).gap(space(3.0)));
+    ui.label("Settings", Text.of());
+    if (Controls.button(mut ui, "save", "Save")) {
+        app.saved += 1;
+    }
+    Controls.checkbox(mut ui, "agree", "I agree", mut app.agree);
+    Controls.textInput(mut ui, "name", mut app.name[..], mut app.nameLen);
+    ui.accessName("name", "Your name");
+    Controls.slider(mut ui, "vol", mut app.volume, 0.0, 1.0, 200.0);
+    ui.accessName("vol", "Volume");
+    let fruits = ["Apple", "Pear"];
+    Controls.radio(mut ui, "fruit", fruits[..], mut app.fruit);
+    let pages = ["One", "Two"];
+    Controls.tabs(mut ui, "page", pages[..], mut app.page);
+    ui.close();
+}
+
+fn accessStep(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    app: borrow mut AccessApp,
+) -> Result<void, TestFailure> {
+    ui.begin(mut platform);
+    accessScene(mut ui, mut app);
+    let metrics = FixedAdvance { unused: 0 };
+    let ok = match (ui.endFrame(mut platform, metrics)) {
+        Ok() => true,
+        Err(_) => false,
+    };
+    platform.clock += 1.0 / 60.0;
+    return Check.isTrue(ok, "frame fits");
+}
+
+fn labelIs(a: Slice<u8>, want: StringView) -> bool {
+    let w = want.bytes();
+    if (a.length != w.length) {
+        return false;
+    }
+    for (i in 0..w.length) {
+        if (a[i] != w[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// The node called `label`, which the test fails without.
+fn nodeNamed(ui: borrow Ui, label: StringView) -> Result<AccessNode, TestFailure> {
+    for (i in 0..ui.accessCount()) {
+        let node = ui.accessAt(i);
+        if (labelIs(ui.accessLabel(node), label)) {
+            return Ok(node);
+        }
+    }
+    Check.isTrue(false, label)?;
+    return Ok(ui.accessAt(0));
+}
+
+fn newAccessApp() -> AccessApp => AccessApp {
+    saved: 0,
+    agree: false,
+    name: [0u8; 32],
+    nameLen: 0,
+    volume: 0.5,
+    fruit: 0,
+    page: 0,
+};
+
+/// Each control is one element with its role, name and state, in the order it is built; a control's own text is not
+/// a second element, and text outside a control is one.
+@test
+fn aFramesElementsAreListedForAScreenReader() -> Result<void, TestFailure> {
+    var storage = [0u8; 1048576];
+    let memory = FixedBufferAllocator.over(mut storage);
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(800.0, 600.0, -1.0, -1.0);
+    var app = newAccessApp();
+    app.name[0] = 'A';
+    app.name[1] = 'l';
+    app.nameLen = 2;
+    app.fruit = 1;
+    accessStep(mut ui, mut platform, mut app)?;
+    Check.isTrue(
+        ui.accessCount() == 10,
+        "a heading, a button, a checkbox, a field, a slider, two radios, a tab bar and its two tabs",
+    )?;
+    let labels = ["Settings", "Save", "I agree", "Your name", "Volume", "Apple", "Pear", "", "One", "Two"];
+    let roles = [
+        AccessRole.Text,
+        AccessRole.Button,
+        AccessRole.Checkbox,
+        AccessRole.TextField,
+        AccessRole.Slider,
+        AccessRole.Radio,
+        AccessRole.Radio,
+        AccessRole.TabList,
+        AccessRole.Tab,
+        AccessRole.Tab,
+    ];
+    for (i in 0..labels.length) {
+        let node = ui.accessAt(i);
+        Check.isTrue(labelIs(ui.accessLabel(node), labels[i]), labels[i])?;
+        Check.isTrue(node.role == roles[i], "the role")?;
+        let box = ui.accessBox(node);
+        Check.isTrue(box != null, "it has a place")?;
+        Check.isTrue(box!.w > 0.0 && box!.h > 0.0, "of some size")?;
+    }
+    let field = nodeNamed(ui, "Your name")?;
+    Check.isTrue(labelIs(ui.accessValueOf(field), "Al"), "a field's value is its text")?;
+    let slider = nodeNamed(ui, "Volume")?;
+    Check.isTrue(slider.min == 0.0 && slider.max == 1.0 && slider.now == 0.5, "a slider's range and value")?;
+    Check.isTrue(!nodeNamed(ui, "I agree")?.has(ACCESS_CHECKED), "the checkbox is not checked")?;
+    Check.isTrue(!nodeNamed(ui, "Apple")?.has(ACCESS_CHECKED), "the first radio is not chosen")?;
+    Check.isTrue(nodeNamed(ui, "Pear")?.has(ACCESS_CHECKED), "the second is")?;
+    Check.isTrue(nodeNamed(ui, "One")?.has(ACCESS_SELECTED), "the first tab is open")?;
+    // The tabs are the tab bar's (CeeSafe ADR 0207); what is outside it is the window's.
+    let bar = ui.accessAt(7);
+    Check.isTrue(nodeNamed(ui, "One")?.parent == bar.id && nodeNamed(ui, "Two")?.parent == bar.id, "in the tab bar")?;
+    Check.isTrue(bar.parent == 0 && nodeNamed(ui, "Save")?.parent == 0, "the bar and the rest are the window's")?;
+    // Reading order is top to bottom here.
+    let first = ui.accessBox(ui.accessAt(0))!;
+    let second = ui.accessBox(ui.accessAt(1))!;
+    return Check.isTrue(first.y < second.y, "the heading is above the button");
+}
+
+/// What the reader asks is what a pointer would have done, in the next frame, once.
+@test
+fn aScreenReadersActionsReachTheControls() -> Result<void, TestFailure> {
+    var storage = [0u8; 1048576];
+    let memory = FixedBufferAllocator.over(mut storage);
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(800.0, 600.0, -1.0, -1.0);
+    var app = newAccessApp();
+    accessStep(mut ui, mut platform, mut app)?;
+    // A press of the button and of the checkbox.
+    ui.accessAct(nodeNamed(ui, "Save")?.id, AccessAction.Press);
+    ui.accessAct(nodeNamed(ui, "I agree")?.id, AccessAction.Press);
+    accessStep(mut ui, mut platform, mut app)?;
+    Check.isTrue(app.saved == 1, "the button is clicked")?;
+    Check.isTrue(ui.needsFrame(), "an action is input: the next frame runs at once, and says what it did")?;
+    Check.isTrue(app.agree, "the checkbox is checked")?;
+    Check.isTrue(nodeNamed(ui, "I agree")?.has(ACCESS_CHECKED), "and says so in the same frame")?;
+    accessStep(mut ui, mut platform, mut app)?;
+    Check.isTrue(app.saved == 1 && app.agree, "once: the next frame has no action")?;
+    // The focus goes to the field, which then takes what is typed.
+    ui.accessAct(nodeNamed(ui, "Your name")?.id, AccessAction.Focus);
+    accessStep(mut ui, mut platform, mut app)?;
+    Check.isTrue(ui.hasFocusNamed("name"), "the field has the focus")?;
+    Check.isTrue(nodeNamed(ui, "Your name")?.has(ACCESS_FOCUSED), "and the reader is told")?;
+    // Two steps up and one down move the slider a tenth of its range.
+    let volume = nodeNamed(ui, "Volume")?.id;
+    ui.accessAct(volume, AccessAction.Increment);
+    ui.accessAct(volume, AccessAction.Increment);
+    ui.accessAct(volume, AccessAction.Decrement);
+    accessStep(mut ui, mut platform, mut app)?;
+    near32("the slider's value", 0.6, app.volume, 0.0001)?;
+    // A radio and a tab are chosen by a press.
+    ui.accessAct(nodeNamed(ui, "Pear")?.id, AccessAction.Press);
+    ui.accessAct(nodeNamed(ui, "Two")?.id, AccessAction.Press);
+    accessStep(mut ui, mut platform, mut app)?;
+    return Check.isTrue(app.fruit == 1 && app.page == 1, "the radio and the tab are chosen");
+}
+
+/// The keys reach the tabs (CeeSafe ADR 0207's step 2 found them out of reach, so a screen reader that follows the
+/// focus never heard "tab 1 of 2"): the open tab is a Tab stop, the focus on it is reported, and Right opens the next
+/// one, which takes the focus.
+@test
+fn tabsAreReachedByTheKeysAndReportTheirFocus() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var platform = platformAt(800.0, 600.0, -1.0, -1.0);
+    var app = newAccessApp();
+    accessStep(mut ui, mut platform, mut app)?;
+    var steps = 0;
+    while (!nodeNamed(ui, "One")?.has(ACCESS_FOCUSED) && steps < 12) {
+        platform.pressed = 1u64 << (keyIndex(Key.Tab) as u64);
+        accessStep(mut ui, mut platform, mut app)?;
+        platform.pressed = 0;
+        accessStep(mut ui, mut platform, mut app)?;
+        steps += 1;
+    }
+    Check.isTrue(nodeNamed(ui, "One")?.has(ACCESS_FOCUSED), "Tab reaches the open tab")?;
+    platform.pressed = 1u64 << (keyIndex(Key.Right) as u64);
+    accessStep(mut ui, mut platform, mut app)?;
+    platform.pressed = 0;
+    accessStep(mut ui, mut platform, mut app)?;
+    Check.isTrue(app.page == 1, "Right opens the next tab")?;
+    let two = nodeNamed(ui, "Two")?;
+    return Check.isTrue(two.has(ACCESS_FOCUSED) && two.has(ACCESS_SELECTED), "which has the focus");
+}

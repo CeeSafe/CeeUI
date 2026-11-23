@@ -1,0 +1,121 @@
+// SPDX-License-Identifier: MIT
+// Controls.chart: its value axis on round values, its paths, and the values the pointer shows.
+
+import ceeui;
+
+fn chartFrame(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    kind: ChartKind,
+    values: Slice<f32>,
+    series: usize,
+) -> Result<void, TestFailure> {
+    let labels = ["Q1", "Q2", "Q3", "Q4"];
+    let colors = [SKY_400, ROSE_400];
+    ui.begin(mut platform);
+    ui.open(Style.column().w(Size.fixed(452.0)).h(Size.fixed(300.0)));
+    Controls.chart(mut ui, "sales", kind, values, labels[..], colors[0..series], 220.0);
+    ui.close();
+    return finish(mut ui, mut platform);
+}
+
+/// Whether a text command of the frame says exactly `want`.
+fn saysText(ui: borrow Ui, want: StringView) -> bool {
+    let tree = ui.layout();
+    for (i in 0..tree.commandCount()) {
+        match (tree.command(i)) {
+            Command.Text(_, run) => {
+                let s = tree.textBytes(run);
+                let w = want.bytes();
+                if (s.length == w.length) {
+                    var same = true;
+                    for (k in 0..s.length) {
+                        if (s[k] != w[k]) {
+                            same = false;
+                        }
+                    }
+                    if (same) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    return false;
+}
+
+fn pathCount(ui: borrow Ui) -> usize {
+    let tree = ui.layout();
+    var n: usize = 0;
+    for (i in 0..tree.commandCount()) {
+        match (tree.command(i)) {
+            Command.Path(_, _) => { n += 1; }
+            _ => {}
+        }
+    }
+    return n;
+}
+
+@test
+fn aChartsAxisRunsOverRoundValues() -> Result<void, TestFailure> {
+    var storage = heap(4194304);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var platform = platformAt(500.0, 400.0, -1.0, -1.0);
+    // 12 to 87: a step of 20 (the range over five, rounded up to 1, 2 or 5 of a power of ten), 0 to 100.
+    let values = [12.0f32, 87.0, 40.0, 63.0];
+    chartFrame(mut ui, mut platform, ChartKind.Line, values[..], 1)?;
+    // The first frame lays the plot out; the second draws to its size.
+    Check.isTrue(ui.needsFrame(), "a second frame is asked for")?;
+    chartFrame(mut ui, mut platform, ChartKind.Line, values[..], 1)?;
+    for (want in ["0", "20", "40", "60", "80", "100", "Q1", "Q4"]) {
+        Check.isTrue(saysText(ui, want), want)?;
+    }
+    Check.isTrue(!saysText(ui, "120"), "no line past the top")?;
+    // The grid and the line.
+    Check.equalU64(2, pathCount(ui) as u64)?;
+    // Negative values take the axis below 0; small ones get decimals.
+    let below = [-3.0f32, 4.0, 1.0, 2.0];
+    chartFrame(mut ui, mut platform, ChartKind.Line, below[..], 1)?;
+    Check.isTrue(saysText(ui, "-4") && saysText(ui, "0") && saysText(ui, "4"), "-4 to 4 by 2")?;
+    let small = [0.1f32, 0.35, 0.2, 0.05];
+    chartFrame(mut ui, mut platform, ChartKind.Line, small[..], 1)?;
+    return Check.isTrue(saysText(ui, "0.1") && saysText(ui, "0.4"), "tenths for a step of a tenth");
+}
+
+@test
+fn aChartDrawsEachSeries() -> Result<void, TestFailure> {
+    var storage = heap(4194304);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var platform = platformAt(500.0, 400.0, -1.0, -1.0);
+    let two = [10.0f32, 20.0, 30.0, 40.0, 5.0, 15.0, 25.0, 35.0];
+    chartFrame(mut ui, mut platform, ChartKind.Bar, two[..], 2)?;
+    chartFrame(mut ui, mut platform, ChartKind.Bar, two[..], 2)?;
+    // The grid, and a path of bars for each series.
+    Check.equalU64(3, pathCount(ui) as u64)?;
+    chartFrame(mut ui, mut platform, ChartKind.Area, two[..], 2)?;
+    // The grid, and for each series its area and its line.
+    return Check.equalU64(5, pathCount(ui) as u64);
+}
+
+@test
+fn aChartShowsTheValuesUnderThePointer() -> Result<void, TestFailure> {
+    var storage = heap(4194304);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var platform = platformAt(500.0, 400.0, -1.0, -1.0);
+    let two = [10.0f32, 20.5, 30.0, 40.0, 5.0, 15.25, 25.0, 35.0];
+    chartFrame(mut ui, mut platform, ChartKind.Line, two[..], 2)?;
+    chartFrame(mut ui, mut platform, ChartKind.Line, two[..], 2)?;
+    Check.isTrue(!saysText(ui, "20.5"), "nothing shown without the pointer")?;
+    // The plot is 400 wide (452 less the axis): Q2's quarter is 100 to 200 of it.
+    let plot = ui.boxOf("sales")!;
+    platform.pointerState.position = Vec2 { x: plot.x + 52.0 + 150.0, y: plot.y + 50.0 };
+    chartFrame(mut ui, mut platform, ChartKind.Line, two[..], 2)?;
+    chartFrame(mut ui, mut platform, ChartKind.Line, two[..], 2)?;
+    Check.isTrue(saysText(ui, "Q2") && saysText(ui, "20.5") && saysText(ui, "15.3"), "Q2's values")?;
+    // The grid, the highlighted quarter and the two lines.
+    return Check.equalU64(4, pathCount(ui) as u64);
+}

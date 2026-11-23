@@ -134,10 +134,10 @@ ui.close();
 ```
 
 `loadImage` decodes a PNG or a BMP into the raster. It runs once, in the host or at startup, not in the frame.
-ClayWind reads no files itself: the caller gives it the file's bytes.
+CeeUI reads no files itself: the caller gives it the file's bytes.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 const PHOTO: u32 = 7;
 
@@ -153,7 +153,7 @@ Decoding allocates nothing. A PNG needs scratch bytes for its inflated rows, and
 you decode:
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public fn scratchFor(file: Slice<u8>) -> usize {
     return match (imageInfo(file)) {
@@ -180,7 +180,7 @@ The raster's room for images is set when it is created: `RasterCapacity.images` 
 An app that makes its own pixels registers an image and fills it:
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 /// A 16 by 16 checkerboard under handle 3.
 public fn makeChecker(raster: borrow mut Raster) -> bool {
@@ -358,7 +358,7 @@ A transform set from the app's state animates when the state changes each frame.
 `ui.requestFrame()` while it moves:
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Spinner {
     public angle: f32;
@@ -390,7 +390,7 @@ Retina display gets one pixel per pixel. Paths, clips, images, blurs and text ar
 The frame's size is in pixels, so a host sets it to the layout size times the ratio:
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 /// Prepares `raster` for a window of `w` by `h` points on a display of `ratio` pixels per point.
 public fn sizeFrame(raster: borrow mut Raster, w: f32, h: f32, ratio: f32) -> bool {
@@ -399,7 +399,7 @@ public fn sizeFrame(raster: borrow mut Raster, w: f32, h: f32, ratio: f32) -> bo
 }
 ```
 
-`resize` is false when the frame is larger than the capacity the raster was created with. `claywind-desktop`'s
+`resize` is false when the frame is larger than the capacity the raster was created with. `ceeui-desktop`'s
 `Pane` does both for you on every frame; see [A desktop host](./desktop).
 
 ## Incremental rendering
@@ -408,7 +408,7 @@ A `Damage` compares each frame's render commands with those of the frame before,
 boxes that changed. The result is byte-identical to a full redraw.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 /// Draws `ui`'s frame. False when nothing changed, and the raster still holds the frame.
 public fn drawChanged(damage: borrow mut Damage, raster: borrow mut Raster, ui: borrow Ui) -> bool {
@@ -428,14 +428,14 @@ declares the whole window every frame, and the damage finds what differs.
 
 ## The GPU backends
 
-The `Raster` is a software renderer. `claywind-hosts/gpu` draws the same render commands with the GPU instead:
+The `Raster` is a software renderer. `ceeui-hosts/gpu` draws the same render commands with the GPU instead:
 
 | System | Backend |
 |---|---|
 | macOS, iOS | Metal |
 | Linux, Android | Vulkan |
-| Windows | Direct3D 12, or Vulkan with `CLAYWIND_GPU=vulkan` or when Direct3D 12 cannot start |
+| Windows | Direct3D 12, or Vulkan with `CEEUI_GPU=vulkan` or when Direct3D 12 cannot start |
 
-A GPU frame also redraws only what `Damage` finds changed; `CLAYWIND_WHOLE=1` redraws it whole. The frame function
+A GPU frame also redraws only what `Damage` finds changed; `CEEUI_WHOLE=1` redraws it whole. The frame function
 is the same for both renderers, so an app does not choose one in its frame. The GPU host is a demo host, with a
 side-by-side check against `Raster`. [Status](./status) says what has run where.

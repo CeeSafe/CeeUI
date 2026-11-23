@@ -2,7 +2,7 @@
 """The largest functions of a binary, by the distance from each code symbol to the next (nm -n), for finding where a
 binary's size went. Works on Mach-O and ELF, whose nm (Apple's or GNU's) prints addresses but not always sizes.
 
-    python3 tools/largest_functions.py claywind-hosts/headless/out/headless [count]
+    python3 tools/largest_functions.py ceeui-hosts/headless/out/headless [count]
 """
 
 import subprocess

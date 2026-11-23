@@ -1,0 +1,11 @@
+[package]
+name = "web"
+version = "0.1.0"
+kind = "library"
+profile = "freestanding"
+ceesafec = ">=0.66.0"
+
+[dependencies]
+ceeui = { path = "../../ceeui" }
+ceeui_demo = { path = "../../ceeui-demo" }
+ceeui_web = { path = "../../ceeui-web" }

@@ -1,0 +1,81 @@
+// The app's window: it opens one, lays out a frame whenever something changes, draws it with CeeUI's software
+// renderer, and sleeps in between. The app itself is in app.cee.
+
+import ceeui;
+import ceeui_desktop;
+import ceeui_fonts;
+
+fn main() -> i32 {
+    var app = App.create();
+    var window = match (Window.open("__NAME__", 720, 560)) {
+        Ok(w) => w,
+        Err(e) => {
+            Console.writeError("__NAME__: cannot open a window: ");
+            Console.writeErrorLine(windowError(e));
+            return 1;
+        }
+    };
+    // The UI's and the renderer's memory, set aside once: a frame allocates nothing.
+    var paneStorage = zeros(33554432);
+    var rasterStorage = zeros(301989888);
+    let paneMemory = FixedBufferAllocator.over(mut paneStorage.viewMut());
+    let rasterMemory = FixedBufferAllocator.over(mut rasterStorage.viewMut());
+    var pane = match (Pane.create(paneMemory, 1, 4096, 16384, MAX_PIXELS_WIDTH * MAX_PIXELS_HEIGHT, window.size())) {
+        Ok(p) => p,
+        Err(_) => {
+            Console.writeErrorLine("__NAME__: not enough memory for the UI");
+            return 1;
+        }
+    };
+    var raster = match (Raster.create(rasterMemory, desktopRasterCapacity())) {
+        Ok(r) => r,
+        Err(_) => {
+            Console.writeErrorLine("__NAME__: not enough memory for the renderer");
+            return 1;
+        }
+    };
+    if (!loadSystemFonts(mut raster)) {
+        Console.writeErrorLine("__NAME__: no fonts found; set CEEUI_FONT_DIR");
+        return 1;
+    }
+    // Fonts for what the loaded ones lack (other scripts, emoji), found among the system's when a frame needs them.
+    var systemFonts = SystemFonts.create();
+    var share = RasterShare.create();
+    pane.ui.setDarkMode(true);
+    pane.ui.setSecondaryIsCommand(match (window.nativeHandle()) {
+        WindowHandle.AppKit(_, _) => true,
+        _ => false,
+    });
+    loop {
+        if (pane.takeEvents(mut window)) {
+            break; // the window was closed
+        }
+        pane.begin(mut window);
+        appFrame(mut pane.ui, mut app, raster);
+        if (!pane.end(mut window, raster)) {
+            Console.writeErrorLine("__NAME__: the frame does not fit the UI's capacity");
+            return 1;
+        }
+        if (systemFonts.supplyFrame(mut raster, pane.ui) > 0) {
+            // The same commands draw other glyphs now; the next frame lays them out with the fonts' measures.
+            pane.damage.invalidate();
+            pane.ui.requestFrame();
+        }
+        if (!pane.draw(
+            mut raster,
+            mut share,
+            mut window,
+            Color.hex(if (pane.ui.isDarkMode()) SLATE_950 else SLATE_50),
+        )) {
+            Console.writeErrorLine("__NAME__: the window refused a frame");
+            return 1;
+        }
+        pane.platform.endFrame();
+        if (pane.ui.needsFrame()) {
+            window.waitFrame();
+        } else {
+            Window.waitAny(pane.ui.frameDelayMs(IDLE_MS));
+        }
+    }
+    return 0;
+}

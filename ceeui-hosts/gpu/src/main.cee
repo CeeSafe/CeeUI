@@ -1,0 +1,1244 @@
+// SPDX-License-Identifier: MIT
+// The GPU host: the CeeUI demo drawn by the GPU (gpu.cee; metal.c on macOS, vulkan.c on Linux and Windows) in a
+// window the program draws itself
+// (lib/std's WindowSurface.External and Window.nativeHandle, CeeSafe ADR 0137). macOS only.
+//
+//   ./out/gpu                        the demo in a window, redrawn only when its instances change
+//   CEEUI_STATS=1                 also print, every 2 seconds, the frames shown, their time and the GPU's
+//   CEEUI_COMPARE=DIR             no window: draw every tab with Raster and with Metal from the same commands,
+//                                    print how far apart they are, and write both and their difference to DIR
+//   CEEUI_BENCH=N                 no window: N frames of the dashboard at 5K (5120 × 2880), timed
+//   CEEUI_FONT_DIR=DIR            where Arial.ttf, "Arial Bold.ttf" and "Courier New.ttf" are
+//   CEEUI_LIGHT=1                 light mode
+
+import ceeui;
+import ceeui_demo;
+import ceeui_fonts;
+import ceeui_demo_tasks;
+import ceeui_desktop;
+
+const START_WIDTH: u32 = 1024;
+const START_HEIGHT: u32 = 640;
+/// How long an idle window sleeps for want of an event (a wake or an event ends it sooner).
+const IDLE_MS: u32 = 0xFFFFFFFF;
+
+extern "C" {
+    @effects(sleep, alloc)
+    fn cw_gpu_init(atlasWidth: u32, atlasHeight: u32, images: u32) -> i32;
+    @effects(sleep, alloc)
+    fn cw_gpu_attach(kind: i32, first: u64, second: u64) -> i32;
+    @effects()
+    fn cw_gpu_gpu_ms() -> f64;
+}
+
+fn zeros(count: usize) -> Vector<u8> {
+    var v = Vector<u8>.withCapacity(count)!;
+    for (i in 0..count) {
+        v.push(0)!;
+    }
+    return v;
+}
+
+fn readFile(path: StringView) -> Vector<u8> {
+    var bytes = Vector<u8>.create();
+    match (File.open(path)) {
+        Ok(f) => {
+            var file = f;
+            var chunk = [0u8; 65536];
+            loop {
+                let n = match (file.read(mut chunk[..])) {
+                    Ok(k) => k,
+                    Err(_) => 0,
+                };
+                if (n == 0) {
+                    break;
+                }
+                for (i in 0usize..n) {
+                    bytes.push(chunk[i])!;
+                }
+            }
+        }
+        Err(_) => {}
+    }
+    return bytes;
+}
+
+/// A Backend that keeps each text run's bytes and font: to find the fonts a scene needs before it is drawn.
+struct TextRuns {
+    bytes: Vector<u8>;
+    ends: Vector<usize>;
+    fonts: Vector<u32>;
+    sizes: Vector<f32>;
+    spacings: Vector<f32>;
+}
+
+impl TextRuns {
+    fn create() -> TextRuns => TextRuns {
+        bytes: Vector<u8>.create(),
+        ends: Vector<usize>.create(),
+        fonts: Vector<u32>.create(),
+        sizes: Vector<f32>.create(),
+        spacings: Vector<f32>.create(),
+    };
+
+    /// Loads into `raster` the system fonts these runs need, then the colour bitmaps they draw.
+    fn supplyTo(borrow this, fonts: borrow mut SystemFonts, raster: borrow mut Raster) {
+        var start: usize = 0;
+        for (k in 0..this.ends.length) {
+            let ignored = fonts.supply(raster, this.bytes.view()[start..this.ends[k]], this.fonts[k]);
+            start = this.ends[k];
+        }
+        start = 0;
+        for (k in 0..this.ends.length) {
+            let text = this.bytes.view()[start..this.ends[k]];
+            let ignored = fonts.supplyBitmaps(raster, text, this.fonts[k], this.sizes[k], this.spacings[k]);
+            start = this.ends[k];
+        }
+    }
+}
+
+impl Backend for TextRuns {
+    fn draw(borrow mut this, command: Command, text: Slice<u8>) {
+        match (command) {
+            Command.Text(_, run) => {
+                for (b in text) {
+                    this.bytes.push(b)!;
+                }
+                this.ends.push(this.bytes.length)!;
+                this.fonts.push(run.fontId)!;
+                this.sizes.push(if (run.fontSize > 0.0) run.fontSize else 16.0)!;
+                this.spacings.push(run.letterSpacing)!;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Room for fallback fonts from the system too: a CJK font is tens of megabytes.
+fn withFonts(capacity: RasterCapacity) -> RasterCapacity {
+    var c = capacity;
+    c.fontBytes = 100663296;
+    return c;
+}
+
+/// The regular, bold and monospaced faces, as the desktop host loads them (ceeui-desktop's `loadSystemFonts`:
+/// CEEUI_FONT_DIR, or the system's fonts, a phone's included).
+fn loadFonts(raster: borrow mut Raster) -> bool {
+    if (loadSystemFonts(mut raster)) {
+        return true;
+    }
+    Console.writeErrorLine("gpu: no fonts found; set CEEUI_FONT_DIR");
+    return false;
+}
+
+fn nanos() -> u64 => Clock.monotonicNanos();
+
+fn ms(from: u64, to: u64) -> f64 => round<f64>(to - from) / 1000000.0;
+
+/// Safety: metal.c's init only reads its two sizes.
+fn main() -> i32 {
+    var uiStorage = zeros(16777216);
+    var gpuStorage = zeros(167772160);
+    let uiMemory = FixedBufferAllocator.over(mut uiStorage.viewMut());
+    let gpuMemory = FixedBufferAllocator.over(mut gpuStorage.viewMut());
+    var ui = match (Ui.create(uiMemory, UiCapacity.of(4096))) {
+        Ok(u) => u,
+        Err(_) => {
+            Console.writeErrorLine("gpu: not enough memory for the UI");
+            return 1;
+        }
+    };
+    var masks = match (Raster.create(gpuMemory, withFonts(RasterCapacity.of(CELL, CELL)))) {
+        Ok(r) => r,
+        Err(_) => {
+            Console.writeErrorLine("gpu: not enough memory for the mask renderer");
+            return 1;
+        }
+    };
+    if (!loadFonts(mut masks)) {
+        return 1;
+    }
+    var gpu = GpuBackend.create(masks);
+    let started = unsafe { cw_gpu_init(truncate<u32>(ATLAS), truncate<u32>(ATLAS), truncate<u32>(IMAGES)) };
+    if (started != 0) {
+        Console.write("gpu: no GPU device or pipeline (");
+        Console.write(started);
+        Console.writeLine(")");
+        return 1;
+    }
+    ui.setDarkMode(Environment.variable("CEEUI_LIGHT") == null);
+    match (Environment.variable("CEEUI_COMPARE")) {
+        Some(dir) => { return compare(mut ui, mut gpu, dir); }
+        null => {}
+    }
+    match (Environment.variable("CEEUI_BENCH")) {
+        Some(n) => { return bench(mut ui, mut gpu, number(n)); }
+        null => {}
+    }
+    return interactive(mut ui, mut gpu);
+}
+
+fn number(text: StringView) -> u64 {
+    var n: u64 = 0;
+    for (b in text.bytes()) {
+        if (b >= '0' && b <= '9') {
+            n = n * 10 + (b - '0') as u64;
+        }
+    }
+    return n;
+}
+
+/// The demo in a window that Metal draws: redrawn only when the frame's instances change.
+/// Safety: metal.c keeps the window's handles, which stay valid while `window` lives, through the whole loop.
+fn interactive(ui: borrow mut Ui, gpu: borrow mut GpuBackend) -> i32 {
+    var window = match (Window.openWith("CeeUI — GPU", START_WIDTH, START_HEIGHT, WindowSurface.External)) {
+        Ok(w) => w,
+        Err(_) => {
+            Console.writeErrorLine("gpu: cannot open a window");
+            return 1;
+        }
+    };
+    // The demo's background jobs (the Controls page's Tasks tab): their reports wake the window.
+    var jobs = match (ThreadJobs.create(window.waker())) {
+        Ok(j) => j,
+        Err(_) => {
+            Console.writeErrorLine("gpu: no memory for the background jobs");
+            return 1;
+        }
+    };
+    // Android gives the app another window each time it is back on the screen: the one Vulkan draws into now.
+    var androidWindow: u64 = 0;
+    let attached = match (window.nativeHandle()) {
+        WindowHandle.AppKit(nswindow, nsview) => unsafe { cw_gpu_attach(1, nswindow, nsview) },
+        WindowHandle.Win32(hwnd, hinstance) => unsafe { cw_gpu_attach(2, hwnd, hinstance) },
+        WindowHandle.Xlib(display, xwindow) => unsafe { cw_gpu_attach(3, display, xwindow) },
+        WindowHandle.UIKit(uiwindow, uiview) => unsafe { cw_gpu_attach(4, uiwindow, uiview) },
+        WindowHandle.Android(native, activity) => unsafe { cw_gpu_attach(5, native, activity) },
+        WindowHandle.Wayland(display, surface) => unsafe { cw_gpu_attach(6, display, surface) },
+        // A scripted window has nothing to draw into.
+        WindowHandle.Scripted => -1,
+    };
+    match (window.nativeHandle()) {
+        WindowHandle.Android(native, _) => { androidWindow = native; }
+        _ => {}
+    }
+    // 6: an Android app that starts off the screen has no window yet; it is taken when there is one.
+    if (attached != 0 && attached != 6) {
+        Console.write("gpu: cannot draw into the window (");
+        Console.write(attached);
+        Console.writeLine(")");
+        return 1;
+    }
+    // Shortcuts use Command on macOS (an AppKit window), Control elsewhere.
+    ui.setSecondaryIsCommand(match (window.nativeHandle()) {
+        WindowHandle.AppKit(_, _) => true,
+        _ => false,
+    });
+    let stats = Environment.variable("CEEUI_STATS") != null;
+    let size = window.size();
+    var platform = DesktopPlatform.create(Dims { w: round<f32>(size.width), h: round<f32>(size.height) });
+    var app = DemoApp.create();
+    // On a phone the app saves where it is each time it leaves the screen and starts from that, as the desktop host
+    // does (CeeSafe ADR 0159); a desktop gives no such event.
+    var keptIn: String? = null;
+    if (window.setTouches(true)) {
+        match (Directory.appData("ceeui-gpu")) {
+            Ok(folder) => {
+                match (hotRestore(folder.view(), mut app)) {
+                    Some(start) => { ui.setDarkMode(start.dark); }
+                    null => {}
+                }
+                keptIn = folder;
+            }
+            Err(_) => {}
+        }
+    }
+    var onScreen = true; // off the screen, a phone's app has no drawable: no frame is presented
+    var last = Timer.now();
+    var shown: u64 = 0;
+    var cpuTotal: f64 = 0.0;
+    var gpuTotal: f64 = 0.0;
+    var reported = nanos();
+    // What changed since the last frame shown: nothing (no frame), or boxes that are all a frame redraws.
+    let whole = Environment.variable("CEEUI_WHOLE") != null;
+    var damageStorage = zeros(4194304);
+    let damageMemory = FixedBufferAllocator.over(mut damageStorage.viewMut());
+    var damage = match (Damage.create(damageMemory, 16384)) {
+        Ok(d) => d,
+        Err(_) => {
+            Console.writeErrorLine("gpu: not enough memory for the damage tracker");
+            return 1;
+        }
+    };
+    var redrawn: f64 = 0.0;
+    // Fonts from the system for characters the loaded ones lack, found as the frames need them.
+    var systemFonts = SystemFonts.create();
+    loop {
+        loop {
+            match (window.nextTouch()) {
+                Some(t) => { platform.touch(t); }
+                null => { break; }
+            }
+        }
+        loop {
+            match (window.nextEvent()) {
+                Some(WindowEvent.Closed) => { return 0; }
+                Some(e) => { platform.apply(e); }
+                null => { break; }
+            }
+        }
+        loop {
+            match (window.nextAppEvent()) {
+                Some(WindowAppEvent.Background) => {
+                    onScreen = false;
+                    match (borrow keptIn) {
+                        Some(folder) => {
+                            if (!hotSave(folder.view(), window.size(), ui.isDarkMode(), app)) {
+                                Console.writeErrorLine("gpu: could not save the app's state");
+                            }
+                        }
+                        null => {}
+                    }
+                }
+                Some(WindowAppEvent.Foreground) => {
+                    onScreen = true;
+                    damage.invalidate(); // the next frame is drawn whole
+                }
+                Some(WindowAppEvent.MemoryWarning) => {}
+                null => { break; }
+            }
+        }
+        match (window.nativeHandle()) {
+            WindowHandle.Android(native, activity) => {
+                if (native != androidWindow) {
+                    androidWindow = native;
+                    let again = unsafe { cw_gpu_attach(5, native, activity) };
+                    if (again != 0 && again != 6) {
+                        Console.writeErrorLine("gpu: cannot draw into the new window");
+                    }
+                    damage.invalidate();
+                }
+                onScreen = native != 0;
+            }
+            _ => {}
+        }
+        platform.setSafeArea(window.safeArea());           // a phone's bars and cutouts (CeeSafe ADR 0156); none on a desktop
+        platform.setKeyboardInset(window.keyboardInset()); // its soft keyboard (ADR 0157)
+        let t0 = nanos();
+        let points = window.size();
+        let scale = window.scale().max(1.0);
+        let width = saturatingTruncate<u32>(Math.round(round<f32>(points.width) * scale));
+        let height = saturatingTruncate<u32>(Math.round(round<f32>(points.height) * scale));
+        let now = Timer.now();
+        platform.setFrameTime(round<f32>(now - last) / 1000.0);
+        last = now;
+        ui.begin(mut platform);
+        platform.editInto(mut ui, mut window);
+        demoFrameWith(mut ui, mut app, gpu.raster, mut jobs);
+        match (ui.endFrame(mut platform, gpu.raster)) {
+            Ok() => {}
+            Err(_) => {
+                Console.writeErrorLine("gpu: the frame does not fit the UI capacity");
+                return 1;
+            }
+        }
+        platform.editFrom(ui, mut window);
+        window.setCursor(windowCursor(platform.cursor));
+        if (systemFonts.supplyFrame(mut gpu.raster, ui) > 0) {
+            damage.invalidate(); // the same commands draw other glyphs now (the next frame lays them out)
+            ui.requestFrame();
+        }
+        let clear = Color.hex(pageBg(ui));
+        let boxes = damage.plan(ui, gpu.raster, clear, width as usize, height as usize, scale);
+        if (boxes > 0 && onScreen) {
+            gpu.begin(width, height, scale);
+            ui.renderInto(mut gpu);
+            if (!whole) {
+                gpu.limitTo(damage);
+            }
+            if (gpu.present(width, height, clear) != 0) {
+                Console.writeErrorLine("gpu: no frame to draw into");
+            }
+            for (k in 0..boxes) {
+                let b = damage.redrawn(k);
+                redrawn += round<f64>(b.w * b.h) / (round<f64>(width) * round<f64>(height));
+            }
+            shown += 1;
+            cpuTotal += ms(t0, nanos());
+            gpuTotal += unsafe { cw_gpu_gpu_ms() };
+        }
+        // While something moves, presenting a frame waits for the display; with nothing to draw, wait for its pace.
+        // Otherwise sleep until an event, a wake, or what the frame asked for (a caret blink, a timer), using no CPU
+        // while idle.
+        if (!onScreen) {
+            window.waitEvent(IDLE_MS); // nothing is shown: sleep until the app is back, or an event
+        } else if (!ui.needsFrame()) {
+            window.waitEvent(ui.frameDelayMs(IDLE_MS));
+        } else if (boxes == 0) {
+            window.waitFrame();
+        }
+        // The previous frame's GPU time is known once the next one starts, so the averages lag by a frame.
+        if (stats && nanos() - reported >= 2000000000) {
+            Console.write("2 s: ");
+            Console.write(shown);
+            Console.write(" frames shown");
+            if (shown > 0) {
+                Console.write(", ");
+                Console.write(gpu.instanceCount());
+                Console.write(" instances, frame ms (with the wait for the display) ");
+                Console.write(cpuTotal / round<f64>(shown));
+                Console.write(", gpu ms ");
+                Console.write(gpuTotal / round<f64>(shown));
+                Console.write(", redrawn ");
+                Console.write(redrawn * 100.0 / round<f64>(shown));
+                Console.write(" % of the frame");
+            }
+            Console.writeLine("");
+            Console.flush(); // a file is block-buffered; flushed now, the line survives the window being killed
+            shown = 0;
+            redrawn = 0.0;
+            cpuTotal = 0.0;
+            gpuTotal = 0.0;
+            reported = nanos();
+        }
+        platform.endFrame();
+    }
+}
+
+/// The demo's frame `frames` times on a scripted platform (no input), as the headless host settles a tab.
+fn settle(
+    ui: borrow mut Ui,
+    app: borrow mut DemoApp,
+    gpu: borrow GpuBackend,
+    platform: borrow mut ScriptPlatform,
+    frames: u32,
+) {
+    for (f in 0..frames) {
+        platform.beginFrame();
+        ui.begin(mut platform);
+        demoFrame(mut ui, mut app, gpu.raster);
+        ui.endFrame(mut platform, gpu.raster)!;
+        platform.endFrame();
+    }
+}
+
+/// Every tab drawn by Raster and by Metal from the same commands, at 1024 × 640 points (CEEUI_COMPARE_HEIGHT
+/// sets the height, up to 1000) and a ratio of 2: how far
+/// apart the two frames are, and both frames and their difference as BMPs in `dir`.
+fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i32 {
+    let ratio: f32 = 2.0;
+    let points = match (Environment.variable("CEEUI_COMPARE_HEIGHT")) {
+        Some(h) => truncate<u32>(number(h).max(100).min(1000)),
+        null => 640,
+    };
+    let width: u32 = 2048;
+    let height: u32 = points * 2;
+    var storage = zeros(469762048);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var reference = match (Raster.create(memory, withFonts(RasterCapacity.of(width as usize, height as usize)))) {
+        Ok(r) => r,
+        Err(_) => {
+            Console.writeErrorLine("gpu: not enough memory for the reference renderer");
+            return 1;
+        }
+    };
+    if (!loadFonts(mut reference) || !makeImages(mut reference) || !makeImages(mut gpu.raster)) {
+        return 1;
+    }
+    // Fonts from the system for what the regular ones lack, loaded into both renderers alike as text needs them.
+    var systemFonts = SystemFonts.create();
+    reference.setPixelRatio(ratio);
+    gpu.raster.setPixelRatio(ratio);
+    var pixels = Vector<u32>.withCapacity((width * height) as usize)!;
+    for (i in 0..width * height) {
+        pixels.push(0)!;
+    }
+    Console.writeLine("tab        instances  skipped  raster ms  gpu ms  mean diff  >8 %     >32 %    max");
+    var worst: f64 = 0.0;
+    for (tab in 0usize..NAV_COUNT + 4) {
+        var clear = Color.rgb(2, 6, 23);
+        var r0 = nanos();
+        var r1 = r0;
+        var r2 = r0;
+        var r3 = r0;
+        if (tab < NAV_COUNT) {
+            var app = DemoApp.create();
+            app.selectTab(tab);
+            let none = [0u8; 1];
+            var platform = ScriptPlatform.create(none[0..0], Dims { w: 1024.0, h: round<f32>(points) });
+            settle(mut ui, mut app, gpu, mut platform, 28);
+            if (systemFonts.supplyFrame(mut reference, ui) + systemFonts.supplyFrame(mut gpu.raster, ui) > 0) {
+                settle(mut ui, mut app, gpu, mut platform, 1); // laid out again with the fonts it lacked
+            }
+            clear = Color.hex(pageBg(ui));
+            r0 = nanos();
+            reference.begin(clear);
+            ui.renderInto(mut reference);
+            reference.finish();
+            r1 = nanos();
+            gpu.begin(width, height, ratio);
+            ui.renderInto(mut gpu);
+            if (gpu.renderTo(width, height, clear, mut pixels.viewMut()) != 0) {
+                Console.writeErrorLine("gpu: the offscreen frame failed");
+                return 1;
+            }
+            // A second pass, now that the atlas holds every mask: the steady-state cost.
+            r2 = nanos();
+            gpu.begin(width, height, ratio);
+            ui.renderInto(mut gpu);
+            let ignored = gpu.renderTo(width, height, clear, mut pixels.viewMut());
+            r3 = nanos();
+        } else {
+            // What the demo does not draw: clips under transforms (drawScene), images (drawImages).
+            let scene = tab - NAV_COUNT;
+            if (scene == 1) {
+                // The images once, so the GPU holds them; then image 2 changes in both renderers, and the frame
+                // compared must show its new pixels (the GPU sees the raster's new version of it, and sends them).
+                gpu.begin(width, height, ratio);
+                drawSynthetic(mut gpu, scene);
+                let ignored = gpu.renderTo(width, height, clear, mut pixels.viewMut());
+                recolor(mut reference);
+                recolor(mut gpu.raster);
+            }
+            var runs = TextRuns.create();
+            drawSynthetic(mut runs, scene);
+            runs.supplyTo(mut systemFonts, mut reference);
+            runs.supplyTo(mut systemFonts, mut gpu.raster);
+            r0 = nanos();
+            reference.begin(clear);
+            drawSynthetic(mut reference, scene);
+            reference.finish();
+            r1 = nanos();
+            gpu.begin(width, height, ratio);
+            drawSynthetic(mut gpu, scene);
+            if (gpu.renderTo(width, height, clear, mut pixels.viewMut()) != 0) {
+                Console.writeErrorLine("gpu: the offscreen frame failed");
+                return 1;
+            }
+            r2 = nanos();
+            gpu.begin(width, height, ratio);
+            drawSynthetic(mut gpu, scene);
+            let ignored = gpu.renderTo(width, height, clear, mut pixels.viewMut());
+            r3 = nanos();
+        }
+        report(dir, tab, reference.pixels(), pixels.view(), width, height, gpu, ms(r0, r1), ms(r2, r3));
+    }
+    // Partial frames: each tab drawn whole, then one frame later only what Damage found changed, into the frame
+    // kept from before. The result must still match Raster's whole frame.
+    var damageStorage = zeros(4194304);
+    let damageMemory = FixedBufferAllocator.over(mut damageStorage.viewMut());
+    var damage = match (Damage.create(damageMemory, 16384)) {
+        Ok(d) => d,
+        Err(_) => {
+            Console.writeErrorLine("gpu: not enough memory for the damage tracker");
+            return 1;
+        }
+    };
+    var full = Vector<u32>.withCapacity((width * height) as usize)!;
+    for (i in 0..width * height) {
+        full.push(0)!;
+    }
+    var mismatched = false;
+    for (tab in 0usize..NAV_COUNT) {
+        var app = DemoApp.create();
+        app.selectTab(tab);
+        let none = [0u8; 1];
+        var platform = ScriptPlatform.create(none[0..0], Dims { w: 1024.0, h: round<f32>(points) });
+        settle(mut ui, mut app, gpu, mut platform, 28);
+        let before = Color.hex(pageBg(ui));
+        damage.invalidate();
+        let whole = damage.plan(ui, gpu.raster, before, width as usize, height as usize, ratio);
+        gpu.begin(width, height, ratio);
+        ui.renderInto(mut gpu);
+        if (gpu.renderTo(width, height, before, mut pixels.viewMut()) != 0) {
+            Console.writeErrorLine("gpu: the offscreen frame failed");
+            return 1;
+        }
+        settle(mut ui, mut app, gpu, mut platform, 1);
+        let clear = Color.hex(pageBg(ui));
+        let boxes = damage.plan(ui, gpu.raster, clear, width as usize, height as usize, ratio);
+        var area: f32 = 0.0;
+        for (k in 0..boxes) {
+            let b = damage.redrawn(k);
+            area += b.w * b.h;
+        }
+        let r0 = nanos();
+        reference.begin(clear);
+        ui.renderInto(mut reference);
+        reference.finish();
+        let r1 = nanos();
+        gpu.begin(width, height, ratio);
+        ui.renderInto(mut gpu);
+        gpu.limitTo(damage);
+        if (gpu.renderTo(width, height, clear, mut pixels.viewMut()) != 0) {
+            Console.writeErrorLine("gpu: the offscreen frame failed");
+            return 1;
+        }
+        let r2 = nanos();
+        report(dir, PARTIAL + tab, reference.pixels(), pixels.view(), width, height, gpu, ms(r0, r1), ms(r1, r2));
+        // The same frame redrawn whole: a partial frame must give its pixels exactly.
+        gpu.begin(width, height, ratio);
+        ui.renderInto(mut gpu);
+        if (gpu.renderTo(width, height, clear, mut full.viewMut()) != 0) {
+            Console.writeErrorLine("gpu: the offscreen frame failed");
+            return 1;
+        }
+        var differing: u64 = 0;
+        for (k in 0..pixels.length) {
+            if (pixels[k] != full[k]) {
+                differing += 1;
+            }
+        }
+        if (differing > 0) {
+            mismatched = true;
+        }
+        Console.write("           ");
+        Console.write(differing);
+        Console.write(" pixels differ from the whole frame; ");
+        Console.write(boxes);
+        Console.write(if (damage.isWhole()) " box (the whole frame)" else " boxes, ");
+        if (!damage.isWhole()) {
+            Console.write(round<f64>(area) * 100.0 / (round<f64>(width) * round<f64>(height)));
+            Console.write(" % of the frame");
+        }
+        Console.writeLine("");
+        let ignored = whole;
+    }
+    if (mismatched) {
+        Console.writeLine("a partial frame differs from its whole frame");
+    }
+    Console.write("system fonts: ");
+    Console.write(systemFonts.faceCount());
+    Console.write(" faces in the catalog (built in ");
+    Console.write(systemFonts.scanMs);
+    Console.write(" ms); loaded");
+    for (k in 0..systemFonts.loadedFileCount()) {
+        Console.write(" ");
+        Console.write(systemFonts.loadedFile(k));
+    }
+    Console.writeLine("");
+    if (gpu.atlasFull) {
+        Console.writeLine("the atlas filled up");
+    }
+    if (gpu.imagesFull) {
+        Console.writeLine("the image atlas filled up");
+    }
+    return 0;
+}
+
+/// One row of the comparison: how far `b` (the GPU's) is from `a` (Raster's), and both and their difference as BMPs.
+fn report(
+    dir: StringView,
+    tab: usize,
+    a: Slice<u32>,
+    b: Slice<u32>,
+    width: u32,
+    height: u32,
+    gpu: borrow GpuBackend,
+    rasterMs: f64,
+    gpuMs: f64,
+) {
+    var sum: u64 = 0;
+    var over8: u64 = 0;
+    var over32: u64 = 0;
+    var largest: u32 = 0;
+    var diff = Vector<u32>.withCapacity(a.length)!;
+    for (k in 0..a.length) {
+        let d = channelDiff(a[k], b[k]);
+        sum += d as u64;
+        if (d > 8) {
+            over8 += 1;
+        }
+        if (d > 32) {
+            over32 += 1;
+        }
+        largest = largest.max(d);
+        let shade = (d * 4).min(255);
+        diff.push(0xff000000u32 | shade | shade << 8 | shade << 16)!;
+    }
+    let count = round<f64>(a.length);
+    Console.write(tabName(tab));
+    Console.write("  ");
+    Console.write(gpu.instanceCount());
+    Console.write("  ");
+    Console.write(gpu.unsupported + gpu.approximated);
+    Console.write("  ");
+    Console.write(rasterMs);
+    Console.write("  ");
+    Console.write(gpuMs);
+    Console.write("  ");
+    Console.write(round<f64>(sum) / count);
+    Console.write("  ");
+    Console.write(round<f64>(over8) * 100.0 / count);
+    Console.write("  ");
+    Console.write(round<f64>(over32) * 100.0 / count);
+    Console.write("  ");
+    Console.writeLine(largest);
+    writeImage(dir, tab, "raster", a, width, height);
+    writeImage(dir, tab, "gpu", b, width, height);
+    writeImage(dir, tab, "diff", diff.view(), width, height);
+}
+
+fn transform(rotation: f32, scale: f32, skewX: f32, px: f32, py: f32) -> TransformData => TransformData {
+    scale: scale,
+    rotation: rotation,
+    skewX: skewX,
+    skewY: 0.0,
+    pivot: Vec2 { x: px, y: py },
+};
+
+fn gradient(from: u32, to: u32, angle: f32) -> Gradient {
+    var g = Gradient.none();
+    g.from = Color.hex(from);
+    g.to = Color.hex(to);
+    g.kind = GradientKind.Linear;
+    g.useAngle = true;
+    g.angle = angle;
+    return g;
+}
+
+fn label<B: Backend>(b: borrow mut B, x: f32, y: f32, text: StringView) {
+    let run = TextRun {
+        start: 0,
+        length: text.length,
+        color: Color.hex(0xf1f5f9ff),
+        fontId: FONT_18,
+        fontSize: 18.0,
+        letterSpacing: 0.0,
+        lineHeight: 0.0,
+    };
+    b.draw(Command.Text(Rect { x: x, y: y, w: 300.0, h: 24.0 }, run), text.bytes());
+}
+
+/// Clips under transforms, which the demo never draws: rounded and plain clips rotated, scaled and skewed, clips
+/// nested in a transformed one, and a group and a blend inside one. In points, 1024 × 640.
+fn drawScene<B: Backend>(b: borrow mut B) {
+    let none = [0u8; 1];
+    let empty = none[0..0];
+    let all = Corners.all(0.0);
+    // A rounded clip, rotated: a gradient, a circle and text cut by its corners.
+    b.draw(Command.TransformStart(Rect.zero(), transform(12.0, 1.0, 0.0, 200.0, 170.0)), empty);
+    b.draw(Command.ClipStart(Rect { x: 80.0, y: 80.0, w: 240.0, h: 180.0 }, Corners.all(28.0), true, true), empty);
+    b.draw(
+        Command.GradientFill(
+            Rect { x: 40.0, y: 40.0, w: 320.0, h: 260.0 },
+            gradient(0x8b5cf6ff, 0x06b6d4ff, 135.0),
+            all,
+        ),
+        empty,
+    );
+    b.draw(
+        Command.Fill(Rect { x: 250.0, y: 170.0, w: 120.0, h: 120.0 }, Color.hex(0xf43f5eff), Corners.all(60.0)),
+        empty,
+    );
+    label(mut b, 96.0, 100.0, "rotated, rounded clip");
+    b.draw(Command.ClipEnd, empty);
+    b.draw(Command.TransformEnd, empty);
+    // A plain clip, scaled and skewed: a parallelogram.
+    b.draw(Command.TransformStart(Rect.zero(), transform(0.0, 1.2, 18.0, 560.0, 170.0)), empty);
+    b.draw(Command.ClipStart(Rect { x: 470.0, y: 90.0, w: 180.0, h: 150.0 }, all, true, true), empty);
+    b.draw(Command.Fill(Rect { x: 420.0, y: 60.0, w: 300.0, h: 220.0 }, Color.hex(0x10b981ff), all), empty);
+    b.draw(
+        Command.Fill(Rect { x: 600.0, y: 180.0, w: 90.0, h: 90.0 }, Color.hex(0xf59e0bff), Corners.all(12.0)),
+        empty,
+    );
+    label(mut b, 480.0, 110.0, "skewed plain clip");
+    b.draw(Command.ClipEnd, empty);
+    b.draw(Command.TransformEnd, empty);
+    // A rounded clip, rotated the other way, with a plain clip nested in it, a group at half opacity and a blend.
+    b.draw(Command.TransformStart(Rect.zero(), transform(-9.0, 1.0, 0.0, 300.0, 470.0)), empty);
+    b.draw(Command.ClipStart(Rect { x: 120.0, y: 360.0, w: 360.0, h: 220.0 }, Corners.all(36.0), true, true), empty);
+    b.draw(Command.Fill(Rect { x: 100.0, y: 340.0, w: 400.0, h: 260.0 }, Color.hex(0x1e293bff), all), empty);
+    b.draw(Command.ClipStart(Rect { x: 96.0, y: 336.0, w: 240.0, h: 160.0 }, all, true, true), empty);
+    b.draw(Command.Fill(Rect { x: 100.0, y: 360.0, w: 300.0, h: 200.0 }, Color.hex(0x3b82f6ff), all), empty);
+    b.draw(Command.ClipEnd, empty);
+    b.draw(Command.OpacityStart(Rect { x: 300.0, y: 420.0, w: 220.0, h: 180.0 }, 0.5), empty);
+    b.draw(
+        Command.Fill(Rect { x: 300.0, y: 420.0, w: 220.0, h: 180.0 }, Color.hex(0xfacc15ff), Corners.all(20.0)),
+        empty,
+    );
+    b.draw(Command.Fill(Rect { x: 360.0, y: 470.0, w: 120.0, h: 80.0 }, Color.hex(0xef4444ff), all), empty);
+    b.draw(Command.OpacityEnd(0.5), empty);
+    b.draw(Command.BlendStart(BlendMode.Screen), empty);
+    b.draw(
+        Command.Fill(Rect { x: 180.0, y: 470.0, w: 140.0, h: 140.0 }, Color.hex(0xec4899ff), Corners.all(70.0)),
+        empty,
+    );
+    b.draw(Command.BlendEnd, empty);
+    label(mut b, 150.0, 520.0, "nested clip, group, blend");
+    b.draw(Command.ClipEnd, empty);
+    b.draw(Command.TransformEnd, empty);
+    // A rotated rounded clip inside a plain rounded one, and a third rounded clip inside both (the GPU keeps the
+    // inner two: approximated).
+    b.draw(Command.ClipStart(Rect { x: 520.0, y: 300.0, w: 170.0, h: 140.0 }, Corners.all(30.0), true, true), empty);
+    b.draw(Command.Fill(Rect { x: 500.0, y: 280.0, w: 210.0, h: 180.0 }, Color.hex(0x334155ff), all), empty);
+    b.draw(Command.TransformStart(Rect.zero(), transform(25.0, 1.0, 0.0, 605.0, 370.0)), empty);
+    b.draw(Command.ClipStart(Rect { x: 540.0, y: 320.0, w: 150.0, h: 110.0 }, Corners.all(18.0), true, true), empty);
+    b.draw(
+        Command.GradientFill(
+            Rect { x: 500.0, y: 280.0, w: 220.0, h: 190.0 },
+            gradient(0x22d3eeff, 0xa855f7ff, 90.0),
+            all,
+        ),
+        empty,
+    );
+    b.draw(Command.ClipStart(Rect { x: 600.0, y: 340.0, w: 120.0, h: 120.0 }, Corners.all(60.0), true, true), empty);
+    b.draw(Command.Fill(Rect { x: 560.0, y: 300.0, w: 200.0, h: 200.0 }, Color.hex(0xfde047ff), all), empty);
+    b.draw(Command.ClipEnd, empty);
+    b.draw(Command.ClipEnd, empty);
+    b.draw(Command.TransformEnd, empty);
+    b.draw(Command.ClipEnd, empty);
+    // A rounded clip under a strong rotation and a scale below 1.
+    b.draw(Command.TransformStart(Rect.zero(), transform(35.0, 0.8, 0.0, 780.0, 460.0)), empty);
+    b.draw(Command.ClipStart(Rect { x: 660.0, y: 360.0, w: 240.0, h: 200.0 }, Corners.all(40.0), true, true), empty);
+    b.draw(
+        Command.GradientFill(
+            Rect { x: 620.0, y: 330.0, w: 320.0, h: 260.0 },
+            gradient(0xf97316ff, 0xdb2777ff, 45.0),
+            all,
+        ),
+        empty,
+    );
+    b.draw(
+        Command.Stroke(
+            Rect { x: 680.0, y: 380.0, w: 200.0, h: 160.0 },
+            Color.hex(0xffffffff),
+            Corners.all(24.0),
+            BorderWidth.all(6.0),
+        ),
+        empty,
+    );
+    label(mut b, 690.0, 440.0, "scaled, 35 degrees");
+    b.draw(Command.ClipEnd, empty);
+    b.draw(Command.TransformEnd, empty);
+}
+
+fn drawSynthetic<B: Backend>(b: borrow mut B, scene: usize) {
+    if (scene == 0) {
+        drawScene(mut b);
+    } else if (scene == 1) {
+        drawImages(mut b);
+    } else if (scene == 2) {
+        drawPaths(mut b);
+    } else {
+        drawText(mut b);
+    }
+}
+
+/// A straight-alpha colour as Raster stores an image's pixel: 0xAABBGGRR.
+fn rgba(r: u32, g: u32, b: u32, a: u32) -> u32 => r | (g << 8) | (b << 16) | (a << 24);
+
+/// The images drawImages draws, made rather than decoded: 1, 48 × 32 and opaque (two ramps and a disc, sharp-edged
+/// so magnification shows); 2, a 4 × 4 checker of opaque red and half-transparent blue; 3, 160 × 160, stripes in a
+/// disc whose alpha falls to 0 at its edge.
+fn makeImages(raster: borrow mut Raster) -> bool {
+    if (!raster.addImage(1, 48, 32) || !raster.addImage(2, 4, 4) || !raster.addImage(3, 160, 160)) {
+        Console.writeErrorLine("gpu: the test images do not fit");
+        return false;
+    }
+    for (y in 0u32..32) {
+        for (x in 0u32..48) {
+            let dx = round<f32>(x) - 24.0;
+            let dy = round<f32>(y) - 16.0;
+            let p = if (dx * dx + dy * dy < 100.0) rgba(240, 240, 240, 255) else rgba(
+                x * 255 / 47,
+                y * 255 / 31,
+                128,
+                255,
+            );
+            raster.setImagePixel(1, x as usize, y as usize, p);
+        }
+    }
+    for (y in 0u32..4) {
+        for (x in 0u32..4) {
+            let p = if ((x + y) % 2 == 0) rgba(239, 68, 68, 255) else rgba(59, 130, 246, 128);
+            raster.setImagePixel(2, x as usize, y as usize, p);
+        }
+    }
+    for (y in 0u32..160) {
+        for (x in 0u32..160) {
+            let dx = round<f32>(x) - 80.0;
+            let dy = round<f32>(y) - 80.0;
+            let fade = (1.0 - (dx * dx + dy * dy).sqrt() / 80.0).max(0.0);
+            let a = truncate<u32>(fade * 255.0);
+            let p = if ((x / 10) % 2 == 0) rgba(16, 185, 129, a) else rgba(250, 204, 21, a);
+            raster.setImagePixel(3, x as usize, y as usize, p);
+        }
+    }
+    return true;
+}
+
+/// Image 2's checker in new colours: opaque yellow and half-transparent green.
+fn recolor(raster: borrow mut Raster) {
+    for (y in 0u32..4) {
+        for (x in 0u32..4) {
+            let p = if ((x + y) % 2 == 0) rgba(250, 204, 21, 255) else rgba(16, 185, 129, 128);
+            raster.setImagePixel(2, x as usize, y as usize, p);
+        }
+    }
+}
+
+fn picture<B: Backend>(b: borrow mut B, x: f32, y: f32, w: f32, h: f32, tint: u32, radius: f32, handle: u32) {
+    let none = [0u8; 1];
+    b.draw(
+        Command.Picture(Rect { x: x, y: y, w: w, h: h }, Color.hex(tint), Corners.all(radius), handle),
+        none[0..0],
+    );
+}
+
+/// Images, which the demo never draws: stretched, magnified, minified, rounded, tinted, at half opacity, rotated,
+/// skewed and clipped to a rounded box. In points, 1024 × 640.
+fn drawImages<B: Backend>(b: borrow mut B) {
+    let none = [0u8; 1];
+    let empty = none[0..0];
+    picture(mut b, 40.0, 40.0, 240.0, 160.0, 0x00000000, 0.0, 1);
+    picture(mut b, 300.0, 40.0, 240.0, 160.0, 0x00000000, 24.0, 1);
+    picture(mut b, 560.0, 40.0, 160.0, 160.0, 0x00000000, 0.0, 2);
+    picture(mut b, 740.0, 40.0, 240.0, 160.0, 0x38bdf8ff, 12.0, 1);
+    picture(mut b, 40.0, 240.0, 200.0, 200.0, 0xffffff80, 0.0, 3);
+    picture(mut b, 260.0, 240.0, 60.0, 60.0, 0x00000000, 0.0, 3);
+    picture(mut b, 340.0, 240.0, 200.0, 130.0, 0xf472b680, 30.0, 1);
+    b.draw(Command.TransformStart(Rect.zero(), transform(20.0, 1.0, 0.0, 680.0, 330.0)), empty);
+    picture(mut b, 580.0, 260.0, 200.0, 140.0, 0x00000000, 20.0, 1);
+    b.draw(Command.TransformEnd, empty);
+    b.draw(Command.ClipStart(Rect { x: 40.0, y: 470.0, w: 300.0, h: 140.0 }, Corners.all(40.0), true, true), empty);
+    picture(mut b, 20.0, 440.0, 340.0, 200.0, 0x00000000, 0.0, 3);
+    b.draw(Command.ClipEnd, empty);
+    b.draw(Command.TransformStart(Rect.zero(), transform(0.0, 0.7, 10.0, 510.0, 535.0)), empty);
+    picture(mut b, 420.0, 460.0, 180.0, 150.0, 0x00000000, 16.0, 2);
+    b.draw(Command.TransformEnd, empty);
+    label(mut b, 780.0, 480.0, "images");
+}
+
+/// A five-pointed star (a pentagram: its middle is wound twice) of radius `r` about (`cx`, `cy`).
+fn star(p: borrow mut PathBuilder, cx: f32, cy: f32, r: f32) {
+    for (k in 0..5) {
+        let a = Math.radians(-90.0 + round<f32>(k) * 144.0);
+        let x = cx + r * Math.cos(a);
+        let y = cy + r * Math.sin(a);
+        if (k == 0) {
+            p.moveTo(x, y);
+        } else {
+            p.lineTo(x, y);
+        }
+    }
+    p.close();
+}
+
+fn heart(p: borrow mut PathBuilder) {
+    p.moveTo(80.0, 140.0);
+    p.cubicTo(10.0, 90.0, 20.0, 20.0, 80.0, 50.0);
+    p.cubicTo(140.0, 20.0, 150.0, 90.0, 80.0, 140.0);
+    p.close();
+}
+
+fn pathAt<B: Backend>(b: borrow mut B, x: f32, y: f32, w: f32, h: f32, look: PathLook, p: borrow PathBuilder) {
+    b.draw(Command.Path(Rect { x: x, y: y, w: w, h: h }, look), p.bytes());
+}
+
+/// Paths, which the demo never draws: nonzero and even-odd fills of a self-crossing star and of a ring, cubic and
+/// quadratic curves, strokes (a wave, a chart's line over its area, a check mark scaled from a 24 × 24 view box),
+/// a rotated path, a path larger than its box (clipped to it), one in a rounded clip and one in a group at 60 %.
+/// In points, 1024 × 640.
+fn drawPaths<B: Backend>(b: borrow mut B) {
+    let none = [0u8; 1];
+    let empty = none[0..0];
+    var storage = zeros(8192);
+    var p = PathBuilder.over(mut storage.viewMut());
+    star(mut p, 80.0, 80.0, 75.0);
+    pathAt(mut b, 40.0, 40.0, 160.0, 160.0, PathLook.fill(Color.hex(0xfacc15ff)), p);
+    pathAt(mut b, 220.0, 40.0, 160.0, 160.0, PathLook.fill(Color.hex(0xfacc15ff)).withEvenOdd(), p);
+    p.clear();
+    heart(mut p);
+    pathAt(mut b, 400.0, 40.0, 160.0, 150.0, PathLook.fill(Color.hex(0xef4444ff)), p);
+    p.clear();
+    p.moveTo(0.0, 60.0);
+    for (k in 0..8) {
+        let x = round<f32>(k) * 50.0;
+        p.quadTo(x + 25.0, if (k % 2 == 0) 0.0 else 120.0, x + 50.0, 60.0);
+    }
+    pathAt(mut b, 580.0, 40.0, 400.0, 120.0, PathLook.stroke(Color.hex(0x22d3eeff), 4.0), p);
+    // A chart: its area (closed to the baseline), then its line.
+    let values = [40.0f32, 70.0, 55.0, 110.0, 90.0, 130.0, 95.0, 120.0, 60.0, 85.0, 140.0, 125.0];
+    p.clear();
+    p.moveTo(0.0, 160.0);
+    for (k in 0usize..12) {
+        p.lineTo(round<f32>(k) * 41.8, 160.0 - values[k]);
+    }
+    p.lineTo(460.0, 160.0);
+    p.close();
+    pathAt(mut b, 40.0, 240.0, 460.0, 160.0, PathLook.fill(Color.hex(0x3b82f655)), p);
+    p.clear();
+    for (k in 0usize..12) {
+        if (k == 0) {
+            p.moveTo(0.0, 160.0 - values[k]);
+        } else {
+            p.lineTo(round<f32>(k) * 41.8, 160.0 - values[k]);
+        }
+    }
+    pathAt(mut b, 40.0, 240.0, 460.0, 160.0, PathLook.stroke(Color.hex(0x3b82f6ff), 3.0), p);
+    // A ring: two circles wound the same way, the inner a hole by even-odd.
+    p.clear();
+    p.circle(80.0, 80.0, 70.0);
+    p.circle(80.0, 80.0, 35.0);
+    pathAt(mut b, 540.0, 240.0, 160.0, 160.0, PathLook.fill(Color.hex(0xec4899ff)).withEvenOdd(), p);
+    // A check mark drawn in a 24 × 24 view box, scaled to 120 points, in a group at 60 %.
+    p.clear();
+    p.moveTo(5.0, 12.5);
+    p.lineTo(10.0, 17.5);
+    p.lineTo(19.0, 7.0);
+    b.draw(Command.OpacityStart(Rect { x: 740.0, y: 240.0, w: 120.0, h: 120.0 }, 0.6), empty);
+    pathAt(mut b, 740.0, 240.0, 120.0, 120.0, PathLook.stroke(Color.hex(0x10b981ff), 2.0).viewBox(24.0, 24.0), p);
+    b.draw(Command.OpacityEnd(0.6), empty);
+    // The heart, rotated, filled and outlined.
+    p.clear();
+    heart(mut p);
+    b.draw(Command.TransformStart(Rect.zero(), transform(15.0, 1.0, 0.0, 180.0, 515.0)), empty);
+    pathAt(mut b, 100.0, 440.0, 160.0, 150.0, PathLook.fill(Color.hex(0xf97316ff)), p);
+    pathAt(mut b, 100.0, 440.0, 160.0, 150.0, PathLook.stroke(Color.hex(0xffffffff), 2.5), p);
+    b.draw(Command.TransformEnd, empty);
+    // A circle larger than its box, clipped to the box.
+    p.clear();
+    p.circle(80.0, 70.0, 100.0);
+    pathAt(mut b, 320.0, 440.0, 160.0, 140.0, PathLook.fill(Color.hex(0xa855f7ff)), p);
+    // A star in a rounded clip.
+    p.clear();
+    star(mut p, 100.0, 80.0, 120.0);
+    b.draw(Command.ClipStart(Rect { x: 540.0, y: 440.0, w: 200.0, h: 150.0 }, Corners.all(40.0), true, true), empty);
+    pathAt(mut b, 540.0, 440.0, 200.0, 150.0, PathLook.fill(Color.hex(0x84cc16ff)), p);
+    b.draw(Command.ClipEnd, empty);
+    label(mut b, 800.0, 480.0, "paths");
+}
+
+/// Where the comparison's partial frames (one per demo tab) are numbered from.
+const PARTIAL: usize = 10;
+
+fn line<B: Backend>(b: borrow mut B, y: f32, size: f32, spacing: f32, font: u32, text: StringView) {
+    let run = TextRun {
+        start: 0,
+        length: text.length,
+        color: Color.hex(0xf1f5f9ff),
+        fontId: font,
+        fontSize: size,
+        letterSpacing: spacing,
+        lineHeight: 0.0,
+    };
+    b.draw(Command.Text(Rect { x: 40.0, y: y, w: 940.0, h: size * 1.3 }, run), text.bytes());
+}
+
+/// Text the demo never draws: kerning, precomposed and combining accents, Greek and Cyrillic, CJK and Hangul from
+/// the fallback font (and in the bold and monospaced runs), letter spacing across fallback glyphs, and a character
+/// no font has (the run's missing-glyph box), and Hebrew right to left inside a left-to-right line and as a
+/// right-to-left line of its own, brackets mirrored; Arabic, its letters joined and lam-alef ligated; and colour
+/// emoji, sequences (a red heart, a skin tone, a flag, a family, a keycap) included; and Devanagari and Tamil,
+/// reordered and conjoined by the Indic shaper. In points, 1024 × 640.
+fn drawText<B: Backend>(b: borrow mut B) {
+    line(mut b, 30.0, 28.0, 0.0, FONT_18, "AVATAR Wave Tokyo  café naïve  cafe\u{301} n\u{303}");
+    line(mut b, 80.0, 28.0, 0.0, FONT_18, "Ωμέγα  Привет, мир  你好，世界  漢字かなカナ  한국어");
+    line(mut b, 130.0, 22.0, 0.0, FONT_BOLD, "Bold 東京タワー and 서울 in one run");
+    line(mut b, 175.0, 20.0, 0.0, FONT_MONO, "mono: let 名前 = \"値\";");
+    line(mut b, 220.0, 24.0, 6.0, FONT_18, "spaced 中文字 out");
+    line(mut b, 270.0, 16.0, 0.0, FONT_18, "small: 春眠不覺曉，處處聞啼鳥。夜來風雨聲，花落知多少。");
+    line(mut b, 310.0, 48.0, 0.0, FONT_18, "大 Big 字 हिन्दी தமிழ்");
+    line(mut b, 390.0, 28.0, 0.0, FONT_18, "missing: [\u{E000}] zero\u{200B}width\u{FEFF}joined");
+    line(mut b, 450.0, 28.0, 0.0, FONT_18, "bidi: שלום (עולם) 2026 and back");
+    line(mut b, 510.0, 28.0, 0.0, FONT_18, "עברית מימין לשמאל, with English");
+    line(mut b, 570.0, 28.0, 0.0, FONT_18, "مرحبا بالعالم (١٢٣) لا Arabic joins");
+    line(
+        mut b,
+        610.0,
+        22.0,
+        0.0,
+        FONT_18,
+        "emoji: 😀🎉🚀 🍣 ✅ ❤ \u{2764}\u{FE0F} \u{1F44D}\u{1F3FD} \u{1F1EF}\u{1F1F5} \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} 1\u{FE0F}\u{20E3} in text",
+    );
+}
+
+fn tabName(tab: usize) -> StringView => match (tab) {
+    0 => "dashboard",
+    1 => "controls ",
+    2 => "effects  ",
+    3 => "projects ",
+    4 => "activity ",
+    5 => "settings ",
+    6 => "clips    ",
+    7 => "images   ",
+    8 => "paths    ",
+    9 => "text     ",
+    10 => "dashboard, a frame later, redrawn in part",
+    11 => "controls, a frame later, redrawn in part",
+    12 => "effects, a frame later, redrawn in part",
+    13 => "projects, a frame later, redrawn in part",
+    14 => "activity, a frame later, redrawn in part",
+    _ => "settings, a frame later, redrawn in part",
+};
+
+/// The largest difference between two pixels' channels.
+fn channelDiff(a: u32, b: u32) -> u32 {
+    var largest: u32 = 0;
+    for (k in 0u32..4) {
+        let x = (a >> (8 * k)) & 0xff;
+        let y = (b >> (8 * k)) & 0xff;
+        largest = largest.max(if (x > y) x - y else y - x);
+    }
+    return largest;
+}
+
+fn pushLe(out: borrow mut Vector<u8>, v: u32, bytes: u32) {
+    for (i in 0..bytes) {
+        out.push(truncate<u8>(v >> (8 * i)))!;
+    }
+}
+
+/// `pixels` as a top-down 32-bit BMP in `dir`, named for the tab and the renderer.
+fn writeImage(dir: StringView, tab: usize, what: StringView, pixels: Slice<u32>, w: u32, h: u32) {
+    var out = Vector<u8>.withCapacity((w * h * 4 + 122) as usize)!;
+    let size = w * h * 4;
+    out.push('B')!;
+    out.push('M')!;
+    pushLe(mut out, 122 + size, 4);
+    pushLe(mut out, 0, 4);
+    pushLe(mut out, 122, 4);
+    pushLe(mut out, 108, 4);
+    pushLe(mut out, w, 4);
+    pushLe(mut out, (h ^ 0xFFFFFFFF) + 1, 4); // negative height: top-down rows
+    pushLe(mut out, 1, 2);
+    pushLe(mut out, 32, 2);
+    pushLe(mut out, 3, 4); // BI_BITFIELDS
+    pushLe(mut out, size, 4);
+    pushLe(mut out, 2835, 4);
+    pushLe(mut out, 2835, 4);
+    pushLe(mut out, 0, 4);
+    pushLe(mut out, 0, 4);
+    pushLe(mut out, 0x00FF0000, 4);
+    pushLe(mut out, 0x0000FF00, 4);
+    pushLe(mut out, 0x000000FF, 4);
+    pushLe(mut out, 0xFF000000, 4);
+    pushLe(mut out, 0x73524742, 4); // LCS_sRGB
+    for (i in 0..48) {
+        out.push(0)!;
+    }
+    for (p in pixels) {
+        out.push(truncate<u8>(p >> 16))!;
+        out.push(truncate<u8>(p >> 8))!;
+        out.push(truncate<u8>(p))!;
+        out.push(truncate<u8>(p >> 24))!;
+    }
+    var path = [0u8; 512];
+    var writer = TextWriter.create(mut path[..]);
+    writer.text(dir);
+    writer.text("/tab");
+    writer.decimal(tab as u64);
+    writer.byte('-');
+    writer.text(what);
+    writer.text(".bmp");
+    let n = writer.written().length;
+    let name = match (StringView.fromUtf8(path[0..n])) {
+        Some(s) => s,
+        null => { return; }
+    };
+    match (File.create(name)) {
+        Ok(f) => {
+            var file = f;
+            let written = file.write(out.view());
+        }
+        Err(_) => {
+            Console.writeError("gpu: cannot write ");
+            Console.writeErrorLine(name);
+        }
+    }
+}
+
+/// `frames` frames of the dashboard at 5K (2560 × 1440 points at a ratio of 2), offscreen: the time to lay out,
+/// to build the instances, and the GPU's time.
+/// Safety: cw_gpu_gpu_ms only reads the last frame's time.
+fn bench(ui: borrow mut Ui, gpu: borrow mut GpuBackend, frames: u64) -> i32 {
+    let ratio: f32 = 2.0;
+    let width: u32 = 5120;
+    let height: u32 = 2880;
+    var app = DemoApp.create();
+    let none = [0u8; 1];
+    var platform = ScriptPlatform.create(none[0..0], Dims { w: 2560.0, h: 1440.0 });
+    settle(mut ui, mut app, gpu, mut platform, 28);
+    var layout: f64 = 0.0;
+    var build: f64 = 0.0;
+    var total: f64 = 0.0;
+    var gpuMs: f64 = 0.0;
+    let n = if (frames < 1) 1 else frames;
+    for (f in 0..n + 1) {
+        let t0 = nanos();
+        platform.beginFrame();
+        ui.begin(mut platform);
+        demoFrame(mut ui, mut app, gpu.raster);
+        ui.endFrame(mut platform, gpu.raster)!;
+        platform.endFrame();
+        let t1 = nanos();
+        gpu.begin(width, height, ratio);
+        ui.renderInto(mut gpu);
+        let t2 = nanos();
+        let ignored = gpu.renderOnly(width, height, Color.hex(pageBg(ui)));
+        let t3 = nanos();
+        if (f > 0) { // the first frame fills the atlas
+            layout += ms(t0, t1);
+            build += ms(t1, t2);
+            total += ms(t0, t3);
+            gpuMs += unsafe { cw_gpu_gpu_ms() };
+        }
+    }
+    let count = round<f64>(n);
+    Console.write("5120 x 2880, ");
+    Console.write(gpu.instanceCount());
+    Console.write(" instances, ");
+    Console.write(n);
+    Console.writeLine(" frames, ms per frame:");
+    Console.write("  layout ");
+    Console.writeLine(layout / count);
+    Console.write("  build  ");
+    Console.writeLine(build / count);
+    Console.write("  gpu    ");
+    Console.writeLine(gpuMs / count);
+    Console.write("  total  ");
+    Console.writeLine(total / count);
+    // The same frames redrawn only where Damage finds them changed (the uptime and the frame rate, as time passes),
+    // into the frame kept from before.
+    var damageStorage = zeros(4194304);
+    let damageMemory = FixedBufferAllocator.over(mut damageStorage.viewMut());
+    var damage = match (Damage.create(damageMemory, 16384)) {
+        Ok(d) => d,
+        Err(_) => { return 1; }
+    };
+    var partialGpu: f64 = 0.0;
+    var partialTotal: f64 = 0.0;
+    var covered: f64 = 0.0;
+    for (f in 0..n + 1) {
+        let t0 = nanos();
+        platform.beginFrame();
+        ui.begin(mut platform);
+        demoFrame(mut ui, mut app, gpu.raster);
+        ui.endFrame(mut platform, gpu.raster)!;
+        platform.endFrame();
+        let clear = Color.hex(pageBg(ui));
+        let boxes = damage.plan(ui, gpu.raster, clear, width as usize, height as usize, ratio);
+        gpu.begin(width, height, ratio);
+        ui.renderInto(mut gpu);
+        gpu.limitTo(damage);
+        let ignored = gpu.renderOnly(width, height, clear);
+        let t1 = nanos();
+        if (f > 0) { // the first frame is whole
+            partialGpu += unsafe { cw_gpu_gpu_ms() };
+            partialTotal += ms(t0, t1);
+            for (k in 0..boxes) {
+                let b = damage.redrawn(k);
+                covered += round<f64>(b.w * b.h);
+            }
+        }
+    }
+    Console.write("  redrawn in part (");
+    Console.write(covered * 100.0 / (count * round<f64>(width) * round<f64>(height)));
+    Console.writeLine(" % of the frame): gpu, total");
+    Console.write("    ");
+    Console.write(partialGpu / count);
+    Console.write(", ");
+    Console.writeLine(partialTotal / count);
+    return 0;
+}

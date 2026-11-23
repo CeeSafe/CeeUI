@@ -1,0 +1,9 @@
+[package]
+name = "ceeui"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "CeeUI for Rust: a window laid out each frame by a closure, over CeeUI's C API (ceeui.h)"
+links = "ceeui_capi"
+
+[dependencies]

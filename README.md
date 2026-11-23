@@ -1,10 +1,14 @@
-# Clay — ClayWind in pure CeeSafe
+# CeeUI
 
-ClayWind is a Tailwind-flavoured immediate-mode UI toolkit: layout, rendering, text, controls and transitions. Its C
-version is built on [Clay](https://github.com/nicbarker/clay), [ThorVG](https://github.com/thorvg/thorvg) and SDL3.
-This repository is ClayWind ported to [CeeSafe](https://ceesafe.github.io/CeeSafe/), a memory-safe systems language
-that compiles to C. It has **no C code and no dependencies**: no `extern "C"` in the port, and nothing to install but
-the compiler.
+CeeUI is a Tailwind-flavoured immediate-mode UI toolkit written in [CeeSafe](https://ceesafe.github.io/CeeSafe/), a
+memory-safe systems language that compiles to C: layout, rendering, text, controls and transitions, for macOS,
+Windows, Linux, iOS, Android and the web. The library itself (`ceeui/`) has **no C code and no dependencies**:
+nothing to install but the compiler. C is only where a system's own interface is C: the GPU host's Metal, Vulkan and
+Direct3D 12 layers, the web host's glue, and the C API for other languages.
+
+It began as ClayWind, a C toolkit built on [Clay](https://github.com/nicbarker/clay),
+[ThorVG](https://github.com/thorvg/thorvg) and SDL3, ported to CeeSafe, and was called ClayWind (in the repository
+`Clay`) until November 2026; the tag `claywind-final` is its last commit under that name.
 
 The same demo runs in a native window on macOS, Windows and Linux, headless (for tests and screenshots), in a
 browser, and in a terminal.
@@ -13,17 +17,17 @@ browser, and in a terminal.
 phones, the web, accessibility and the tools, with every example compiled against the library
 (`tools/guide_check.py`). [`site/README.md`](site/README.md) says how to build it as a site.
 
-**Credits.** ClayWind stands on [Clay](https://github.com/nicbarker/clay) by Nic Barker. The layout model, the
-element and sizing rules and the layout algorithms are Clay's, and the layout engine here (`claywind/src/layout_*.cee`)
+**Credits.** CeeUI stands on [Clay](https://github.com/nicbarker/clay) by Nic Barker. The layout model, the
+element and sizing rules and the layout algorithms are Clay's, and the layout engine here (`ceeui/src/layout_*.cee`)
 is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
 
-![The ClayWind demo's dashboard, drawn by the CeeSafe renderer](docs/dashboard.png)
+![The CeeUI demo's dashboard, drawn by the CeeSafe renderer](docs/dashboard.png)
 
 ![The effects tab: rounded clipping, gradients and blend modes](docs/effects.png)
 
 ## What is in it
 
-- **A layout engine.** A port of Clay 0.14's layout core, as ClayWind forked it: flex rows and columns, grow, fit,
+- **A layout engine.** A port of Clay 0.14's layout core, as ClayWind (the C original) forked it: flex rows and columns, grow, fit,
   fixed and percent sizing, wrapping, gaps and margins, aspect ratios, floating and absolute elements, scrolling,
   line clamping, and per-element transforms. It is checked against the C original with a differential fuzzer.
 - **A software renderer** that matches ThorVG's output: a render fuzzer against ThorVG finds 490 of 500 random
@@ -44,16 +48,16 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 - **Indic scripts:** Devanagari, Bengali, Gurmukhi, Gujarati, Oriya, Tamil, Telugu, Kannada and Malayalam go
   through an Indic shaper ported from HarfBuzz's: syllables, reordering (pre-base matras, reph), half, below and
   post-base forms, conjuncts, and decomposition of two-part vowels. Across 8,080 randomized and real words in ten
-  fonts (Noto Sans Malayalam among them), every glyph and position matches HarfBuzz's (`claywind-tests`' shaping test, with cases from
+  fonts (Noto Sans Malayalam among them), every glyph and position matches HarfBuzz's (`ceeui-tests`' shaping test, with cases from
   `tools/shaping/hb_cases.py`).
 - **Colour emoji:** bitmap emoji fonts (sbix, as Apple Color Emoji; CBDT, as Noto Color Emoji) and COLR ones
   draw in their own colours, in Raster and on the GPU (as images). COLR version 1 (Windows 11's Segoe UI Emoji)
   draws its paint graph: linear, two-circle and sweep gradients, transforms, glyph clips, layers, and composites by
   every Porter-Duff operator and blend mode, at the font's default instance; version 0's layers draw too. A
-  bitmap face is loaded without its bitmaps, which are most of its file: `claywind-fonts` reads the PNG of each
+  bitmap face is loaded without its bitmaps, which are most of its file: `ceeui-fonts` reads the PNG of each
   glyph a frame draws from the strike nearest its size (`SystemFonts.supplyFrame`). Emoji sequences (ZWJ families,
   skin tones, flags, keycaps, VS16) form through the font's GSUB or, for Apple's, its AAT `morx` table.
-- **System fonts as fallbacks:** `claywind-fonts` (hosted; `SystemFonts.supply`) finds, among the OS's own fonts, a
+- **System fonts as fallbacks:** `ceeui-fonts` (hosted; `SystemFonts.supply`) finds, among the OS's own fonts, a
   face for each character the loaded ones lack, and loads it into the fallback chain. Its catalog (each face's
   coverage, weight and style, read from its cmap and OS/2 tables) is built the first time a character is missing.
 - **Unicode text segmentation:** lines break at UAX #14's opportunities (so CJK wraps between ideographs and a
@@ -93,7 +97,7 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 - **Layout inspector:** secondary-Alt-I (Command-Option-I on macOS, Control-Alt-I elsewhere) in any app, or
   `Ui.setInspecting`, outlines the element under the pointer and its padding, and a card beside it gives its id,
   box, sizing, padding and gap, background, corners and children, and a text element's size and words. It reads the
-  last frame's layout, costs nothing while off, and lets the pointer through (`CLAYWIND_INSPECT=1` turns it on in the
+  last frame's layout, costs nothing while off, and lets the pointer through (`CEEUI_INSPECT=1` turns it on in the
   headless host).
 - **Retina output.** `Raster.setPixelRatio` draws at the display's pixel ratio while layout stays in points.
 - **Incremental rendering.** `Damage` works out what changed between frames, and the raster redraws only those
@@ -123,26 +127,26 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 
 | Path | What it is |
 |---|---|
-| `claywind/` | The library: `layout_*`, `raster_*`, `font`, `image`, `controls`, `ui`, `style`, `transition`, `damage` and the rest, under `src/` |
-| `claywind-fonts/` | System font discovery for hosts (it reads files, as `claywind` cannot): fallback fonts for the characters a frame's fonts lack |
-| `claywind-desktop/` | What a desktop app needs around ClayWind (hosted): `DesktopPlatform` over CeeSafe's `Window`, the system's fonts, `Pane` (a window's Ui, Damage and input; panes share one Raster), the system's menus from a `MenuModel`, file drops, and hot reload's `--hot` side. The desktop and GPU hosts use it, as an app would |
-| `claywind-tasks/` | Background work for a UI (hosted): a `Task` runs jobs on threads of their own, whose results wake the window (`Window.waitEvent`) and reach the frame through `poll`; a new job cancels the one before |
-| `claywind-demo/` | The demo app (the C version's `main.c`) and `ScriptPlatform`, a scripted input source for tests |
-| `claywind-dev/` | Hot reload: rebuilds an app when its sources change and restarts it where it was (`--hot`) |
-| `claywind-pack/` | Packaging: an app as a macOS `.app`, an iOS `.app` (simulator, or signed for a device) or an Android `.apk`, from its package directory; and `new`, a new app from its template |
-| `claywind-demo-tasks/` | What both hosts share for the demo: its saved state (`hotSave`, `hotRestore`: hot reload's, and a phone's when the app leaves the screen) and its background jobs on threads (`claywind-tasks`): the Controls page's Tasks tab counts primes on one |
-| `claywind-hosts/desktop/` | The demo in a native window: AppKit, Win32 or X11, through CeeSafe's `Window`. The Controls page's Live state panel opens in a second window that shares the app's state and the renderer |
-| `claywind-hosts/headless/` | The demo rendered to files: screenshots, golden tests and benchmarks |
-| `claywind-hosts/browser/` | An HTTP + WebSocket server streaming the demo to a `<canvas>` page |
-| `claywind-hosts/terminal/` | A small dashboard drawn in a terminal, with mouse and keyboard |
-| `claywind-hosts/gpu/` | The demo drawn by the GPU in a window it draws itself: Metal on macOS and iOS, Vulkan on Linux and Android, Direct3D 12 on Windows (Vulkan with `CLAYWIND_GPU=vulkan`, or when Direct3D 12 cannot start). A frame redraws only what `Damage` finds changed (`CLAYWIND_WHOLE=1` redraws it whole). Also a side-by-side check against `Raster` on every tab, and a 5K benchmark |
-| `claywind-tests/` | The test suite (`ceesafec test`) |
+| `ceeui/` | The library: `layout_*`, `raster_*`, `font`, `image`, `controls`, `ui`, `style`, `transition`, `damage` and the rest, under `src/` |
+| `ceeui-fonts/` | System font discovery for hosts (it reads files, as `ceeui` cannot): fallback fonts for the characters a frame's fonts lack |
+| `ceeui-desktop/` | What a desktop app needs around CeeUI (hosted): `DesktopPlatform` over CeeSafe's `Window`, the system's fonts, `Pane` (a window's Ui, Damage and input; panes share one Raster), the system's menus from a `MenuModel`, file drops, and hot reload's `--hot` side. The desktop and GPU hosts use it, as an app would |
+| `ceeui-tasks/` | Background work for a UI (hosted): a `Task` runs jobs on threads of their own, whose results wake the window (`Window.waitEvent`) and reach the frame through `poll`; a new job cancels the one before |
+| `ceeui-demo/` | The demo app (the C version's `main.c`) and `ScriptPlatform`, a scripted input source for tests |
+| `ceeui-dev/` | Hot reload: rebuilds an app when its sources change and restarts it where it was (`--hot`) |
+| `ceeui-pack/` | Packaging: an app as a macOS `.app`, an iOS `.app` (simulator, or signed for a device) or an Android `.apk`, from its package directory; and `new`, a new app from its template |
+| `ceeui-demo-tasks/` | What both hosts share for the demo: its saved state (`hotSave`, `hotRestore`: hot reload's, and a phone's when the app leaves the screen) and its background jobs on threads (`ceeui-tasks`): the Controls page's Tasks tab counts primes on one |
+| `ceeui-hosts/desktop/` | The demo in a native window: AppKit, Win32 or X11, through CeeSafe's `Window`. The Controls page's Live state panel opens in a second window that shares the app's state and the renderer |
+| `ceeui-hosts/headless/` | The demo rendered to files: screenshots, golden tests and benchmarks |
+| `ceeui-hosts/browser/` | An HTTP + WebSocket server streaming the demo to a `<canvas>` page |
+| `ceeui-hosts/terminal/` | A small dashboard drawn in a terminal, with mouse and keyboard |
+| `ceeui-hosts/gpu/` | The demo drawn by the GPU in a window it draws itself: Metal on macOS and iOS, Vulkan on Linux and Android, Direct3D 12 on Windows (Vulkan with `CEEUI_GPU=vulkan`, or when Direct3D 12 cannot start). A frame redraws only what `Damage` finds changed (`CEEUI_WHOLE=1` redraws it whole). Also a side-by-side check against `Raster` on every tab, and a 5K benchmark |
+| `ceeui-tests/` | The test suite (`ceesafec test`) |
 | `ClayWind-PORT-PLAN.md` | The port's plan and its results, phase by phase |
 | `CEESAFE-FINDINGS.md` | What the port found in CeeSafe itself, and how each finding was resolved |
 
 ## Getting started
 
-Install the CeeSafe compiler: **ceesafec 0.93.5 or later** for the desktop host (`claywind-desktop/ceesafe.toml` says
+Install the CeeSafe compiler: **ceesafec 0.93.5 or later** for the desktop host (`ceeui-desktop/ceesafe.toml` says
 what each package needs; CI tests with the release `.github/workflows/ci.yml` names):
 
 ```sh
@@ -158,44 +162,44 @@ irm https://ceesafe.github.io/CeeSafe/install.ps1 | iex               # Windows
 ### The desktop app
 
 ```sh
-cd claywind-hosts/desktop
+cd ceeui-hosts/desktop
 ceesafec build
 ./out/desktop
 ```
 
 - **Fonts.** It uses Arial, Arial Bold and Courier New. On Linux it uses the Microsoft core fonts, or falls back to
-  DejaVu; `CLAYWIND_FONT_DIR=<dir>` points it elsewhere.
-- **Light mode.** Press **T** to toggle it, or start the app with `CLAYWIND_LIGHT=1`.
+  DejaVu; `CEEUI_FONT_DIR=<dir>` points it elsewhere.
+- **Light mode.** Press **T** to toggle it, or start the app with `CEEUI_LIGHT=1`.
 - **The window** resizes freely. On a Retina display it draws one pixel per pixel.
 
 ### The other hosts
 
 ```sh
 # Headless: write one frame (.bmp or raw RGBA)
-cd claywind-hosts/headless && ceesafec build
-CLAYWIND_SCREENSHOT=dashboard.bmp ./out/headless
+cd ceeui-hosts/headless && ceesafec build
+CEEUI_SCREENSHOT=dashboard.bmp ./out/headless
 
 # Browser: then open http://127.0.0.1:8080/
-cd claywind-hosts/browser && ceesafec build && ./out/browser 8080
+cd ceeui-hosts/browser && ceesafec build && ./out/browser 8080
 
 # Terminal: mouse, wheel and arrow keys; q quits
-cd claywind-hosts/terminal && ceesafec build && ./out/terminal
+cd ceeui-hosts/terminal && ceesafec build && ./out/terminal
 ```
 
 The headless host also takes these, among others (see the top of its `src/main.cee`):
 
 | Variable | What it does |
 |---|---|
-| `CLAYWIND_SCREENSHOT_TAB` | Which tab to show |
-| `CLAYWIND_SHOT_EVENTS` | Scripted clicks and keys |
-| `CLAYWIND_PIXEL_RATIO` | The pixel ratio to draw at |
-| `CLAYWIND_INCREMENTAL` | Draw every frame through `Damage` |
-| `CLAYWIND_BENCH` | Time the frames instead of writing one |
+| `CEEUI_SCREENSHOT_TAB` | Which tab to show |
+| `CEEUI_SHOT_EVENTS` | Scripted clicks and keys |
+| `CEEUI_PIXEL_RATIO` | The pixel ratio to draw at |
+| `CEEUI_INCREMENTAL` | Draw every frame through `Damage` |
+| `CEEUI_BENCH` | Time the frames instead of writing one |
 
 ### Tests
 
 ```sh
-cd claywind-tests
+cd ceeui-tests
 ceesafec test            # 131 tests; add --interp to run them in CeeSafe's interpreter
 ```
 
@@ -208,7 +212,7 @@ ceesafec test            # 131 tests; add --interp to run them in CeeSafe's inte
 
 ## Using the library
 
-ClayWind is immediate mode. Every frame:
+CeeUI is immediate mode. Every frame:
 1. the host gives `Ui.begin` a `Platform`, which supplies the input and the clock;
 2. the app declares its elements and controls, styled Tailwind-fashion;
 3. `endFrame` lays the frame out;
@@ -216,7 +220,7 @@ ClayWind is immediate mode. Every frame:
 
 A frame runs only when something changed: `Ui.needsFrame` and `Ui.frameDelayMs` tell the host whether to run the
 next frame at the display's pace or to sleep on `Window.waitEvent` until input, a caret blink, a timer the app asked
-for (`Ui.requestFrameAfter`), or a background job's result (`claywind-tasks`) wakes it. An idle window uses no CPU.
+for (`Ui.requestFrameAfter`), or a background job's result (`ceeui-tasks`) wakes it. An idle window uses no CPU.
 
 Several windows: each has its own `Ui` and `Damage`, and they can share one `Raster`, its fonts and caches, which
 keeps each window's last frame in a `RasterFrame` while it draws another's, so every window is still redrawn only
@@ -290,21 +294,21 @@ unrotated, so a phone held sideways is drawn upright. It saves and restores its 
 The iOS Simulator's Metal cannot run it (no reading of the render target in a fragment shader); an iPhone can. On an
 iPhone it needs ceesafec 0.62.1 (findings O11).
 
-A new app: `claywind-pack new NAME` makes directory NAME, a ClayWind app that builds and runs as it is (a window
+A new app: `ceeui-pack new NAME` makes directory NAME, a CeeUI app that builds and runs as it is (a window
 with a list of tasks to add to, tick off and delete; its state and frame in `src/app.cee`, its window and memory in
-`src/main.cee`), depending on ClayWind's packages from GitHub, or with `--claywind PATH` from a checkout. Then
-`cd NAME && ceesafec fetch && ceesafec build && out/NAME`. The app is `claywind-pack/template/` (after changing it,
-`python3 claywind-pack/template/make_templates.py`); CI makes one and builds it.
+`src/main.cee`), depending on CeeUI's packages from GitHub, or with `--ceeui PATH` from a checkout. Then
+`cd NAME && ceesafec fetch && ceesafec build && out/NAME`. The app is `ceeui-pack/template/` (after changing it,
+`python3 ceeui-pack/template/make_templates.py`); CI makes one and builds it.
 
-Packaging (roadmap P4 step 8): `claywind-pack`, run in an app's package directory, makes what a system installs,
+Packaging (roadmap P4 step 8): `ceeui-pack`, run in an app's package directory, makes what a system installs,
 under `out/pack`:
 
 ```
-cd claywind-hosts/gpu
-../../claywind-pack/out/claywind_pack macos         --name "ClayWind GPU" --id com.example.gpu   # NAME.app, ad hoc
-../../claywind-pack/out/claywind_pack ios-simulator --name "ClayWind GPU" --id com.example.gpu   # xcrun simctl install
-../../claywind-pack/out/claywind_pack ios           --name "ClayWind GPU" --id com.example.gpu   # xcrun devicectl device install app
-../../claywind-pack/out/claywind_pack android       --name "ClayWind GPU" --id com.example.gpu   # NAME.apk: adb install
+cd ceeui-hosts/gpu
+../../ceeui-pack/out/ceeui_pack macos         --name "CeeUI GPU" --id com.example.gpu   # NAME.app, ad hoc
+../../ceeui-pack/out/ceeui_pack ios-simulator --name "CeeUI GPU" --id com.example.gpu   # xcrun simctl install
+../../ceeui-pack/out/ceeui_pack ios           --name "CeeUI GPU" --id com.example.gpu   # xcrun devicectl device install app
+../../ceeui-pack/out/ceeui_pack android       --name "CeeUI GPU" --id com.example.gpu   # NAME.apk: adb install
 ```
 
 It runs `ceesafec build --windowed` for the target, writes the `Info.plist` or the `AndroidManifest.xml` (a
@@ -326,17 +330,17 @@ runs the system's tools. The name, identifier and version default to the package
 It needs a Mac for the Apple targets and a Unix for all (it runs `mkdir`, `cp`, `rm`, `zip`): Windows is not a host
 for it yet.
 
-Hot reload: `claywind-dev`, run in an app's package directory, builds the app, runs it with `--hot out/hot`, and
+Hot reload: `ceeui-dev`, run in an app's package directory, builds the app, runs it with `--hot out/hot`, and
 watches the sources of the package and of every package it depends on by path. When a source changes it builds
 again; a build that fails prints its errors and leaves the app running, and one that succeeds asks the app to save
 its state (`SnapshotWriter`; the demo's `DemoApp.save`) and end, then starts the new build from that state. So a
 code change shows in the app where it was:
 
 ```sh
-cd claywind-hosts/desktop && ../../claywind-dev/out/claywind_dev
+cd ceeui-hosts/desktop && ../../ceeui-dev/out/ceeui_dev
 ```
 
-The demo (`claywind-demo/src/demo.cee`) uses most of the API. `claywind-hosts/desktop/src/main.cee` is a complete
+The demo (`ceeui-demo/src/demo.cee`) uses most of the API. `ceeui-hosts/desktop/src/main.cee` is a complete
 host loop in about 250 lines: window events, layout, incremental rendering, presenting only the changed boxes, and
 sleeping while nothing changes.
 
@@ -345,7 +349,7 @@ sleeping while nothing changes.
 - **Every host** builds and runs on macOS. The desktop host has also run on Windows 11 and on Ubuntu under X11.
 - **The browser host** streams a fixed 1024 × 640 frame.
 - **The terminal host** runs its own small dashboard. The full demo is laid out for pixels, not character cells.
-- **Accessibility:** the controls tell a screen reader what they are (`Ui.access` and `claywind/src/access.cee`: role,
+- **Accessibility:** the controls tell a screen reader what they are (`Ui.access` and `ceeui/src/access.cee`: role,
   name, value, state, a text field's caret), and take its presses, focus and steps. Lists, menus, the menu bar, tabs
   and the data grid are containers (CeeSafe ADR 0207): a reader hears "list, 6 items", "tab, 2 of 5" and a table of
   10,001 rows and 4 columns with its column headers, and where the focus is in each; the keys reach them all. With
@@ -358,32 +362,32 @@ sleeping while nothing changes.
   reading by character in a field outside macOS; TalkBack's focus rectangle (the window's surface is the app's). A
   control of your own is one line after its `open`: `ui.access(id, AccessRole.Button, label)`; a field with no label
   of its own is named after it: `ui.accessName("server", "Server address")`.
-- **The web host** (`claywind-web`, with the demo on it in `claywind-hosts/web`): a ClayWind app as a WebAssembly
+- **The web host** (`ceeui-web`, with the demo on it in `ceeui-hosts/web`): a CeeUI app as a WebAssembly
   module in a browser, drawn by the software renderer onto a canvas at the screen's pixel ratio. It redraws and
   shows only what changed and sleeps while nothing does; it has the pointer, the keyboard, touches, the pointer's
-  shape, and copy, cut and paste with the system's clipboard. `claywind-pack web --font FILE...` packs an app
-  (`sh build.sh` in `claywind-hosts/web` does it for the demo): it needs a clang with the `wasm64` target and
+  shape, and copy, cut and paste with the system's clipboard. `ceeui-pack web --font FILE...` packs an app
+  (`sh build.sh` in `ceeui-hosts/web` does it for the demo): it needs a clang with the `wasm64` target and
   `wasm-ld`, and the result is served by its own `serve.py`, or any server that sends the two cross-origin isolation
   headers. It is 64-bit WebAssembly, which Chrome and Firefox run and Safari does not yet. For a screen reader the
   page keeps the app's elements (role, name, state, place) as unseen elements of its own over the canvas; a reader's
   press, focus and slider step go to the app, and the app's focus is the page's. A text field's element is a text
   input holding the field's text, caret and selection: a reader reads the field there, by character as the caret
   moves; a phone shows its keyboard for it (of the field's kind, with its Return key), and an input method composes
-  in it. Fallback fonts (`claywind-pack web --fallback FILE...`) are fetched only when text has a character the
+  in it. Fallback fonts (`ceeui-pack web --fallback FILE...`) are fetched only when text has a character the
   app's fonts lack. Lists, menus, tabs and the data grid are ARIA's containers for a reader
   (a listbox of options, a menu, a tablist, a grid of rows of gridcells under columnheaders, with a virtual list's
   places and counts). Not there: colour emoji, the system's own fonts, file dialogs, drag and drop from outside, a
   second window.
-- **Linux:** the desktop host runs on Wayland and on X11 (CeeSafe 0.93.1, ADR 0205), with a title bar ClayWind
+- **Linux:** the desktop host runs on Wayland and on X11 (CeeSafe 0.93.1, ADR 0205), with a title bar CeeUI
   draws (ADR 0206).
-- **Not ported from the C version:** the debug view and Clay's built-in transitions. ClayWind has its own transition
+- **Not ported from the C version:** the debug view and Clay's built-in transitions. CeeUI has its own transition
   engine.
 
 ## Licence and credits
 
 - **This port:** MIT ([LICENSE](LICENSE)); every source file is marked `SPDX-License-Identifier: MIT`. Clay's notice
   is also in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-- **Clay** (layout): the layout engine (`claywind/src/layout_*.cee`) is a port, altered for CeeSafe, of the ClayWind
+- **Clay** (layout): the layout engine (`ceeui/src/layout_*.cee`) is a port, altered for CeeSafe, of the ClayWind
   fork of [Clay](https://github.com/nicbarker/clay) 0.14, by Nic Barker. Clay is under the zlib/libpng licence:
 
   > Copyright (c) 2024 Nic Barker
@@ -403,5 +407,5 @@ sleeping while nothing changes.
 
 - **ThorVG:** the renderer is written from scratch to match [ThorVG](https://github.com/thorvg/thorvg)'s output, and
   contains none of its code.
-- **renderer.h:** ClayWind's Tailwind-style API began as
+- **renderer.h:** CeeUI's Tailwind-style API began as
   [TomasBorquez/renderer.h](https://github.com/TomasBorquez/renderer.h).

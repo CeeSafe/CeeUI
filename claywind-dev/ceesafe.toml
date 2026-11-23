@@ -1,5 +1,0 @@
-[package]
-name = "claywind_dev"
-version = "0.1.0"
-kind = "executable"
-ceesafec = ">=0.54.0"

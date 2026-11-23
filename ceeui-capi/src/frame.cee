@@ -1,0 +1,365 @@
+// SPDX-License-Identifier: MIT
+// A frame as a host outside CeeSafe builds it (capi.cee): its calls recorded, then replayed into a Ui.
+//
+// CeeUI's Ui borrows its memory, and CeeSafe gives C no pointer to a value that holds loans (type-system.md §27.1,
+// N0281). So a host's frame function records its calls into a Frame, plain data C may point to, and when it returns
+// CeeUI replays them into the Ui. What the user did with a control in one frame (a button pressed, a checkbox
+// flipped, a text field edited) is what that control's call returns in the next; replay asks for that frame at once,
+// and for one more after it, so what the host changed in answer shows even where it laid that out before the control.
+//
+// A text field's text is the host's, in the host's buffer; what is being edited (the caret, the selection) is
+// CeeUI's, kept here by the field's id with a copy of the text the replay edits. When the user changed the text in
+// a replay, the host's next call takes the copy into its buffer; when the host changed its buffer itself, the copy
+// takes the host's text.
+
+import ceeui;
+
+/// What a recorded call does.
+const OP_COLUMN: u8 = 1;
+const OP_ROW: u8 = 2;
+const OP_PANEL: u8 = 3;
+const OP_SPACER: u8 = 4;
+const OP_END: u8 = 5;
+const OP_LABEL: u8 = 6;
+const OP_CAPTION: u8 = 7;
+const OP_HEADING: u8 = 8;
+const OP_BUTTON: u8 = 9;
+const OP_CHECKBOX: u8 = 10;
+const OP_SET_DARK: u8 = 11;
+const OP_REQUEST_FRAME: u8 = 12;
+const OP_TEXT_FIELD: u8 = 13;
+
+/// The most a frame records: calls, and bytes of text. Past either the rest of the frame is dropped.
+public const MAX_OPS: usize = 65536;
+public const MAX_BYTES: usize = 4194304;
+
+/// The most text a field holds, in bytes: a host's larger buffer is used up to this.
+public const MAX_FIELD_BYTES: usize = 65536;
+
+/// One recorded call: what it does, a number (a gap), a flag (a checkbox's state; the theme), and its text and id as
+/// ranges of the frame's bytes.
+struct Op {
+    kind: u8;
+    number: f32;
+    flag: bool;
+    text: usize;
+    textLength: usize;
+    id: usize;
+    idLength: usize;
+}
+
+/// What a control came to in the replay, for its call in the next frame: its id's hash, and a checkbox's state after.
+struct Outcome {
+    id: u32;
+    value: bool;
+}
+
+/// A text field's editing, by its id's hash: the text the replay edits (as long as the host's buffer), its length, the
+/// caret and selection, and whether the frame being recorded has the field.
+struct Field {
+    id: u32;
+    text: Vector<u8>;
+    length: usize;
+    edit: TextEdit;
+    used: bool;
+}
+
+/// A frame as a host records it, and what the last replay's controls came to.
+public struct Frame {
+    ops: Vector<Op>;
+    bytes: Vector<u8>;
+    outcomes: Vector<Outcome>;
+    fields: Vector<Field>;
+    dark: bool;
+    full: bool;
+    /// Whether a control's call returned what the user did, this frame: the host may have changed its state after
+    /// recording what shows it, so the replay asks for one more frame.
+    answered: bool;
+
+    public fn create() -> Frame => Frame {
+        ops: Vector<Op>.create(),
+        bytes: Vector<u8>.create(),
+        outcomes: Vector<Outcome>.create(),
+        fields: Vector<Field>.create(),
+        dark: false,
+        full: false,
+        answered: false,
+    };
+}
+
+impl Frame {
+    /// Starts recording a frame, the UI's theme being `dark`. The last replay's outcomes stay, for the controls.
+    public fn begin(borrow mut this, dark: bool) {
+        this.ops.clear();
+        this.bytes.clear();
+        this.full = false;
+        this.answered = false;
+        this.dark = dark;
+        for (k in 0..this.fields.length) {
+            this.fields[k].used = false;
+        }
+    }
+
+    /// How many calls the frame holds, and whether some were dropped for want of room.
+    public fn count(borrow this) -> usize => this.ops.length;
+    public fn isFull(borrow this) -> bool => this.full;
+
+    fn record(borrow mut this, kind: u8, number: f32, flag: bool, text: Slice<u8>, id: Slice<u8>) {
+        if (this.full || this.ops.length >= MAX_OPS || this.bytes.length + text.length + id.length > MAX_BYTES) {
+            this.full = true;
+            return;
+        }
+        let textAt = this.bytes.length;
+        for (b in text) {
+            let _ = this.bytes.push(b);
+        }
+        let idAt = this.bytes.length;
+        for (b in id) {
+            let _ = this.bytes.push(b);
+        }
+        if (this.ops.push(Op {
+            kind: kind,
+            number: number,
+            flag: flag,
+            text: textAt,
+            textLength: text.length,
+            id: idAt,
+            idLength: id.length,
+        }).isErr()) {
+            this.full = true;
+        }
+    }
+
+    /// The last replay's outcome for the control named `id`.
+    fn outcome(borrow this, id: Slice<u8>) -> Outcome? {
+        let h = hashBytes(id);
+        for (o in this.outcomes.view()) {
+            if (o.id == h) {
+                return o;
+            }
+        }
+        return null;
+    }
+
+    public fn column(borrow mut this, gap: f32) {
+        this.record(OP_COLUMN, gap, false, "".bytes(), "".bytes());
+    }
+
+    public fn row(borrow mut this, gap: f32) {
+        this.record(OP_ROW, gap, false, "".bytes(), "".bytes());
+    }
+
+    public fn panel(borrow mut this) {
+        this.record(OP_PANEL, 0.0, false, "".bytes(), "".bytes());
+    }
+
+    public fn spacer(borrow mut this) {
+        this.record(OP_SPACER, 0.0, false, "".bytes(), "".bytes());
+    }
+
+    public fn end(borrow mut this) {
+        this.record(OP_END, 0.0, false, "".bytes(), "".bytes());
+    }
+
+    public fn label(borrow mut this, text: Slice<u8>) {
+        this.record(OP_LABEL, 0.0, false, text, "".bytes());
+    }
+
+    public fn caption(borrow mut this, text: Slice<u8>) {
+        this.record(OP_CAPTION, 0.0, false, text, "".bytes());
+    }
+
+    public fn heading(borrow mut this, text: Slice<u8>) {
+        this.record(OP_HEADING, 0.0, false, text, "".bytes());
+    }
+
+    /// A button; true when it was pressed in the last replay.
+    public fn button(borrow mut this, id: Slice<u8>, label: Slice<u8>) -> bool {
+        this.record(OP_BUTTON, 0.0, false, label, id);
+        let pressed = this.outcome(id) != null;
+        this.answered = this.answered || pressed;
+        return pressed;
+    }
+
+    /// A checkbox over `value`; when it was flipped in the last replay, `value` takes the new state and the result is
+    /// true.
+    public fn checkbox(borrow mut this, id: Slice<u8>, label: Slice<u8>, value: borrow mut bool) -> bool {
+        var changed = false;
+        match (this.outcome(id)) {
+            Some(o) => {
+                value = o.value;
+                changed = true;
+            }
+            null => {}
+        }
+        this.record(OP_CHECKBOX, 0.0, value, label, id);
+        this.answered = this.answered || changed;
+        return changed;
+    }
+
+    /// A text field named `id` over the host's text, `buffer[0..length]`. When the user changed the text in the last
+    /// replay, `buffer` and `length` take the new text (cut at a character to fit the buffer) and the result is true;
+    /// otherwise the field shows the host's text. `name` is what a screen reader calls the field.
+    public fn textField(
+        borrow mut this,
+        id: Slice<u8>,
+        name: Slice<u8>,
+        buffer: SliceMut<u8>,
+        length: borrow mut usize,
+    ) -> bool {
+        let capacity = buffer.length.min(MAX_FIELD_BYTES);
+        let host = length.min(capacity);
+        let at = this.fieldOf(hashBytes(id), capacity);
+        let changed = this.outcome(id) != null;
+        let f = borrow mut this.fields[at];
+        if (changed) {
+            let n = fitting(f.text.view()[0..f.length], capacity);
+            for (k in 0..n) {
+                buffer[k] = f.text[k];
+            }
+            length = n;
+        } else if (f.text.view()[0..f.length] != buffer[0..host]) {
+            for (k in 0..host) {
+                f.text[k] = buffer[k];
+            }
+            f.length = host;
+            f.edit.caret = f.edit.caret.min(host);
+            f.edit.anchor = f.edit.anchor.min(host);
+        }
+        f.used = true;
+        this.record(OP_TEXT_FIELD, 0.0, false, name, id);
+        this.answered = this.answered || changed;
+        return changed;
+    }
+
+    /// The field with id hash `h`, its text room `capacity` bytes, made when the host first has it.
+    fn fieldOf(borrow mut this, h: u32, capacity: usize) -> usize {
+        for (k in 0..this.fields.length) {
+            if (this.fields[k].id == h) {
+                if (this.fields[k].text.length != capacity) {
+                    let _ = this.fields[k].text.resize(capacity, 0);
+                    let cut = this.fields[k].length.min(capacity);
+                    this.fields[k].length = cut;
+                    this.fields[k].edit = TextEdit.at(this.fields[k].edit.caret.min(cut));
+                }
+                return k;
+            }
+        }
+        var text = Vector<u8>.create();
+        let _ = text.resize(capacity, 0);
+        let _ = this.fields.push(Field { id: h, text: text, length: 0, edit: TextEdit.at(0), used: false });
+        return this.fields.length - 1;
+    }
+
+    public fn isDark(borrow this) -> bool => this.dark;
+
+    public fn setDark(borrow mut this, dark: bool) {
+        this.dark = dark;
+        this.record(OP_SET_DARK, 0.0, dark, "".bytes(), "".bytes());
+    }
+
+    public fn requestFrame(borrow mut this) {
+        this.record(OP_REQUEST_FRAME, 0.0, false, "".bytes(), "".bytes());
+    }
+}
+
+/// How many of `text`'s bytes fit in `room`, cut where a character starts.
+fn fitting(text: Slice<u8>, room: usize) -> usize {
+    if (text.length <= room) {
+        return text.length;
+    }
+    var n = room;
+    while (n > 0 && (text[n] & 0xC0) == 0x80) {
+        n -= 1;
+    }
+    return n;
+}
+
+/// `bytes` as UTF-8 text; empty when they are not.
+fn utf8(bytes: Slice<u8>) -> StringView => StringView.fromUtf8(bytes) ?? "";
+
+/// Replays `frame`'s calls into `ui`, keeping what its controls came to for the next frame's calls, and asking for
+/// that frame when one did something. What the host left open is closed; an end with nothing open is dropped. A text
+/// field is measured with `metrics`, the renderer's. The fields the host no longer has are forgotten.
+public fn replay<M: TextMetrics>(ui: borrow mut Ui, frame: borrow mut Frame, metrics: borrow M) {
+    frame.outcomes.clear();
+    var kept: usize = 0;
+    for (k in 0..frame.fields.length) {
+        if (frame.fields[k].used) {
+            if (kept != k) {
+                frame.fields.swap(kept, k);
+            }
+            kept += 1;
+        }
+    }
+    frame.fields.truncate(kept);
+    var open: usize = 0;
+    for (k in 0..frame.ops.length) {
+        let op = frame.ops[k];
+        let text = utf8(frame.bytes.view()[op.text..op.text + op.textLength]);
+        let id = utf8(frame.bytes.view()[op.id..op.id + op.idLength]);
+        let ink = if (ui.isDarkMode()) SLATE_100 else SLATE_900;
+        if (op.kind == OP_COLUMN) {
+            ui.open(Style.column().w(Size.grow()).gap(op.number.max(0.0)));
+            open += 1;
+        } else if (op.kind == OP_ROW) {
+            ui.open(Style.row().w(Size.grow()).gap(op.number.max(0.0)).alignXY(AxisAlign.Start, AxisAlign.Center));
+            open += 1;
+        } else if (op.kind == OP_PANEL) {
+            ui.open(Style.column().w(Size.grow()).p(space(4.0)).gap(space(2.0))
+                .bg(if (ui.isDarkMode()) SLATE_800 else WHITE).rounded(Radius.Lg));
+            open += 1;
+        } else if (op.kind == OP_SPACER) {
+            ui.open(Style.box().w(Size.grow()).h(Size.grow()));
+            ui.close();
+        } else if (op.kind == OP_END) {
+            if (open > 0) {
+                ui.close();
+                open -= 1;
+            }
+        } else if (op.kind == OP_LABEL) {
+            ui.label(text, Text.of().color(ink).wrap(TextWrap.Words));
+        } else if (op.kind == OP_CAPTION) {
+            ui.label(text, Text.of().color(SLATE_400).wrap(TextWrap.Words));
+        } else if (op.kind == OP_HEADING) {
+            ui.label(text, Text.of().size(22.0).bold().color(ink));
+        } else if (op.kind == OP_BUTTON) {
+            if (Controls.button(mut ui, id, text)) {
+                let _ = frame.outcomes.push(Outcome { id: hashId(id), value: false });
+            }
+        } else if (op.kind == OP_CHECKBOX) {
+            var on = op.flag;
+            if (Controls.checkbox(mut ui, id, text, mut on)) {
+                let _ = frame.outcomes.push(Outcome { id: hashId(id), value: on });
+            }
+        } else if (op.kind == OP_TEXT_FIELD) {
+            let h = hashId(id);
+            for (j in 0..frame.fields.length) {
+                if (frame.fields[j].id == h) {
+                    let f = borrow mut frame.fields[j];
+                    if (Controls.textField(mut ui, metrics, id, mut f.text.viewMut(), mut f.length, mut f.edit)) {
+                        let _ = frame.outcomes.push(Outcome { id: h, value: false });
+                    }
+                    if (text.length > 0) {
+                        ui.accessName(id, text);
+                    }
+                    break;
+                }
+            }
+        } else if (op.kind == OP_SET_DARK) {
+            ui.setDarkMode(op.flag);
+        } else if (op.kind == OP_REQUEST_FRAME) {
+            ui.requestFrame();
+        }
+    }
+    while (open > 0) {
+        ui.close();
+        open -= 1;
+    }
+    // A control that did something asks for the frame its call reports it in; a call that reported something asks
+    // for the frame after, which shows what the host did about it (a label recorded before the button that changes
+    // it).
+    if (frame.outcomes.length > 0 || frame.answered) {
+        ui.requestFrame();
+    }
+}

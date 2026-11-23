@@ -1,6 +1,6 @@
 # The documentation site
 
-ClayWind's guide, built with [VitePress](https://vitepress.dev/).
+CeeUI's guide, built with [VitePress](https://vitepress.dev/).
 
 | Path | What |
 |---|---|
@@ -21,7 +21,7 @@ pnpm run build        # what CI runs; fails on a dead link
 
 ## The examples are compiled
 
-Every `ceesafe` example of the guide is compiled against ClayWind by `tools/guide_check.py`, which CI runs:
+Every `ceesafe` example of the guide is compiled against CeeUI by `tools/guide_check.py`, which CI runs:
 
 ```sh
 python3 tools/guide_check.py                    # every page
@@ -32,7 +32,7 @@ What follows `ceesafe` on an example's fence says how it is checked:
 
 | Fence | The example is |
 |---|---|
-| ` ```ceesafe ` | a whole source file, which imports `claywind` itself |
+| ` ```ceesafe ` | a whole source file, which imports `ceeui` itself |
 | ` ```ceesafe frame ` | a frame's body: statements with `ui: borrow mut Ui` and `metrics` at hand |
 | ` ```ceesafe skip ` | not compiled: a fragment of a host, or code that needs other packages |
 

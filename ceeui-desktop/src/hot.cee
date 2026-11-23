@@ -1,0 +1,106 @@
+// SPDX-License-Identifier: MIT
+// Hot reload's side in an app (ceeui-dev). Started with `--hot DIR`, the app reads the state its previous build
+// saved (hotReadState) and watches DIR/reload on a thread of its own (HotWatch): when ceeui-dev has a new build and
+// touches it, the window is woken, and the app saves its state (hotWriteState, with ceeui's SnapshotWriter) and
+// ends, so the new build starts where this one was.
+
+/// How often the watcher looks at DIR/reload.
+const HOT_POLL_MS: u64 = 200;
+
+/// The watcher's flag: watching, a reload asked for, or stop (the app ends).
+const HOT_WATCHING: u32 = 0;
+const HOT_RELOAD: u32 = 1;
+const HOT_STOP: u32 = 2;
+
+/// The directory `--hot DIR` names, if the app was started so.
+public fn hotDirectory() -> StringView? {
+    for (i in 1usize..Process.argumentCount()) {
+        match (Process.argument(i)) {
+            Some(a) => {
+                if (a == "--hot") {
+                    return Process.argument(i + 1);
+                }
+            }
+            null => {}
+        }
+    }
+    return null;
+}
+
+/// `dir/name`.
+public fn hotPath(dir: StringView, name: StringView) -> String {
+    var s = String.create();
+    s.append(dir)!;
+    s.append("/")!;
+    s.append(name)!;
+    return s;
+}
+
+/// When DIR/reload was last modified, in milliseconds (0 when it is not there).
+fn reloadStamp(path: borrow String) -> i64 => match (File.modified(path.view())) {
+    Ok(t) => t.millis(),
+    Err(_) => 0,
+};
+
+/// The watcher: waits for DIR/reload to change, then asks for the reload and wakes the window; stops when asked.
+async fn watchReload(path: String, flag: Arc<AtomicU32>, waker: WindowWaker) -> Result<void, AsyncError> {
+    let first = await Async.blocking(() => reloadStamp(path));
+    loop {
+        await Timer.sleep(HOT_POLL_MS)?;
+        if (flag.get().load() == HOT_STOP) {
+            return Ok();
+        }
+        let now = await Async.blocking(() => reloadStamp(path));
+        if (now != first) {
+            flag.get().store(HOT_RELOAD);
+            waker.wake();
+            return Ok();
+        }
+    }
+}
+
+/// The watcher of DIR/reload and its flag.
+public struct HotWatch {
+    flag: Arc<AtomicU32>;
+    watcher: Thread<void>;
+
+    /// Starts watching `dir`'s reload file, waking the window of `waker` when it changes.
+    public fn start(dir: StringView, waker: WindowWaker) -> HotWatch? {
+        let flag = match (Arc<AtomicU32>.create(AtomicU32.create(HOT_WATCHING))) {
+            Ok(f) => f,
+            Err(_) => { return null; }
+        };
+        let theirs = flag.clone();
+        let path = hotPath(dir, "reload");
+        let thread = match (Thread.spawn(move () => {
+            let ignored = Async.run(watchReload(path, theirs, waker));
+        })) {
+            Ok(t) => t,
+            Err(_) => { return null; }
+        };
+        return HotWatch { flag: flag, watcher: thread };
+    }
+
+    /// Whether a new build is waiting for this one to save its state and end.
+    public fn reloadAsked(borrow this) -> bool => this.flag.get().load() == HOT_RELOAD;
+
+    drop {
+        // Stop the watcher (it looks again within HOT_POLL_MS), then its thread is joined as it is dropped.
+        this.flag.get().store(HOT_STOP);
+    }
+}
+
+/// The state the previous build saved in DIR/state, or empty.
+public fn hotReadState(dir: StringView) -> Vector<u8> {
+    let path = hotPath(dir, "state");
+    return readFile(path.view());
+}
+
+/// Saves `state` in DIR/state for the next build; false when it could not be written.
+public fn hotWriteState(dir: StringView, state: Slice<u8>) -> bool {
+    let path = hotPath(dir, "state");
+    return match (File.create(path.view())) {
+        Ok(f) => f.writeAt(state, 0).isOk(),
+        Err(_) => false,
+    };
+}

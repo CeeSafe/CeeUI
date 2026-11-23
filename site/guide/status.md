@@ -1,6 +1,6 @@
 # Platforms and status
 
-This page says where ClayWind runs, what works on each system, which compiler it needs, and what is not there yet.
+This page says where CeeUI runs, what works on each system, which compiler it needs, and what is not there yet.
 
 ## Systems
 
@@ -13,20 +13,20 @@ This page says where ClayWind runs, what works on each system, which compiler it
 | Android | A `NativeActivity` | `Raster`; Vulkan | TalkBack | An `.apk`, signed with the debug key |
 | The web | A canvas in a page | `Raster` | The browser's, through ARIA | A page and a WebAssembly module |
 
-`Raster` is the software renderer. The GPU host (`claywind-hosts/gpu`) draws with the system's GPU API instead.
+`Raster` is the software renderer. The GPU host (`ceeui-hosts/gpu`) draws with the system's GPU API instead.
 
 Notes on the table:
 
 - **macOS.** Every host builds and runs on macOS.
-- **Windows.** The desktop host has run on Windows 11. The GPU host uses Vulkan with `CLAYWIND_GPU=vulkan`, or when
+- **Windows.** The desktop host has run on Windows 11. The GPU host uses Vulkan with `CEEUI_GPU=vulkan`, or when
   Direct3D 12 cannot start.
-- **Linux.** The desktop host runs on Wayland and on X11, with a title bar ClayWind draws. It has run on Ubuntu
+- **Linux.** The desktop host runs on Wayland and on X11, with a title bar CeeUI draws. It has run on Ubuntu
   under X11.
 - **iOS and Android.** The desktop host, built for each, runs the demo on an iPhone and on an Android phone. The iOS
   Simulator's Metal cannot run the GPU host; an iPhone can. [Phones](./phones) has the rest.
 - **The web.** It is 64-bit WebAssembly, which Chrome and Firefox run and Safari does not yet. [The web](./web) has
   the rest.
-- **Packing.** `claywind-pack` needs a Mac for the Apple targets and a Unix for all of them. See
+- **Packing.** `ceeui-pack` needs a Mac for the Apple targets and a Unix for all of them. See
   [Packing](./tools#packing).
 
 ## The other hosts
@@ -42,16 +42,16 @@ in the browser.
 
 ## The compiler
 
-ClayWind needs only the CeeSafe compiler, `ceesafec`, and the system's C compiler.
+CeeUI needs only the CeeSafe compiler, `ceesafec`, and the system's C compiler.
 
 | What | ceesafec |
 |---|---|
-| The release ClayWind is tested with in CI | 0.94.3 |
-| The least for `claywind-desktop` and the desktop host | 0.93.5 |
+| The release CeeUI is tested with in CI | 0.94.3 |
+| The least for `ceeui-desktop` and the desktop host | 0.93.5 |
 | The least for the GPU host | 0.93.0 |
-| The least for `claywind-pack` | 0.84.0 |
+| The least for `ceeui-pack` | 0.84.0 |
 | The least for the C API and a new app from the template | 0.78.0 |
-| The least for `claywind-web` | 0.66.0 |
+| The least for `ceeui-web` | 0.66.0 |
 
 Each package states its least version in its `ceesafe.toml`. Use the release CI tests with unless you have a reason
 not to: the screen readers of the table read the demo with CeeSafe 0.94.3.
@@ -91,9 +91,9 @@ Packing:
 
 - macOS: no Developer ID, notarization or icon.
 - Android: the debug key makes an app that installs but is not a store build.
-- Windows is not a host for `claywind-pack`.
+- Windows is not a host for `ceeui-pack`.
 
 Not ported from the C version of ClayWind:
 
 - The debug view.
-- Clay's built-in transitions. ClayWind has its own transition engine.
+- Clay's built-in transitions. CeeUI has its own transition engine.

@@ -1,7 +1,0 @@
-[package]
-name = "claywind_fonts"
-version = "0.1.0"
-kind = "library"
-
-[dependencies]
-claywind = { path = "../claywind" }

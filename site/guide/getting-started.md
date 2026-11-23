@@ -1,11 +1,11 @@
 # Getting started
 
-This page takes you from nothing to a window of your own: install the compiler, make an app from ClayWind's
+This page takes you from nothing to a window of your own: install the compiler, make an app from CeeUI's
 template, run it, and change it.
 
 ## Install the compiler
 
-ClayWind is written in [CeeSafe](https://ceesafe.github.io/CeeSafe/), and its compiler, `ceesafec`, is all you
+CeeUI is written in [CeeSafe](https://ceesafe.github.io/CeeSafe/), and its compiler, `ceesafec`, is all you
 install. It uses the system's C compiler (clang or gcc; MSVC or MinGW's gcc on Windows).
 
 ```sh
@@ -18,19 +18,19 @@ irm https://ceesafe.github.io/CeeSafe/install.ps1 | iex               # Windows
 
 ## Make an app
 
-`claywind-pack` makes a new app from a template. Build it once from a checkout of ClayWind:
+`ceeui-pack` makes a new app from a template. Build it once from a checkout of CeeUI:
 
 ```sh
 git clone https://github.com/CeeSafe/Clay
-cd Clay/claywind-pack && ceesafec build && cd ../..
-Clay/claywind-pack/out/claywind_pack new tasks --claywind Clay
+cd Clay/ceeui-pack && ceesafec build && cd ../..
+Clay/ceeui-pack/out/ceeui_pack new tasks --ceeui Clay
 cd tasks
 ceesafec build
 out/tasks
 ```
 
 A window opens with a list of tasks: type one and press Enter, tick one off, select one and press Delete. Without
-`--claywind PATH` the app takes ClayWind's packages from GitHub instead of the checkout (`ceesafec fetch` gets them).
+`--ceeui PATH` the app takes CeeUI's packages from GitHub instead of the checkout (`ceesafec fetch` gets them).
 
 The app is two files:
 
@@ -41,14 +41,14 @@ The app is two files:
 
 ## The frame
 
-ClayWind is immediate mode. There are no widget objects to create and keep in step with your data: a function, the
+CeeUI is immediate mode. There are no widget objects to create and keep in step with your data: a function, the
 frame, runs whenever something changed and declares the whole window from the app's state. A control is a call, and
 what the user did with it is the call's result.
 
 Here is a whole app's frame: a count, and a button that adds to it.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Counter {
     public count: u64;
@@ -74,7 +74,7 @@ public fn counterFrame(ui: borrow mut Ui, app: borrow mut Counter) {
   `space(6.0)` is six steps of Tailwind's spacing scale (24 points).
 - `ui.labelBytes` shows text. The number is written into an array on the stack: a frame allocates nothing.
 - `Controls.button` draws a button and is true in the frame it was pressed. Its first name, `"add"`, is its id:
-  what ClayWind keeps between frames (the focus, a hover's transition) is kept by id.
+  what CeeUI keeps between frames (the focus, a hover's transition) is kept by id.
 
 ## Change the template
 
@@ -95,12 +95,12 @@ button. Add a button beside the theme's that removes the finished tasks:
     }
 ```
 
-Build and run again, or let ClayWind do it each time you save: [hot reload](./tools#hot-reload) rebuilds the app when
+Build and run again, or let CeeUI do it each time you save: [hot reload](./tools#hot-reload) rebuilds the app when
 a source changes and restarts it where it was.
 
 ## The window
 
-`src/main.cee` is the host: the part that owns the window. The template's is short because `claywind-desktop`'s
+`src/main.cee` is the host: the part that owns the window. The template's is short because `ceeui-desktop`'s
 `Pane` holds a window's `Ui`, its input and its damage tracking:
 
 ```ceesafe skip

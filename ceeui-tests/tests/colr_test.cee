@@ -1,0 +1,166 @@
+// SPDX-License-Identifier: MIT
+// COLR version 1 colour glyphs, against fixtures/fonts/colr.ttf (fixtures/make_colr.py): each letter is one kind
+// of paint. At 100 pixels a letter's square is x 10 to 90, y 0 to 80 (its baseline).
+
+import ceeui;
+
+fn colrFont() -> Vector<u8> => readFile("fixtures/fonts/colr.ttf");
+
+/// A raster with the fixture font loaded as font 0, or null when the fixture is missing.
+fn colrRaster(memory: borrow FixedBufferAllocator) -> Raster? {
+    let font = colrFont();
+    if (font.length == 0) {
+        return null;
+    }
+    var ras = Raster.create(memory, RasterCapacity.of(100, 100))!;
+    if (!ras.loadFont(0, font.view())) {
+        return null;
+    }
+    return ras;
+}
+
+/// Draws `letter` at 100 pixels, in `color` where the font asks for the text's own.
+fn drawColrLetter(ras: borrow mut Raster, letter: StringView, color: Color) {
+    let run = TextRun {
+        start: 0,
+        length: letter.length,
+        color: color,
+        fontId: 0,
+        fontSize: 100.0,
+        letterSpacing: 0.0,
+        lineHeight: 0.0,
+    };
+    ras.begin(Color.rgba(255, 255, 255, 255));
+    ras.draw(Command.Text(Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 }, run), letter.bytes());
+    ras.finish();
+}
+
+fn colorNear(c: Color, r: u32, g: u32, b: u32, slack: u32) -> bool {
+    let dr = if ((c.r as u32) > r) (c.r as u32) - r else r - (c.r as u32);
+    let dg = if ((c.g as u32) > g) (c.g as u32) - g else g - (c.g as u32);
+    let db = if ((c.b as u32) > b) (c.b as u32) - b else b - (c.b as u32);
+    return dr <= slack && dg <= slack && db <= slack;
+}
+
+fn expectPixel(
+    ras: borrow Raster,
+    x: usize,
+    y: usize,
+    r: u32,
+    g: u32,
+    b: u32,
+    slack: u32,
+    what: StringView,
+) -> Result<void, TestFailure> {
+    let c = ras.pixelAt(x, y);
+    if (!colorNear(c, r, g, b, slack)) {
+        Console.write(what);
+        Console.write(": got ");
+        Console.write(c.r as u32);
+        Console.write(" ");
+        Console.write(c.g as u32);
+        Console.write(" ");
+        Console.write(c.b as u32);
+        Console.writeLine("");
+    }
+    return Check.isTrue(colorNear(c, r, g, b, slack), what);
+}
+
+@test
+fn colrSolidsLayersAndTransformsFillInTheirColours() -> Result<void, TestFailure> {
+    var storage = heap(16777216);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ras = match (colrRaster(memory)) {
+        Some(r) => r,
+        null => { return Check.isTrue(false, "the fixture font loads (run fixtures/make_colr.py fixtures/fonts)"); }
+    };
+    let black = Color.rgba(0, 0, 0, 255);
+    drawColrLetter(mut ras, "A", black);
+    expectPixel(ras, 50, 40, 255, 0, 0, 2, "A: a red square")?;
+    expectPixel(ras, 5, 40, 255, 255, 255, 2, "A: nothing past it")?;
+    drawColrLetter(mut ras, "E", black);
+    expectPixel(ras, 30, 40, 255, 0, 0, 2, "E: its red layer at the left")?;
+    expectPixel(ras, 70, 40, 0, 0, 255, 2, "E: its blue layer over the right")?;
+    drawColrLetter(mut ras, "F", black);
+    expectPixel(ras, 30, 40, 255, 255, 255, 2, "F: the left half moved away")?;
+    expectPixel(ras, 70, 40, 0, 255, 0, 2, "F: to the right")?;
+    drawColrLetter(mut ras, "I", black);
+    expectPixel(ras, 50, 40, 0, 255, 0, 2, "I: a variable solid at its default")?;
+    drawColrLetter(mut ras, "J", Color.rgba(200, 0, 200, 255));
+    expectPixel(ras, 50, 40, 200, 0, 200, 2, "J: in the text's colour")?;
+    drawColrLetter(mut ras, "L", black);
+    expectPixel(ras, 30, 40, 255, 0, 0, 2, "L: version 0's layers still draw")?;
+    return expectPixel(ras, 70, 40, 0, 0, 255, 2, "L: both of them");
+}
+
+@test
+fn colrGradientsRunAlongTheirGeometry() -> Result<void, TestFailure> {
+    var storage = heap(16777216);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ras = match (colrRaster(memory)) {
+        Some(r) => r,
+        null => { return Check.isTrue(false, "the fixture font loads"); }
+    };
+    let black = Color.rgba(0, 0, 0, 255);
+    drawColrLetter(mut ras, "B", black);
+    expectPixel(ras, 10, 40, 255, 0, 0, 8, "B: red at the start")?;
+    expectPixel(ras, 89, 40, 0, 0, 255, 8, "B: blue at the end")?;
+    expectPixel(ras, 50, 40, 128, 0, 128, 8, "B: halfway between")?;
+    drawColrLetter(mut ras, "H", black);
+    expectPixel(ras, 10, 40, 0, 0, 255, 8, "H: turned round, blue at the left")?;
+    expectPixel(ras, 89, 40, 255, 0, 0, 8, "H: and red at the right")?;
+    drawColrLetter(mut ras, "C", black);
+    expectPixel(ras, 50, 40, 255, 0, 0, 10, "C: red at its centre")?;
+    expectPixel(ras, 70, 40, 128, 0, 128, 10, "C: halfway out at half its radius")?;
+    expectPixel(ras, 11, 1, 0, 0, 255, 2, "C: blue past its circle")?;
+    drawColrLetter(mut ras, "D", black);
+    expectPixel(ras, 88, 39, 255, 0, 0, 12, "D: red to the right")?;
+    expectPixel(ras, 50, 2, 128, 0, 128, 12, "D: halfway round above")?;
+    expectPixel(ras, 12, 39, 0, 0, 255, 12, "D: blue to the left")?;
+    return expectPixel(ras, 50, 78, 0, 0, 255, 2, "D: blue past its end, below");
+}
+
+@test
+fn colrCompositesPutASourceOntoItsBackdrop() -> Result<void, TestFailure> {
+    var storage = heap(16777216);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ras = match (colrRaster(memory)) {
+        Some(r) => r,
+        null => { return Check.isTrue(false, "the fixture font loads"); }
+    };
+    let black = Color.rgba(0, 0, 0, 255);
+    drawColrLetter(mut ras, "G", black);
+    expectPixel(ras, 30, 40, 255, 255, 255, 2, "G: destination-out takes the left half away")?;
+    expectPixel(ras, 70, 40, 255, 0, 0, 2, "G: and leaves the right")?;
+    drawColrLetter(mut ras, "K", black);
+    return expectPixel(ras, 50, 40, 0, 255, 0, 2, "K: cyan multiplied onto yellow is green");
+}
+
+@test
+fn colrGlyphsBecomeImagesForAGpu() -> Result<void, TestFailure> {
+    var storage = heap(16777216);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ras = match (colrRaster(memory)) {
+        Some(r) => r,
+        null => { return Check.isTrue(false, "the fixture font loads"); }
+    };
+    // 'A' is glyph 4, with a ClipBox: its image covers that box (and a pixel round it), not a whole cell.
+    Check.isTrue(ras.isColrGlyph(0, 4), "A is a COLR glyph")?;
+    Check.isTrue(!ras.isColrGlyph(0, 1), "the square under it is not")?;
+    let a = match (ras.colorGlyphImage(0, 4, 100.0)) {
+        Some(g) => g,
+        null => { return Check.isTrue(false, "A becomes an image"); }
+    };
+    Check.isTrue(a.w >= 80.0 && a.w <= 84.0 && a.h >= 80.0 && a.h <= 84.0, "its ClipBox's size")?;
+    Check.isTrue(a.x >= -1.5 && a.x <= 10.5 && a.y <= -80.0, "placed by that box")?;
+    let size = ras.imageSize(a.handle)!;
+    let pixels = ras.imagePixels(a.handle)!;
+    let middle = pixels[(size.h / 2) * size.w + size.w / 2];
+    Check.equalU64(0xFF0000FF, middle as u64)?;
+    // 'B' (glyph 5) has none: a cell round its advance (drawn smaller: an image is drawn in the Raster's pixels).
+    let b = match (ras.colorGlyphImage(0, 5, 40.0)) {
+        Some(g) => g,
+        null => { return Check.isTrue(false, "B becomes an image"); }
+    };
+    return Check.isTrue(b.w >= 40.0 && b.x < 0.0, "a cell wider than its advance");
+}

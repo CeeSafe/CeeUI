@@ -10,7 +10,7 @@ methods. Showing text is on [Text](./text).
 text is in, how many of its bytes are text, and a `TextEdit`.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Login {
     public name: [u8; 64];
@@ -47,7 +47,7 @@ A `TextEdit` is the caret and the other end of the selection, both byte offsets 
 When the app changes the text itself, it sets the `TextEdit` too:
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Search {
     public query: [u8; 64];
@@ -90,7 +90,7 @@ grapheme cluster is what a reader sees as one character: an accented letter, a f
 The field gives up the focus on Enter. To act on Enter, read it before the field:
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Chat {
     public draft: [u8; 96];
@@ -118,7 +118,7 @@ or Cut. A double click selects everything, a screen reader hears only the dots, 
 compose in it.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct SignIn {
     public secret: [u8; 64];
@@ -138,7 +138,7 @@ On a phone, a field can say what kind of text it takes and what the keyboard's R
 the field, while the field has the focus. A report lasts the frame.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Form {
     public age: [u8; 8];
@@ -169,7 +169,7 @@ describes the rest of a phone host.
 
 ## Shortcuts and the clipboard
 
-ClayWind does not reach the system clipboard itself; the host does. The `Ui` carries editing commands and
+CeeUI does not reach the system clipboard itself; the host does. The `Ui` carries editing commands and
 clipboard text between the host and the focused control.
 
 Copy, Cut, Paste, Select All, Undo and Redo are bound to the platform's shortcuts by default. "Secondary" is
@@ -199,14 +199,14 @@ if (ui.typed('!')) {
 
 ### What a host does
 
-A host made with `claywind-desktop`'s `Pane` does all of this already. A host of your own does two things around
+A host made with `ceeui-desktop`'s `Pane` does all of this already. A host of your own does two things around
 the frame.
 
 Before the frame's controls run, it gives the `Ui` the clipboard's text when a Paste was commanded, and the input
 method's composition:
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 /// After ui.begin, before the app's frame. `clipboard` is the system clipboard's text, `composing` the input
 /// method's composition (empty when none) and `composingCaret` the caret's byte offset in it.
@@ -224,7 +224,7 @@ A host whose shortcuts come from the system, such as a menu item, gives the comm
 After the frame, it takes what a control copied or cut, and learns whether a text control has the focus:
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 /// After the frame. True when a control copied or cut text: it is added to `copied`, which the host then puts on
 /// the system clipboard.
@@ -279,7 +279,7 @@ lays out only the lines on screen. A 100,000-line document costs a frame what a 
 returns `null` when `starts` has no room for them all. An empty text is one empty line.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Log {
     public text: [u8; 65536];
@@ -325,7 +325,7 @@ Two more functions read an indexed text:
 are bytes of the whole text. The text can be selected and copied, not changed.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Viewer {
     public text: [u8; 65536];
@@ -386,7 +386,7 @@ A frame makes the document over the app's arrays with `TextDocument.over`, which
 document what the editor kept from the last frame, runs the editor, and takes those values back.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Notes {
     public text: [u8; 16384];
@@ -457,7 +457,7 @@ secondary-Shift-Z and Control-Y by default.
 draws Undo and Redo buttons for a document; call it before the editor, with the editor's id.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public fn undoButtons(ui: borrow mut Ui, undo: borrow TextHistory, editor: StringView) {
     ui.open(Style.row().gap(space(2.0)));
@@ -500,7 +500,7 @@ Make the document with `TextDocument.styled`, which takes the marks' buffer afte
 is as long as the text's.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 const MARK_PLAIN: u8 = 0;
 const MARK_BOLD: u8 = 1;
@@ -608,7 +608,7 @@ The app opens it on a secondary press over the editor, gives the editor the focu
 opened.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct EditMenu {
     public open: bool;

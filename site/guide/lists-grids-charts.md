@@ -12,7 +12,7 @@ The list is three calls. `Controls.virtualList` opens it and says which rows to 
 opens one row. `Controls.endVirtualList` closes the list.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Inbox {
     public count: usize;
@@ -59,7 +59,7 @@ an icon, a checkbox.
 that the content can change its colours on the selection's background.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 const TRACKS: usize = 4;
 static TITLES: [StringView; 4] = ["Opening", "Low Tide", "Signal", "Closing"];
@@ -105,7 +105,7 @@ row. When `count` falls below the selected row, the selection moves to the last 
 The list does not act on a row; the app does. Test the list's focus and the keys after the list:
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Queue {
     /// Each job's number.
@@ -150,7 +150,7 @@ The grid is four calls: `Controls.dataGrid` opens it, `Controls.gridRow` opens a
 cell in that row, and `Controls.endDataGrid` closes the grid.
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 const PARTS: usize = 5;
 static PART_NAMES: [StringView; 5] = ["Axle", "Bearing", "Chain", "Gear", "Spring"];
@@ -249,7 +249,7 @@ a third back to ascending. The sorted column's title shows an arrow.
 This function sorts the rows of the grid above. Call it where the frame has `grid.sortChanged`:
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 const PARTS: usize = 5;
 

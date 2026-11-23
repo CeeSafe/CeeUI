@@ -1,0 +1,88 @@
+// SPDX-License-Identifier: MIT
+// Background tasks (ceeui_tasks): a job's values reach the UI thread in order, a new job cancels the one before
+// and its values are dropped, and dropping a Task waits for its jobs, also one waiting to send.
+
+import ceeui;
+import ceeui_tasks;
+
+/// Takes the values the latest job sent until `want` arrived or the Task stops running; their sum.
+fn collect(task: borrow mut Task<u64>, ui: borrow mut Ui, want: u64) -> u64 {
+    var total: u64 = 0;
+    var spins: u64 = 0;
+    loop {
+        match (task.poll(mut ui)) {
+            Some(v) => {
+                total += v;
+                if (v == want) {
+                    return total;
+                }
+            }
+            null => {
+                if (!task.running() && spins > 1000) {
+                    // The job has returned, so all it sent is in the channel now: what it sent between the poll
+                    // above and its return is taken here (without this the sum was short when the machine was busy).
+                    loop {
+                        match (task.poll(mut ui)) {
+                            Some(v) => {
+                                total += v;
+                                if (v == want) {
+                                    return total;
+                                }
+                            }
+                            null => { return total; }
+                        }
+                    }
+                }
+                spins += 1;
+            }
+        }
+    }
+}
+
+@test
+fn aJobsValuesReachTheUi() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(16))!;
+    var task = Task<u64>.create(4, null)!;
+    task.start(Box.create(move (out: borrow TaskSender<u64>) => {
+        for (i in 1u64..11) {
+            out.send(i);
+        }
+    })!)!;
+    // 1 + 2 + ... + 10, in order (the last is 10).
+    Check.equalU64(55, collect(mut task, mut ui, 10))?;
+    while (task.running()) {}
+    return Check.isTrue(task.poll(mut ui) == null, "nothing more after the job returned");
+}
+
+@test
+fn aNewJobCancelsTheOneBefore() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(16))!;
+    var task = Task<u64>.create(4, null)!;
+    // The first job sends 7, then runs until it is cancelled.
+    task.start(Box.create(move (out: borrow TaskSender<u64>) => {
+        out.send(7);
+        while (!out.cancelled()) {}
+    })!)!;
+    task.start(Box.create(move (out: borrow TaskSender<u64>) => { out.send(1000); })!)!;
+    // Only the second job's value arrives: the first's 7 is dropped, and it sends nothing more.
+    Check.equalU64(1000, collect(mut task, mut ui, 1000))?;
+    return Check.isTrue(task.poll(mut ui) == null, "the cancelled job's value is dropped");
+}
+
+@test
+fn droppingATaskWaitsForAJobWaitingToSend() -> Result<void, TestFailure> {
+    var task = Task<u64>.create(1, null)!;
+    // Capacity 1 and nobody polling: the job waits on its second send until the Task is dropped.
+    task.start(Box.create(move (out: borrow TaskSender<u64>) => {
+        for (i in 0u64..100) {
+            if (!out.send(i)) {
+                return;
+            }
+        }
+    })!)!;
+    return Ok(); // the Task's drop cancels, closes, and joins: the test ends instead of hanging
+}

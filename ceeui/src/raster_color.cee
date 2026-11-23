@@ -1,0 +1,423 @@
+// SPDX-License-Identifier: MIT
+// Colour glyphs (emoji), of two kinds:
+//
+// - A colour-bitmap face (sbix, as Apple Color Emoji; CBDT, as Noto Color Emoji) keeps its bitmaps out of the
+//   Raster, as they are most of a big file. The host (ceeui-fonts) loads the face without them, names its strikes
+//   (setBitmapStrikes), and supplies the PNG of each glyph a frame draws, from the strike it is drawn at
+//   (addColorBitmap). Each is kept as an image and drawn scaled to the text's size.
+// - A COLR face draws a glyph as layers of outlines, each in a colour of its CPAL palette (version 0), or as a graph
+//   of paints: gradients, transforms, composites (version 1, raster_colr.cee; Segoe UI Emoji has both, and version
+//   1 is drawn). drawText draws them; a GPU host asks for the glyph as an image (colorGlyphImage).
+
+/// The first image handle a colour glyph takes; a program's own images use handles below it.
+const COLOR_HANDLE_BASE: u32 = 0xC0000000;
+
+/// A colour glyph kept as an image: a bitmap the host supplied at a strike, or a COLR glyph drawn at a size (`strike`
+/// then holds its size in quarter pixels, with bit 31 set).
+struct ColorBitmapRecord {
+    font: u32;
+    glyph: u32;
+    strike: u32;
+    /// The image (0 when the glyph has no bitmap at that strike).
+    handle: u32;
+    /// The strike (pixels per em) its image is really from: another when the one asked for lacks the glyph.
+    ppem: u32;
+    /// The image's left edge right of the glyph's origin, and its top edge above the baseline, in its own pixels.
+    left: f32;
+    top: f32;
+    w: usize;
+    h: usize;
+}
+
+fn emptyColorBitmapRecord() -> ColorBitmapRecord =>
+    ColorBitmapRecord { font: 0, glyph: 0, strike: 0, handle: 0, ppem: 0, left: 0.0, top: 0.0, w: 0, h: 0 };
+
+/// A colour glyph as an image and where it goes: its box relative to the glyph's origin on the baseline (y grows
+/// down), in the units of the size asked for.
+public struct ColorGlyph {
+    public handle: u32;
+    public x: f32;
+    public y: f32;
+    public w: f32;
+    public h: f32;
+}
+
+/// The layers of COLR glyph `glyph`: its first LayerRecord's offset and how many, or null when it has none.
+fn colrLayers(d: Slice<u8>, f: FontInfo, glyph: u32) -> [usize; 2]? {
+    let c = f.colr;
+    if (c == 0 || !valid(d, c, 14) || u16at(d, c) > 1) {
+        return null;
+    }
+    let count = u16at(d, c + 2) as usize;
+    let bases = c + (u32at(d, c + 4) as usize);
+    let layers = c + (u32at(d, c + 8) as usize);
+    let layerCount = u16at(d, c + 12) as usize;
+    if (!valid(d, bases, count * 6)) {
+        return null;
+    }
+    var lo: usize = 0;
+    var hi = count;
+    while (lo < hi) {
+        let mid = lo + (hi - lo) / 2;
+        let r = bases + mid * 6;
+        let g = u16at(d, r);
+        if (g == glyph) {
+            let first = u16at(d, r + 2) as usize;
+            let n = u16at(d, r + 4) as usize;
+            if (n == 0 || first + n > layerCount || !valid(d, layers + first * 4, n * 4)) {
+                return null;
+            }
+            return [layers + first * 4, n];
+        }
+        if (g < glyph) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return null;
+}
+
+/// Entry `index` of CPAL palette 0, or `foreground` for 0xFFFF (the text's own colour) or a missing palette.
+fn paletteColor(d: Slice<u8>, f: FontInfo, index: u32, foreground: Color) -> Color {
+    let p = f.cpal;
+    if (index == 0xFFFF || p == 0 || !valid(d, p, 14)) {
+        return foreground;
+    }
+    let entries = u16at(d, p + 2);
+    let records = p + (u32at(d, p + 8) as usize);
+    let first = u16at(d, p + 12);
+    let at = records + ((first + index) as usize) * 4;
+    if (index >= entries || !valid(d, at, 4)) {
+        return foreground;
+    }
+    return Color.rgba(d[at + 2], d[at + 1], d[at], d[at + 3]);
+}
+
+/// Fills the layers of COLR glyph `glyph` of font slot `slot` (whose layers are `layers`), its origin at (`x`,
+/// `baseline`), `scale` pixels per font unit; `foreground` for the layers in the text's colour.
+fn fillColrLayers(
+    r: borrow mut Raster,
+    slot: usize,
+    layers: [usize; 2],
+    x: f32,
+    baseline: f32,
+    scale: f32,
+    foreground: Color,
+) {
+    let fs = r.fonts.get(slot);
+    for (k in 0..layers[1]) {
+        var outline = emptyOutline();
+        var color = foreground;
+        {
+            let d = r.fontPool[fs.offset..fs.offset + fs.size];
+            let at = layers[0] + k * 4;
+            let decoded = decodeGlyph(d, fs.info, u16at(d, at), 0.0, 0.0, 1, mut outline);
+            color = paletteColor(d, fs.info, u16at(d, at + 2), foreground);
+        }
+        if (color.a == 0) {
+            continue;
+        }
+        beginPath(mut r);
+        appendOutline(mut r, outline, x, baseline, scale);
+        fillPath(mut r, solidPaint(color), FillTarget.Layer);
+    }
+}
+
+impl<region r> Raster<r> {
+    /// A new colour glyph image `w` × `h` and its handle; when the images are full, the colour glyphs are cleared
+    /// out first (clearColorGlyphs). Null when even then it does not fit.
+    fn colorImage(borrow mut this, w: usize, h: usize) -> u32? {
+        for (attempt in 0..2) {
+            let handle = COLOR_HANDLE_BASE | ((this.colorGeneration & 0x3FFF) << 16) |
+                (truncate<u32>(this.colorBitmaps.length()) & 0xFFFF);
+            if (this.colorBitmaps.length() < this.colorBitmaps.items.length && this.addImage(handle, w, h)) {
+                return handle;
+            }
+            if (attempt == 0) {
+                this.clearColorGlyphs();
+            }
+        }
+        return null;
+    }
+
+    /// Drops every colour glyph (bitmaps supplied and COLR glyphs drawn), giving their image memory back; the
+    /// program's own images stay, moved together. Glyphs a frame still draws are supplied or drawn again. New
+    /// glyphs take handles no earlier glyph had, so a GPU's cache of images never shows an old one.
+    public fn clearColorGlyphs(borrow mut this) {
+        var kept: usize = 0;
+        var top: usize = 0;
+        for (k in 0..this.images.length()) {
+            var rec = this.images.get(k);
+            if (rec.handle >= COLOR_HANDLE_BASE) {
+                continue;
+            }
+            let n = rec.w * rec.h;
+            if (rec.offset != top) {
+                for (p in 0..n) {
+                    this.imagePool[top + p] = this.imagePool[rec.offset + p];
+                }
+                rec.offset = top;
+            }
+            this.images.set(kept, rec);
+            kept += 1;
+            top += n;
+        }
+        this.images.truncate(kept);
+        this.imageTop = top;
+        this.colorBitmaps.clear();
+        this.colorGeneration += 1;
+    }
+
+    /// Marks loaded font `id` a colour-bitmap face with strikes `ppems` (pixels per em, up to 16): its glyphs are
+    /// drawn from the bitmaps `addColorBitmap` supplies. False when no font `id` is loaded.
+    public fn setBitmapStrikes(borrow mut this, id: u32, ppems: Slice<u32>) -> bool {
+        for (k in 0..this.fonts.length()) {
+            var slot = this.fonts.get(k);
+            if (slot.id == id) {
+                slot.strikeCount = 0;
+                for (p in ppems) {
+                    if (slot.strikeCount < 16 && p > 0) {
+                        slot.strikes[slot.strikeCount] = p;
+                        slot.strikeCount += 1;
+                    }
+                }
+                this.fonts.set(k, slot);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// The loaded font a run in font `id` is drawn in (a ShapedGlyph's `font` for its own glyphs), or null.
+    public fn fontIndex(borrow this, id: u32) -> u32? {
+        return match (this.slotIndex(id)) {
+            Some(k) => truncate<u32>(k),
+            null => null,
+        };
+    }
+
+    /// Whether loaded font `font` (a ShapedGlyph's) draws its glyphs from bitmaps the host supplies.
+    public fn isBitmapFont(borrow this, font: u32) -> bool =>
+        (font as usize) < this.fonts.length() && this.fonts.get(font as usize).strikeCount > 0;
+
+    /// The strike of loaded font `font` drawn at `pixels` per em: the smallest at least that big, else the biggest;
+    /// 0 when it is no colour-bitmap face.
+    public fn bitmapStrike(borrow this, font: u32, pixels: f32) -> u32 {
+        if (!this.isBitmapFont(font)) {
+            return 0;
+        }
+        let slot = this.fonts.get(font as usize);
+        var best: u32 = 0;
+        var biggest: u32 = 0;
+        for (i in 0..slot.strikeCount) {
+            let p = slot.strikes[i];
+            biggest = biggest.max(p);
+            if (round<f32>(p) >= pixels && (best == 0 || p < best)) {
+                best = p;
+            }
+        }
+        return if (best != 0) best else biggest;
+    }
+
+    fn colorRecord(borrow this, font: u32, glyph: u32, strike: u32) -> ColorBitmapRecord? {
+        for (k in 0..this.colorBitmaps.length()) {
+            let rec = this.colorBitmaps.get(k);
+            if (rec.glyph == glyph && rec.font == font && rec.strike == strike) {
+                return rec;
+            }
+        }
+        return null;
+    }
+
+    /// Whether glyph `glyph` of loaded font `font` was supplied at `strike` (with a bitmap, or as having none).
+    public fn hasColorBitmap(borrow this, font: u32, glyph: u32, strike: u32) -> bool =>
+        this.colorRecord(font, glyph, strike) != null;
+
+    /// Supplies glyph `glyph` of loaded font `font` at `strike`: the PNG `png` from strike `ppem` (another when
+    /// `strike` lacks the glyph; empty when no strike has it), whose left edge is `left` pixels right of the glyph's
+    /// origin and top edge `top` above the baseline, in that strike's pixels; `scratch` decodes it (imageInfo's
+    /// scratchBytes). False when it does not decode or there is no room left.
+    public fn addColorBitmap(
+        borrow mut this,
+        font: u32,
+        glyph: u32,
+        strike: u32,
+        ppem: u32,
+        png: Slice<u8>,
+        left: f32,
+        top: f32,
+        scratch: SliceMut<u8>,
+    ) -> bool {
+        var rec = ColorBitmapRecord {
+            font: font,
+            glyph: glyph,
+            strike: strike,
+            handle: 0,
+            ppem: ppem,
+            left: left,
+            top: top,
+            w: 0,
+            h: 0,
+        };
+        if (png.length > 0) {
+            let info = match (imageInfo(png)) {
+                Ok(i) => i,
+                Err(_) => { return false; }
+            };
+            if (scratch.length < info.scratchBytes) {
+                return false;
+            }
+            let handle = match (this.colorImage(info.w, info.h)) {
+                Some(x) => x,
+                null => { return false; }
+            };
+            let decoded = match (this.imagePixelsMut(handle)) {
+                Some(pixels) => match (decodeImage(png, pixels, scratch)) {
+                    Ok(_) => true,
+                    Err(_) => false,
+                },
+                null => false,
+            };
+            if (!decoded) {
+                return false;
+            }
+            rec.handle = handle;
+            rec.w = info.w;
+            rec.h = info.h;
+        }
+        return this.colorBitmaps.push(rec);
+    }
+
+    /// The bitmap glyph `glyph` of loaded font `font` is drawn from at `size` units per em and `ratio` pixels per
+    /// unit, as an image and its box in units; null when it has none (or it was not supplied yet).
+    public fn colorBitmap(borrow this, font: u32, glyph: u32, size: f32, ratio: f32) -> ColorGlyph? {
+        let strike = this.bitmapStrike(font, size * ratio);
+        if (strike == 0) {
+            return null;
+        }
+        let rec = this.colorRecord(font, glyph, strike)?;
+        if (rec.handle == 0 || rec.ppem == 0) {
+            return null;
+        }
+        let s = size / round<f32>(rec.ppem);
+        return ColorGlyph {
+            handle: rec.handle,
+            x: rec.left * s,
+            y: 0.0 - rec.top * s,
+            w: round<f32>(rec.w) * s,
+            h: round<f32>(rec.h) * s,
+        };
+    }
+
+    /// Whether glyph `glyph` of loaded font `font` is a COLR glyph (drawn as coloured layers).
+    public fn isColrGlyph(borrow this, font: u32, glyph: u32) -> bool {
+        let k = font as usize;
+        if (k >= this.fonts.length()) {
+            return false;
+        }
+        let slot = this.fonts.get(k);
+        return isColr(this.fontPool[slot.offset..slot.offset + slot.size], slot.info, glyph);
+    }
+
+    /// COLR glyph `glyph` of loaded font `font` drawn at `size` pixels per em into an image, kept for later frames
+    /// (layers in the text's own colour are black): a GPU host draws it as it draws images. Null when it is no COLR
+    /// glyph or there is no room. Not while a frame is being drawn: it draws into the Raster's own pixels.
+    public fn colorGlyphImage(borrow mut this, font: u32, glyph: u32, size: f32) -> ColorGlyph? {
+        let k = font as usize;
+        if (k >= this.fonts.length()) {
+            return null;
+        }
+        let key = 0x80000000 | truncate<u32>(Math.round(size * 4.0));
+        let slot = this.fonts.get(k);
+        let scale = size / slot.info.unitsPerEm;
+        match (this.colorRecord(font, glyph, key)) {
+            Some(rec) => {
+                if (rec.handle == 0) {
+                    return null;
+                }
+                return ColorGlyph {
+                    handle: rec.handle,
+                    x: rec.left,
+                    y: 0.0 - rec.top,
+                    w: round<f32>(rec.w),
+                    h: round<f32>(rec.h),
+                };
+            }
+            null => {}
+        }
+        // A cell an advance wide and ascent to descent tall, with a margin for what spills past them; or a version 1
+        // glyph's ClipBox.
+        var box: Rect? = null;
+        var advance: f32 = 0.0;
+        {
+            let d = this.fontPool[slot.offset..slot.offset + slot.size];
+            if (!isColr(d, slot.info, glyph)) {
+                return null;
+            }
+            box = colrClipBox(d, slot.info, glyph);
+            advance = glyphAdvance(d, slot.info, glyph) * scale;
+        }
+        var left: f32 = 0.0;
+        var top: f32 = 0.0;
+        var wf: f32 = 0.0;
+        var hf: f32 = 0.0;
+        match (box) {
+            Some(b) => {
+                left = (b.x * scale).floor() - 1.0;
+                top = (0.0 - b.y * scale).ceil() + 1.0;
+                wf = ((b.x + b.w) * scale).ceil() + 1.0 - left;
+                hf = top + ((b.y + b.h) * scale).ceil() + 1.0;
+            }
+            null => {
+                let pad = (size * 0.25).ceil() + 1.0;
+                left = 0.0 - pad;
+                top = (slot.info.ascent * scale).ceil() + pad;
+                wf = advance + 2.0 * pad;
+                hf = top - slot.info.descent * scale + pad;
+            }
+        }
+        let w = idx(truncate<i32>(wf.ceil()));
+        let h = idx(truncate<i32>(hf.ceil()));
+        if (w == 0 || h == 0) {
+            return null;
+        }
+        let handle = this.colorImage(w, h)?;
+        let savedRatio = this.ratio;
+        let savedWidth = idx(this.width);
+        let savedHeight = idx(this.height);
+        if (!this.resize(w, h)) {
+            return null;
+        }
+        this.ratio = 1.0;
+        this.begin(Color.rgba(0, 0, 0, 0));
+        let drawn = drawColrGlyph(mut this, k, glyph, 0.0 - left, top, scale, Color.rgba(0, 0, 0, 255));
+        this.finish();
+        match (this.imageIndex(handle)) {
+            Some(i) => {
+                let rec = this.images.get(i);
+                for (p in 0..w * h) {
+                    let c = unpremultiply(this.pool[p]);
+                    this.imagePool[rec.offset + p] =
+                        (c.r as u32) | ((c.g as u32) << 8) | ((c.b as u32) << 16) | ((c.a as u32) << 24);
+                }
+            }
+            null => {}
+        }
+        this.ratio = savedRatio;
+        let restored = this.resize(savedWidth, savedHeight);
+        let rec = ColorBitmapRecord {
+            font: font,
+            glyph: glyph,
+            strike: key,
+            handle: handle,
+            ppem: 0,
+            left: left,
+            top: top,
+            w: w,
+            h: h,
+        };
+        let kept = this.colorBitmaps.push(rec);
+        return ColorGlyph { handle: handle, x: rec.left, y: 0.0 - rec.top, w: round<f32>(w), h: round<f32>(h) };
+    }
+}

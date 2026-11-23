@@ -28,7 +28,7 @@ for which in old new; do
     compiler=$old
     [ "$which" = new ] && compiler=$new
     rm -rf "$work/$which"
-    (cd claywind-hosts/headless && "$compiler" build --emit c -o "$work/$which" >/dev/null)
+    (cd ceeui-hosts/headless && "$compiler" build --emit c -o "$work/$which" >/dev/null)
     compile "$which" "$work/$which"
 done
 cp -R "$work/new" "$work/new-reachable"
@@ -51,7 +51,7 @@ count = 0
 for k, line in enumerate(lines):
     if line.startswith("static ") and line.rstrip().endswith("{") and "(" in line:
         head, params = line.split("(", 1)
-        if "ceeT_8claywind_Style " in head or re.search(r"\bceeT_8claywind_Style v_", params):
+        if "ceeT_8ceeui_Style " in head or re.search(r"\bceeT_8ceeui_Style v_", params):
             lines[k] = "static __attribute__((noinline)) " + line[len("static "):]
             count += 1
 open(path, "w").write("\n".join(lines))

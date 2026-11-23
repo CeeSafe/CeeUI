@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Compiles every CeeSafe example of the documentation site (site/guide/*.md) against ClayWind.
+"""Compiles every CeeSafe example of the documentation site (site/guide/*.md) against CeeUI.
 
 An example is a fenced block whose language is `ceesafe`. What follows the language on the fence line says how it is
 checked:
 
-  ```ceesafe            a whole source file: it is checked as it stands (it imports claywind itself)
+  ```ceesafe            a whole source file: it is checked as it stands (it imports ceeui itself)
   ```ceesafe frame      the body of a frame: statements checked inside
-                            import claywind;
+                            import ceeui;
                             public fn example<M: TextMetrics>(ui: borrow mut Ui, metrics: borrow M) { ... }
   ```ceesafe skip       not checked (a fragment that cannot stand alone); the count of these is reported
 
-Each example is a package of its own, a library that depends on ../claywind by path, checked with `ceesafec check`.
+Each example is a package of its own, a library that depends on ../ceeui by path, checked with `ceesafec check`.
 A failure prints the page, the line the example begins at, and the compiler's errors with the page's own line numbers.
 
 usage: python3 tools/guide_check.py [--ceesafec ceesafec] [--jobs N] [page.md ...]
@@ -28,7 +28,7 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GUIDE = os.path.join(ROOT, "site", "guide")
-FRAME_HEAD = "import claywind;\n\npublic fn example<M: TextMetrics>(ui: borrow mut Ui, metrics: borrow M) {\n"
+FRAME_HEAD = "import ceeui;\n\npublic fn example<M: TextMetrics>(ui: borrow mut Ui, metrics: borrow M) {\n"
 FRAME_TAIL = "}\n"
 
 
@@ -65,7 +65,7 @@ def check(ceesafec, work, page, start, kind, code):
     os.makedirs(os.path.join(package, "src"))
     with open(os.path.join(package, "ceesafe.toml"), "w", encoding="utf-8") as f:
         f.write('[package]\nname = "example"\nversion = "0.1.0"\nkind = "library"\n\n[dependencies]\n'
-                f'claywind = {{ path = "{os.path.join(ROOT, "claywind")}" }}\n')
+                f'ceeui = {{ path = "{os.path.join(ROOT, "ceeui")}" }}\n')
     head_lines = 0
     source = code
     if kind == "frame":
@@ -97,7 +97,7 @@ def main():
     args = parser.parse_args()
     pages = args.pages or sorted(glob.glob(os.path.join(GUIDE, "*.md")))
     todo = [(os.path.abspath(page), start, kind, code) for page in pages for start, kind, code in examples(page)]
-    work = tempfile.mkdtemp(prefix="claywind-guide-")
+    work = tempfile.mkdtemp(prefix="ceeui-guide-")
     failed = 0
     skipped = 0
     try:

@@ -1,0 +1,202 @@
+// SPDX-License-Identifier: MIT
+// Rich text: one paragraph in several styles (LayoutTree.richText, Ui.richLabel), measured, wrapped and drawn a
+// style run at a time, the runs sharing a baseline on each line. Its metrics make a byte half the font size wide,
+// a line 1.25 times it tall, and the baseline 0.8 of it down.
+
+import ceeui;
+
+struct SizedMeasure {
+    unused: u8;
+}
+
+impl TextMetrics for SizedMeasure {
+    fn measure(borrow this, utf8: Slice<u8>, config: TextConfig) -> Dims =>
+        Dims { w: round<f32>(utf8.length) * config.fontSize * 0.5, h: config.fontSize * 1.25 };
+    fn baseline(borrow this, config: TextConfig) -> f32 => config.fontSize * 0.8;
+}
+
+/// The frame's text commands, in order: their boxes and texts.
+struct Drawn {
+    areas: [Rect; 16];
+    starts: [usize; 16];
+    lengths: [usize; 16];
+    sizes: [f32; 16];
+    count: usize;
+}
+
+fn drawn(t: borrow LayoutTree) -> Drawn {
+    var d = Drawn {
+        areas: [Rect.zero(); 16],
+        starts: [0usize; 16],
+        lengths: [0usize; 16],
+        sizes: [0.0f32; 16],
+        count: 0,
+    };
+    for (i in 0..t.commandCount()) {
+        match (t.command(i)) {
+            Command.Text(area, run) => {
+                if (d.count < 16) {
+                    d.areas[d.count] = area;
+                    d.starts[d.count] = run.start;
+                    d.lengths[d.count] = run.length;
+                    d.sizes[d.count] = run.fontSize;
+                    d.count += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    return d;
+}
+
+fn says(t: borrow LayoutTree, d: borrow Drawn, k: usize, want: StringView) -> bool {
+    let run = TextRun {
+        start: d.starts[k],
+        length: d.lengths[k],
+        color: Color.rgba(0, 0, 0, 255),
+        fontId: 0,
+        fontSize: 0.0,
+        letterSpacing: 0.0,
+        lineHeight: 0.0,
+    };
+    let got = t.textBytes(run);
+    let w = want.bytes();
+    if (got.length != w.length) {
+        return false;
+    }
+    for (i in 0..w.length) {
+        if (got[i] != w[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn layOutRich(t: borrow mut LayoutTree) -> Result<void, TestFailure> {
+    let ok = match (t.endLayout(SizedMeasure { unused: 0 })) {
+        Ok() => true,
+        Err(_) => false,
+    };
+    return Check.isTrue(ok, "the frame fits");
+}
+
+@test
+fn richTextDrawsEachRunInItsStyleOnOneBaseline() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    t.begin(1000.0, 1000.0);
+    t.open(hashId("p"), sized(SizingAxis.fixed(400.0), SizingAxis.fit()));
+    // "Big" at 20 points between text at 10: 2 + 3 + 4 bytes.
+    let small = TextConfig.of(10.0);
+    var big = TextConfig.of(20.0);
+    big.color = Color.rgba(255, 0, 0, 255);
+    let spans = [StyleSpan { length: 2, config: small }, StyleSpan { length: 4, config: big }];
+    t.richText("a Big end".bytes(), small, spans[..]);
+    t.close();
+    layOutRich(mut t)?;
+    let d = drawn(t);
+    Check.equalU64(3, d.count as u64)?;
+    Check.isTrue(says(t, d, 0, "a ") && says(t, d, 1, "Big ") && says(t, d, 2, "end"), "a run each")?;
+    // Side by side: "a " is 10 wide, "Big " 40.
+    expect("the first run at the left", d.areas[0].x, 0.0)?;
+    expect("the big run after it", d.areas[1].x, 10.0)?;
+    expect("the last run after that", d.areas[2].x, 50.0)?;
+    Check.isTrue(d.sizes[1] == 20.0 && d.sizes[2] == 10.0, "each in its size")?;
+    // The baseline is the big run's (16 down): the small runs drop by 16 - 8.
+    expect("the big run at the top", d.areas[1].y, 0.0)?;
+    expect("the small runs lowered onto its baseline", d.areas[0].y, 8.0)?;
+    // The paragraph is as tall as its tallest run, and as wide as its runs together.
+    let p = boxIn(t, "p");
+    return expect("as tall as the big run", p.h, 25.0);
+}
+
+@test
+fn richTextWrapsAcrossItsRuns() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    t.begin(1000.0, 1000.0);
+    t.open(hashId("p"), sized(SizingAxis.fixed(80.0), SizingAxis.fit()));
+    // "aaaa bbbb cccc": "aaaa " is 25 wide, "bbbb " at 20 is 50 and "cccc" 20; 80 holds the first two words but
+    // not the third too.
+    let small = TextConfig.of(10.0);
+    let big = TextConfig.of(20.0);
+    let spans = [StyleSpan { length: 5, config: small }, StyleSpan { length: 5, config: big }];
+    t.richText("aaaa bbbb cccc".bytes(), small, spans[..]);
+    t.close();
+    layOutRich(mut t)?;
+    let d = drawn(t);
+    Check.equalU64(3, d.count as u64)?;
+    Check.isTrue(says(t, d, 0, "aaaa ") && says(t, d, 1, "bbbb") && says(t, d, 2, "cccc"), "two lines")?;
+    expect("the second line's run at the left", d.areas[2].x, 0.0)?;
+    // The first line's small run sits 8 down, on the big run's baseline; the second line is 25 below the first.
+    expect("on the next line", d.areas[2].y, 25.0)?;
+    // A word that runs across two styles is measured in both: "ab" + "cd" at 10 and 20.
+    t.begin(1000.0, 1000.0);
+    t.open(hashId("q"), sized(SizingAxis.fit(), SizingAxis.fit()));
+    let split = [StyleSpan { length: 2, config: small }, StyleSpan { length: 2, config: big }];
+    t.richText("abcd".bytes(), small, split[..]);
+    t.close();
+    layOutRich(mut t)?;
+    return expect("10 + 20 wide", boxIn(t, "q").w, 30.0);
+}
+
+@test
+fn richTextRunsGoFromTheRightInARightToLeftParagraph() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    t.begin(1000.0, 1000.0);
+    t.open(hashId("p"), sized(SizingAxis.fixed(400.0), SizingAxis.fit()));
+    // Hebrew: "שלום " (9 bytes) then "עולם" (8 bytes), the second in a bigger size.
+    let small = TextConfig.of(10.0);
+    let big = TextConfig.of(20.0);
+    let spans = [StyleSpan { length: 9, config: small }, StyleSpan { length: 8, config: big }];
+    t.richText("שלום עולם".bytes(), small, spans[..]);
+    t.close();
+    layOutRich(mut t)?;
+    let d = drawn(t);
+    Check.equalU64(2, d.count as u64)?;
+    // The element is as wide as its line, 45 + 80: the first run rightmost.
+    expect("the first run at the right", d.areas[0].x + d.areas[0].w, 125.0)?;
+    return expect("the second to its left", d.areas[1].x + d.areas[1].w, d.areas[0].x);
+}
+
+@test
+fn aRichLabelTakesItsRunsLooks() -> Result<void, TestFailure> {
+    var storage = heap(2097152);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    ui.begin(mut platform);
+    let styles = [
+        TextStyle.of(6, Text.of().size(14.0)),
+        TextStyle.of(4, Text.of().size(14.0).bold().color(ROSE_400)),
+    ];
+    ui.richLabel("Plain bold rest".bytes(), Text.of().size(14.0).color(SLATE_200), styles[..]);
+    finish(mut ui, mut platform)?;
+    let tree = ui.layout();
+    let d = drawn(tree);
+    Check.equalU64(3, d.count as u64)?;
+    var colors = [Color.rgba(0, 0, 0, 0); 3];
+    var fonts = [0u32; 3];
+    var k: usize = 0;
+    for (i in 0..tree.commandCount()) {
+        match (tree.command(i)) {
+            Command.Text(_, run) => {
+                if (k < 3) {
+                    colors[k] = run.color;
+                    fonts[k] = run.fontId;
+                    k += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    Check.isTrue(fonts[1] == FONT_BOLD && fonts[0] != FONT_BOLD && fonts[2] != FONT_BOLD, "the bold run in bold")?;
+    let rose = Color.hex(ROSE_400);
+    let slate = Color.hex(SLATE_200);
+    Check.isTrue(colors[1].r == rose.r && colors[1].g == rose.g, "in its colour")?;
+    return Check.isTrue(colors[2].r == slate.r && colors[2].g == slate.g, "the rest in the label's look");
+}

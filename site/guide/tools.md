@@ -1,39 +1,39 @@
 # Packing, hot reload, the inspector
 
-This page covers the tools around an app: `claywind-pack`, which makes a new app and packs one for a system;
-`claywind-dev`, which reloads an app when its source changes; the layout inspector; the headless host, which writes
+This page covers the tools around an app: `ceeui-pack`, which makes a new app and packs one for a system;
+`ceeui-dev`, which reloads an app when its source changes; the layout inspector; the headless host, which writes
 frames to files; and the benchmark.
 
 ## Packing
 
-`claywind-pack` is a program of the repository. Build it once:
+`ceeui-pack` is a program of the repository. Build it once:
 
 ```sh
-cd claywind-pack && ceesafec build      # out/claywind_pack
+cd ceeui-pack && ceesafec build      # out/ceeui_pack
 ```
 
 ### A new app
 
 ```sh
-claywind-pack/out/claywind_pack new tasks
+ceeui-pack/out/ceeui_pack new tasks
 cd tasks && ceesafec fetch && ceesafec build && out/tasks
 ```
 
 `new NAME` makes the directory NAME, an app that builds and runs as it is: a window with a list of tasks to add
 to, tick off and delete. Its state and frame are in `src/app.cee`, its window and memory in `src/main.cee`. The app
-takes ClayWind's packages from GitHub. With `--claywind PATH` it takes them from the checkout at PATH.
+takes CeeUI's packages from GitHub. With `--ceeui PATH` it takes them from the checkout at PATH.
 [Getting started](./getting-started) goes through the app.
 
 ### Packing an app
 
-Run `claywind-pack` in the app's package directory with a target. It writes under `out/pack`:
+Run `ceeui-pack` in the app's package directory with a target. It writes under `out/pack`:
 
 ```sh
-cd claywind-hosts/gpu
-../../claywind-pack/out/claywind_pack macos         --name "ClayWind GPU" --id com.example.gpu
-../../claywind-pack/out/claywind_pack ios-simulator --name "ClayWind GPU" --id com.example.gpu
-../../claywind-pack/out/claywind_pack ios           --name "ClayWind GPU" --id com.example.gpu
-../../claywind-pack/out/claywind_pack android       --name "ClayWind GPU" --id com.example.gpu
+cd ceeui-hosts/gpu
+../../ceeui-pack/out/ceeui_pack macos         --name "CeeUI GPU" --id com.example.gpu
+../../ceeui-pack/out/ceeui_pack ios-simulator --name "CeeUI GPU" --id com.example.gpu
+../../ceeui-pack/out/ceeui_pack ios           --name "CeeUI GPU" --id com.example.gpu
+../../ceeui-pack/out/ceeui_pack android       --name "CeeUI GPU" --id com.example.gpu
 ```
 
 | Target | What it makes | Install it with |
@@ -64,24 +64,24 @@ What to know of each system:
 
 - **iOS.** The app is linked with a 16 MiB main thread stack, where iOS gives 1 MiB. It allows every orientation.
 - **An iOS device.** Xcode makes the identity and the profile the first time it builds an app for the device.
-  `claywind-pack` does not make a profile.
+  `ceeui-pack` does not make a profile.
 - **Android.** From Android 7.1 (API level 25). The NDK, build-tools and platform are the newest under
   `ANDROID_HOME`. `--abi arm64-v8a,x86_64` builds a library for each; the 32-bit `armeabi-v7a` and `x86` need
   ceesafec 0.84.0 or later. The activity is kept through a rotation and the keyboard. The debug key makes an app
   that installs but is not a store build.
 - **macOS.** Signed ad hoc, for this Mac. There is no Developer ID, notarization or icon yet.
 
-`claywind-pack` needs a Mac for the Apple targets and a Unix for all of them. Windows is not a host for it yet.
+`ceeui-pack` needs a Mac for the Apple targets and a Unix for all of them. Windows is not a host for it yet.
 
 [Phones](./phones) says what changes in an app on iOS and Android.
 
 ## Hot reload
 
-`claywind-dev`, run in an app's package directory, builds the app, runs it, and watches its sources:
+`ceeui-dev`, run in an app's package directory, builds the app, runs it, and watches its sources:
 
 ```sh
-cd claywind-dev && ceesafec build && cd ..
-cd claywind-hosts/desktop && ../../claywind-dev/out/claywind_dev
+cd ceeui-dev && ceesafec build && cd ..
+cd ceeui-hosts/desktop && ../../ceeui-dev/out/ceeui_dev
 ```
 
 It watches the package's `src` and the sources of every package it depends on by path. When a source changes it
@@ -92,12 +92,12 @@ builds again.
 
 So a code change shows in the app where it was: on the same page, with the same text.
 
-The app has a part in this. `claywind-dev` starts it with `--hot out/hot`. The app reads the state its previous
-build saved, watches for the request to reload, and then writes its state and ends. `claywind-desktop` has that
+The app has a part in this. `ceeui-dev` starts it with `--hot out/hot`. The app reads the state its previous
+build saved, watches for the request to reload, and then writes its state and ends. `ceeui-desktop` has that
 part (`HotWatch`), and the state is written with `SnapshotWriter`:
 
 ```ceesafe
-import claywind;
+import ceeui;
 
 public struct Notes {
     public count: u64;
@@ -139,32 +139,32 @@ ui.close();
 
 ## The headless host
 
-`claywind-hosts/headless` runs the demo with a scripted platform and the software renderer, and writes frames to
+`ceeui-hosts/headless` runs the demo with a scripted platform and the software renderer, and writes frames to
 files. It has no window. The repository uses it for screenshots, golden tests and benchmarks.
 
 ```sh
-cd claywind-hosts/headless && ceesafec build
-CLAYWIND_SCREENSHOT=dashboard.bmp ./out/headless
+cd ceeui-hosts/headless && ceesafec build
+CEEUI_SCREENSHOT=dashboard.bmp ./out/headless
 ```
 
 The frame is 1024 by 640 points. Environment variables say what to do:
 
 | Variable | What it does |
 |---|---|
-| `CLAYWIND_SCREENSHOT=PATH` | The file to write. `.bmp` is a 32-bit BMP; anything else is raw RGBA bytes |
-| `CLAYWIND_SCREENSHOT_TAB=N` | The tab of the demo to open |
-| `CLAYWIND_SHOT_EVENTS=...` | Scripted input: see below |
-| `CLAYWIND_SHOT_FRAME=N` | The frame to write (default 28) |
-| `CLAYWIND_LIGHT=1` | Start in light mode |
-| `CLAYWIND_INSPECT=1` | The layout inspector on |
-| `CLAYWIND_FONT_DIR=DIR` | Where `Arial.ttf`, `Arial Bold.ttf` and `Courier New.ttf` are (default `/System/Library/Fonts/Supplemental`) |
-| `CLAYWIND_PIXEL_RATIO=N` | Draw N device pixels per point. 2 is a Retina frame, twice the size each way |
-| `CLAYWIND_INCREMENTAL=1` | Redraw every frame, but only what changed. The result must not differ |
-| `CLAYWIND_BENCH=N` | Run N frames and report the time per frame instead |
+| `CEEUI_SCREENSHOT=PATH` | The file to write. `.bmp` is a 32-bit BMP; anything else is raw RGBA bytes |
+| `CEEUI_SCREENSHOT_TAB=N` | The tab of the demo to open |
+| `CEEUI_SHOT_EVENTS=...` | Scripted input: see below |
+| `CEEUI_SHOT_FRAME=N` | The frame to write (default 28) |
+| `CEEUI_LIGHT=1` | Start in light mode |
+| `CEEUI_INSPECT=1` | The layout inspector on |
+| `CEEUI_FONT_DIR=DIR` | Where `Arial.ttf`, `Arial Bold.ttf` and `Courier New.ttf` are (default `/System/Library/Fonts/Supplemental`) |
+| `CEEUI_PIXEL_RATIO=N` | Draw N device pixels per point. 2 is a Retina frame, twice the size each way |
+| `CEEUI_INCREMENTAL=1` | Redraw every frame, but only what changed. The result must not differ |
+| `CEEUI_BENCH=N` | Run N frames and report the time per frame instead |
 
 ### Scripted events
 
-`CLAYWIND_SHOT_EVENTS` is a list of events, each on a frame, separated by semicolons. `claywind-demo`'s
+`CEEUI_SHOT_EVENTS` is a list of events, each on a frame, separated by semicolons. `ceeui-demo`'s
 `ScriptPlatform` reads it.
 
 | Event | What it does |
@@ -178,7 +178,7 @@ The frame is 1024 by 640 points. Environment variables say what to do:
 Every frame is 1/60 of a second, so a script gives the same frames each time it runs.
 
 ```sh
-CLAYWIND_SHOT_EVENTS="5:click:300,200;8:type:hello" CLAYWIND_SCREENSHOT=typed.bmp ./out/headless
+CEEUI_SHOT_EVENTS="5:click:300,200;8:type:hello" CEEUI_SCREENSHOT=typed.bmp ./out/headless
 ```
 
 [Testing an app](./testing) shows how to drive a `Ui` of your own without a window.

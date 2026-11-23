@@ -1,0 +1,201 @@
+// SPDX-License-Identifier: MIT
+// The host/input seam: ceeui_platform.h's ClayWind_Platform vtable as an interface. Everything CeeUI needs from
+// the OS or windowing layer: screen size, frame clock, pointer, keys, typed characters and the cursor shape.
+
+/// Non-printable keys (ceeui_platform.h's CW_KEY_*); printable keys arrive as typed characters (`nextChar`).
+public enum Key {
+    Escape,
+    Enter,
+    Tab,
+    Backspace,
+    Delete,
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    LeftShift,
+    RightShift,
+    LeftControl,
+    RightControl,
+    LeftAlt,
+    RightAlt,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
+}
+
+/// How many `Key` values there are.
+public const KEY_COUNT: u32 = 31;
+
+/// A key's bit index (0..KEY_COUNT).
+public fn keyIndex(k: Key) -> u32 => match (k) {
+    Key.Escape => 0,
+    Key.Enter => 1,
+    Key.Tab => 2,
+    Key.Backspace => 3,
+    Key.Delete => 4,
+    Key.Left => 5,
+    Key.Right => 6,
+    Key.Up => 7,
+    Key.Down => 8,
+    Key.Home => 9,
+    Key.End => 10,
+    Key.PageUp => 11,
+    Key.PageDown => 12,
+    Key.LeftShift => 13,
+    Key.RightShift => 14,
+    Key.LeftControl => 15,
+    Key.RightControl => 16,
+    Key.LeftAlt => 17,
+    Key.RightAlt => 18,
+    Key.F1 => 19,
+    Key.F2 => 20,
+    Key.F3 => 21,
+    Key.F4 => 22,
+    Key.F5 => 23,
+    Key.F6 => 24,
+    Key.F7 => 25,
+    Key.F8 => 26,
+    Key.F9 => 27,
+    Key.F10 => 28,
+    Key.F11 => 29,
+    Key.F12 => 30,
+};
+
+/// The key with bit index `i`.
+public fn keyAt(i: u32) -> Key => match (i) {
+    0 => Key.Escape,
+    1 => Key.Enter,
+    2 => Key.Tab,
+    3 => Key.Backspace,
+    4 => Key.Delete,
+    5 => Key.Left,
+    6 => Key.Right,
+    7 => Key.Up,
+    8 => Key.Down,
+    9 => Key.Home,
+    10 => Key.End,
+    11 => Key.PageUp,
+    12 => Key.PageDown,
+    13 => Key.LeftShift,
+    14 => Key.RightShift,
+    15 => Key.LeftControl,
+    16 => Key.RightControl,
+    17 => Key.LeftAlt,
+    18 => Key.RightAlt,
+    19 => Key.F1,
+    20 => Key.F2,
+    21 => Key.F3,
+    22 => Key.F4,
+    23 => Key.F5,
+    24 => Key.F6,
+    25 => Key.F7,
+    26 => Key.F8,
+    27 => Key.F9,
+    28 => Key.F10,
+    29 => Key.F11,
+    _ => Key.F12,
+};
+
+/// Pointer state for one frame: the primary (left) button, the secondary (right) button and the wheel.
+public struct Pointer {
+    public position: Vec2;
+    public down: bool;
+    /// Went down this frame.
+    public pressed: bool;
+    /// Went up this frame.
+    public released: bool;
+    public wheel: Vec2;
+    public secondaryDown: bool;
+    public secondaryPressed: bool;
+
+    /// No buttons, no wheel, at `position`.
+    public fn at(position: Vec2) -> Pointer => Pointer {
+        position: position,
+        down: false,
+        pressed: false,
+        released: false,
+        wheel: Vec2.zero(),
+        secondaryDown: false,
+        secondaryPressed: false,
+    };
+}
+
+/// Where a touch is in its finger's life (gestures.cee).
+public enum TouchPhase {
+    Began,
+    Moved,
+    Ended,
+    /// The system took the finger away: what it began is undone.
+    Cancelled,
+}
+
+/// A finger on a touch screen, as a platform reports it (gestures.cee): the platform's number for the finger, unique
+/// while it is down; its place in layout units; and when, in seconds on the platform's clock of input events (only
+/// differences between touches mean anything).
+public struct Touch {
+    public id: u32;
+    public phase: TouchPhase;
+    public position: Vec2;
+    public time: f64;
+}
+
+/// Cursor shapes a host may show (CW_CURSOR_*).
+public enum Cursor {
+    Default,
+    Pointer,
+    Text,
+}
+
+/// What the host supplies each frame. Every method is `@effects()` (no blocking, no allocation): the host gathers
+/// its input beforehand, so a frame can run inside an async task.
+public interface Platform {
+    /// Layout units (logical pixels).
+    @effects() fn screenSize(borrow this) -> Dims;
+    /// How far the system covers the screen from each edge (a phone's status bar, sensor housing, home indicator and
+    /// rounded corners), in layout units: the frame is still the whole screen, and what must be seen or touched stays
+    /// inside (Ui.safeArea, Style.safe). A platform whose screen is all the app's leaves the default, none.
+    @effects() fn safeArea(borrow this) -> Insets => Insets.zero();
+    /// How much of the screen's bottom a soft keyboard covers, in layout units (Ui.keyboardInset): it shows while a
+    /// text field has focus on a phone. A platform without one leaves the default, none.
+    @effects() fn keyboardInset(borrow this) -> f32 => 0.0;
+    /// Seconds since the previous frame.
+    @effects() fn frameTime(borrow this) -> f32;
+    /// Seconds since start (caret blink and the like).
+    @effects() fn time(borrow this) -> f64;
+    @effects() fn pointer(borrow this) -> Pointer;
+    @effects() fn keyDown(borrow this, key: Key) -> bool;
+    /// Went down this frame.
+    @effects() fn keyPressed(borrow this, key: Key) -> bool;
+    /// The OS's key repeat fired this frame.
+    @effects() fn keyRepeated(borrow this, key: Key) -> bool;
+    /// The next typed Unicode code point queued this frame, or 0 when the queue is empty.
+    @effects() fn nextChar(borrow mut this) -> u32;
+    /// The next key pressed this frame with its modifiers (letters and Command included), for key bindings
+    /// (actions.cee), or null when none is left. A platform without keystrokes leaves the default.
+    @effects() fn nextKeystroke(borrow mut this) -> Keystroke? => null;
+    /// The next action chosen outside the frame this frame (a native menu's item, menus.cee), as its name's hash
+    /// (hashId), or 0 when none is left: it is triggered as its key binding would be. A platform without menus leaves
+    /// the default.
+    @effects() fn nextChosenAction(borrow mut this) -> u32 => 0;
+    /// Files dragged from the system over the window this frame (drag.cee), or null when there is no such drag. A
+    /// platform without file drops leaves the default.
+    @effects() fn fileDrag(borrow this) -> FileDrag? => null;
+    /// The next touch this frame, in order, or null when none is left (gestures.cee). A platform without a touch screen
+    /// leaves the default; one with it gives every finger, and no pointer for them.
+    @effects() fn nextTouch(borrow mut this) -> Touch? => null;
+    @effects() fn setCursor(borrow mut this, cursor: Cursor);
+}

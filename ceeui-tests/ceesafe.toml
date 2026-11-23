@@ -1,0 +1,12 @@
+[package]
+name = "ceeui_tests"
+version = "0.1.0"
+kind = "executable"
+tests = ["tests"]
+
+[dependencies]
+ceeui = { path = "../ceeui" }
+ceeui_demo = { path = "../ceeui-demo" }
+ceeui_fonts = { path = "../ceeui-fonts" }
+ceeui_tasks = { path = "../ceeui-tasks" }
+ceeui_capi = { path = "../ceeui-capi" }

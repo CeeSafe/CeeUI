@@ -1,0 +1,1128 @@
+// SPDX-License-Identifier: MIT
+// ceeui-pack: a CeeUI app as what a system installs (roadmap P4 step 8). Run it in the app's package directory:
+//
+//   cd ceeui-hosts/gpu && ../../ceeui-pack/out/ceeui_pack android --name "CeeUI GPU" --id com.example.gpu
+//
+//   macos            out/pack/NAME.app, signed ad hoc (this Mac only)
+//   ios-simulator    out/pack/ios-simulator/NAME.app, for `xcrun simctl install`
+//   ios              out/pack/ios/NAME.app, signed for a device with a development identity and a provisioning
+//                    profile already on this Mac (Xcode makes them), for `xcrun devicectl device install app`
+//   android          out/pack/NAME.apk: a NativeActivity app, signed with the debug key, for `adb install`
+//   web              out/pack/web: a page and a WebAssembly module, for a package on the web host (ceeui-web);
+//                    `--font FILE`, once for each font the app loads, in its order; `--fallback FILE`, once for
+//                    each font to fetch when text has a character those lack, in the order they are tried. Serve it with the serve.py in
+//                    it, or with any server that sends the same two headers. Needs a clang with the wasm64 target
+//                    (CLANG, else Homebrew's llvm, else `clang`) and wasm-ld (WASM_LD).
+//
+//   new NAME         a new app in directory NAME, from template/ (a window with a list of tasks); `--ceeui PATH`
+//                    takes CeeUI's packages from the checkout at PATH rather than from GitHub
+//
+// `--network WHY` is for an app that uses the network: Android's INTERNET permission, and on iOS the sentence shown
+// when the app first reaches a device on the local network.
+// `--bluetooth WHY` is for an app that prints to Bluetooth printers (CeeSafe ADR 0177): Android's Bluetooth
+// permissions, and on iOS and macOS the sentence shown when the app first uses Bluetooth.
+//
+// It runs ceesafec for the target, writes the Info.plist or AndroidManifest.xml, and runs the system's own tools
+// (xcrun, codesign, security; the NDK's clang, aapt2, zipalign, apksigner). It needs a Mac for the Apple targets, and
+// a Unix (`mkdir`, `cp`, `rm`, `zip`, `sh`) for all of them: Windows is not a host for it yet.
+
+/// What to pack, and as what.
+struct Options {
+    target: String;
+    name: String;     // the app's name on the system: --name, else the package's
+    id: String;       // its bundle identifier or Android package: --id, else com.example.<package>
+    version: String;  // --version, else the package's
+    binary: String;   // the executable's name inside a bundle: the package's name
+    abis: String;     // --abi, Android's, comma separated: arm64-v8a by default
+    profile: String;  // --profile, a .mobileprovision; else the newest fitting one Xcode keeps
+    identity: String; // --identity, a signing identity; else the first "Apple Development" one
+    keystore: String; // --keystore, else ~/.android/debug.keystore (password "android")
+    storePass: String;
+    network: String; // --network, why the app uses the network: Android's INTERNET permission and iOS's local
+    // network description; empty for an app that uses none
+    bluetooth: String; // --bluetooth, why the app uses Bluetooth (CeeSafe ADR 0177 §2.2): Android's permissions and
+    // Apple's NSBluetoothAlwaysUsageDescription; empty for an app that uses none
+    fonts: String;     // --font, each on a line: the web target's fonts, in the app's order
+    fallbacks: String; // --fallback, each on a line: the web target's fallback fonts, in the order they are tried
+}
+
+fn fail(what: StringView) -> i32 {
+    Console.writeError("ceeui-pack: ");
+    Console.writeErrorLine(what);
+    return 1;
+}
+
+fn fail2(what: StringView, more: StringView) -> i32 {
+    Console.writeError("ceeui-pack: ");
+    Console.writeError(what);
+    Console.writeErrorLine(more);
+    return 1;
+}
+
+fn text(s: StringView) -> String => String.from(s)!;
+
+/// The pieces joined.
+fn cat<const N: usize>(parts: [StringView; N]) -> String {
+    var s = String.create();
+    for (p in parts[..]) {
+        s.append(p)!;
+    }
+    return s;
+}
+
+/// The text of the file at `path`, or empty.
+fn readText(path: StringView) -> String {
+    var s = String.create();
+    match (File.open(path)) {
+        Ok(f) => {
+            var file = f;
+            var chunk = [0u8; 8192];
+            var bytes = Vector<u8>.create();
+            loop {
+                let n = match (file.read(mut chunk[..])) {
+                    Ok(k) => k,
+                    Err(_) => 0,
+                };
+                if (n == 0) {
+                    break;
+                }
+                bytes.extend(chunk[0..n])!;
+            }
+            let ok = s.appendUtf8(bytes.view())!;
+        }
+        Err(_) => {}
+    }
+    return s;
+}
+
+fn writeText(path: StringView, content: StringView) -> bool {
+    return match (File.create(path)) {
+        Ok(f) => {
+            var file = f;
+            match (file.write(content.bytes())) {
+                Ok() => true,
+                Err(_) => false,
+            }
+        }
+        Err(_) => false,
+    };
+}
+
+/// Runs `program` with `arguments`, its output shown; whether it ended with 0.
+fn run<const N: usize>(program: StringView, arguments: [StringView; N]) -> bool {
+    var args = Vector<StringView>.create();
+    args.extend(arguments[..])!;
+    return match (Process.run(program, args)) {
+        Ok(status) => status == 0,
+        Err(_) => {
+            Console.writeError("ceeui-pack: cannot run ");
+            Console.writeErrorLine(program);
+            false
+        }
+    };
+}
+
+/// What `program` prints, trimmed; empty when it cannot run or fails.
+fn output<const N: usize>(program: StringView, arguments: [StringView; N]) -> String {
+    var args = Vector<StringView>.create();
+    args.extend(arguments[..])!;
+    var s = String.create();
+    match (Process.capture(program, args, "".bytes())) {
+        Ok(result) => {
+            if (result.status == 0) {
+                match (StringView.fromUtf8(result.stdout.view())) {
+                    Some(t) => { s.append(t.trim())!; }
+                    null => {}
+                }
+            }
+        }
+        Err(_) => {}
+    }
+    return s;
+}
+
+/// The value of `key = "value"` in a ceesafe.toml's text, or empty.
+fn tomlValue(toml: StringView, key: StringView) -> String {
+    var lines = toml.split("\n");
+    loop {
+        let line = match (lines.next()) {
+            Some(l) => l.trim(),
+            null => { break; }
+        };
+        match (line.splitOnce("=")) {
+            Some(halves) => {
+                if (halves.left.trim() == key) {
+                    let value = halves.right.trim();
+                    if (value.length >= 2 && value.bytes()[0] == '"') {
+                        match (value[1..].indexOf("\"")) {
+                            Some(end) => { return text(value[1..1 + end]); }
+                            null => {}
+                        }
+                    }
+                }
+            }
+            null => {}
+        }
+    }
+    return String.create();
+}
+
+/// `s` with what XML reserves escaped.
+fn xml(s: StringView) -> String {
+    var out = String.create();
+    let b = s.bytes();
+    var start: usize = 0; // the run of plain text not yet copied: whole characters, since the reserved ones are ASCII
+    for (i in 0..b.length + 1) {
+        let escape = if (i == b.length) ""
+            else if (b[i] == '&') "&amp;"
+            else if (b[i] == '<') "&lt;"
+            else if (b[i] == '>') "&gt;"
+            else if (b[i] == '"') "&quot;"
+            else "";
+        if (i == b.length || escape.length > 0) {
+            out.append(s[start..i])!;
+            out.append(escape)!;
+            start = i + 1;
+        }
+    }
+    return out;
+}
+
+/// An empty directory at `path`, its parents made.
+fn freshDirectory(path: StringView) -> bool {
+    return run("rm", ["-rf", path]) && run("mkdir", ["-p", path]);
+}
+
+/// The first directory entry of `dir` in descending order: the newest of versions named by number.
+fn newest(dir: StringView) -> String {
+    var best = String.create();
+    match (Directory.list(dir)) {
+        Ok(names) => {
+            for (n in names.view()) {
+                if (n.view().bytes().length > 0 && n.view().bytes()[0] != '.' && later(n.view(), best.view())) {
+                    best = text(n.view());
+                }
+            }
+        }
+        Err(_) => {}
+    }
+    return best;
+}
+
+/// Whether version `a` is after `b`, number by number ("36.1.0" after "9.0.0"; "android-36" after "android-9").
+fn later(a: StringView, b: StringView) -> bool {
+    let x = a.bytes();
+    let y = b.bytes();
+    var i: usize = 0;
+    var j: usize = 0;
+    loop {
+        if (i >= x.length) {
+            return false;
+        }
+        if (j >= y.length) {
+            return true;
+        }
+        let dx = x[i] >= '0' && x[i] <= '9';
+        let dy = y[j] >= '0' && y[j] <= '9';
+        if (dx && dy) {
+            var n: u64 = 0;
+            while (i < x.length && x[i] >= '0' && x[i] <= '9') {
+                n = n.wrappingMul(10).wrappingAdd((x[i] - '0') as u64);
+                i += 1;
+            }
+            var m: u64 = 0;
+            while (j < y.length && y[j] >= '0' && y[j] <= '9') {
+                m = m.wrappingMul(10).wrappingAdd((y[j] - '0') as u64);
+                j += 1;
+            }
+            if (n != m) {
+                return n > m;
+            }
+        } else {
+            if (x[i] != y[j]) {
+                return x[i] > y[j];
+            }
+            i += 1;
+            j += 1;
+        }
+    }
+}
+
+/// An Apple bundle's Info.plist.
+fn infoPlist(o: borrow Options, phone: bool) -> String {
+    var p = String.create();
+    p.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")!;
+    p.append(
+        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n",
+    )!;
+    p.append("<plist version=\"1.0\">\n<dict>\n")!;
+    let pairs: [StringView; 12] = [
+        "CFBundleExecutable",
+        o.binary.view(),
+        "CFBundleIdentifier",
+        o.id.view(),
+        "CFBundleName",
+        o.name.view(),
+        "CFBundleDisplayName",
+        o.name.view(),
+        "CFBundleShortVersionString",
+        o.version.view(),
+        "CFBundlePackageType",
+        "APPL",
+    ];
+    for (k in 0usize..6) {
+        p.append("\t<key>")!;
+        p.append(pairs[k * 2])!;
+        p.append("</key><string>")!;
+        p.append(xml(pairs[k * 2 + 1]).view())!;
+        p.append("</string>\n")!;
+    }
+    p.append("\t<key>CFBundleVersion</key><string>1</string>\n")!;
+    if (o.bluetooth.view().length > 0) {
+        // What iOS and macOS show when the app first uses Bluetooth; without it the system ends the app there.
+        p.append("\t<key>NSBluetoothAlwaysUsageDescription</key><string>")!;
+        p.append(xml(o.bluetooth.view()).view())!;
+        p.append("</string>\n")!;
+    }
+    if (phone) {
+        p.append("\t<key>LSRequiresIPhoneOS</key><true/>\n")!;
+        p.append("\t<key>MinimumOSVersion</key><string>17.0</string>\n")!;
+        p.append("\t<key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>\n")!;
+        p.append("\t<key>UILaunchScreen</key><dict/>\n")!;
+        if (o.network.view().length > 0) {
+            // What iOS shows when the app first reaches a device on the local network.
+            p.append("\t<key>NSLocalNetworkUsageDescription</key><string>")!;
+            p.append(xml(o.network.view()).view())!;
+            p.append("</string>\n")!;
+        }
+        p.append("\t<key>CFBundleSupportedPlatforms</key><array><string>iPhoneOS</string></array>\n")!;
+        // Every orientation: a CeeUI app lays out again at each size (its size classes).
+        p.append("\t<key>UISupportedInterfaceOrientations</key><array>")!;
+        p.append("<string>UIInterfaceOrientationPortrait</string>")!;
+        p.append("<string>UIInterfaceOrientationLandscapeLeft</string>")!;
+        p.append("<string>UIInterfaceOrientationLandscapeRight</string></array>\n")!;
+    } else {
+        p.append("\t<key>LSMinimumSystemVersion</key><string>12.0</string>\n")!;
+        p.append("\t<key>NSHighResolutionCapable</key><true/>\n")!;
+    }
+    p.append("</dict>\n</plist>\n")!;
+    return p;
+}
+
+/// Where the static OpenSSL for `system` ("android-arm64", "ios-arm64", "ios-sim-arm64") is, when
+/// tools/openssl-mobile.sh of CeeSafe.Web has built it in its usual place; empty otherwise.
+fn mobileOpenssl(system: StringView) -> String {
+    let dir = cat([Environment.variable("HOME") ?? "", "/.cache/ceesafe/openssl-mobile/", system]);
+    return if (File.kind(
+        cat([dir.view(), "/lib/libssl.a"]).view(),
+    ) is Ok(Some(PathKind.File))) dir else String.create();
+}
+
+/// Builds the package here with `arguments` after `build --windowed`, for `target` (a manifest's [target.NAME],
+/// CeeSafe ADR 0171; empty for this machine) and with `variable` ("NAME=value", or empty) in ceesafec's environment:
+/// what a dependency's target table names its libraries by. Whether it built.
+fn build(arguments: Slice<StringView>, target: StringView, variable: StringView) -> bool {
+    var args = Vector<StringView>.create();
+    if (variable.length > 0) {
+        args.push(variable)!;
+        args.push("ceesafec")!;
+    }
+    args.push("build")!;
+    args.push("--windowed")!;
+    if (target.length > 0) {
+        args.push("--target")!;
+        args.push(target)!;
+    }
+    args.extend(arguments)!;
+    return match (Process.run(if (variable.length > 0) "env" else "ceesafec", args)) {
+        Ok(status) => status == 0,
+        Err(_) => {
+            Console.writeErrorLine("ceeui-pack: cannot run ceesafec (is it on PATH?)");
+            false
+        }
+    };
+}
+
+/// The .app at `app` for a Mac or a phone: the directory, the executable built into it, and its Info.plist.
+fn bundle(
+    o: borrow Options,
+    app: StringView,
+    phone: bool,
+    flags: Slice<StringView>,
+    target: StringView,
+    variable: StringView,
+) -> bool {
+    let inner = if (phone) text(app) else cat([app, "/Contents/MacOS"]);
+    if (!freshDirectory(inner.view())) {
+        return false;
+    }
+    let exe = cat([inner.view(), "/", o.binary.view()]);
+    var args = Vector<StringView>.create();
+    args.extend(flags)!;
+    args.push("-o")!;
+    args.push(exe.view())!;
+    if (!build(args.view(), target, variable)) {
+        return false;
+    }
+    let plist = if (phone) cat([app, "/Info.plist"]) else cat([app, "/Contents/Info.plist"]);
+    return writeText(plist.view(), infoPlist(o, phone).view());
+}
+
+fn packMac(o: borrow Options) -> i32 {
+    let app = cat(["out/pack/", o.name.view(), ".app"]);
+    let none = Vector<StringView>.create();
+    if (!bundle(o, app.view(), false, none.view(), "", "")) {
+        return fail("the app was not built");
+    }
+    if (!run("codesign", ["-s", "-", "-f", app.view()])) {
+        return fail("codesign failed");
+    }
+    Console.write("packed ");
+    Console.writeLine(app.view());
+    return 0;
+}
+
+/// The cc flags of an iOS build for `sdk` ("iphoneos" or "iphonesimulator") and `triple`, after finding its clang.
+fn packIos(o: borrow Options, simulator: bool) -> i32 {
+    let sdkName = if (simulator) "iphonesimulator" else "iphoneos";
+    let clang = output("xcrun", ["--sdk", sdkName, "-f", "clang"]);
+    let sdk = output("xcrun", ["--sdk", sdkName, "--show-sdk-path"]);
+    if (clang.view().length == 0 || sdk.view().length == 0) {
+        return fail("no iOS SDK: xcrun did not find one (is Xcode installed and selected?)");
+    }
+    let triple = if (simulator) "arm64-apple-ios17.0-simulator" else "arm64-apple-ios17.0";
+    let app = cat(["out/pack/", if (simulator) "ios-simulator/" else "ios/", o.name.view(), ".app"]);
+    // The main thread's stack is 1 MiB on iOS, an eighth of a Mac's, and UIKit is on it under the program (CeeSafe
+    // ADR 0154): 16 MiB, so an app whose `main` holds large values (a Raster is 123 KiB) runs as it does on a desktop.
+    let flags: [StringView; 12] = [
+        "--cc",
+        clang.view(),
+        "--cflag",
+        "-target",
+        "--cflag",
+        triple,
+        "--cflag",
+        "-isysroot",
+        "--cflag",
+        sdk.view(),
+        "--cflag",
+        "-Wl,-stack_size,0x1000000",
+    ];
+    // A dependency that links OpenSSL (CeeSafe.Web's web_tls) is told where the phone's is, unless the caller said.
+    var variable = String.create();
+    if (Environment.variable("OPENSSL_IOS_DIR") == null) {
+        let found = mobileOpenssl(if (simulator) "ios-sim-arm64" else "ios-arm64");
+        if (found.view().length > 0) {
+            variable = cat(["OPENSSL_IOS_DIR=", found.view()]);
+        }
+    }
+    if (!bundle(o, app.view(), true, flags[..], "ios", variable.view())) {
+        return fail("the app was not built");
+    }
+    if (simulator) {
+        if (!run("codesign", ["-s", "-", "-f", app.view()])) {
+            return fail("codesign failed");
+        }
+    } else {
+        let signed = signForDevice(o, app.view());
+        if (signed != 0) {
+            return signed;
+        }
+    }
+    Console.write("packed ");
+    Console.writeLine(app.view());
+    return 0;
+}
+
+/// The text between `<string>` and `</string>` after `key` in a property list's XML, or empty.
+fn plistString(plist: StringView, key: StringView) -> String {
+    let marker = cat(["<key>", key, "</key>"]);
+    match (plist.indexOf(marker.view())) {
+        Some(at) => {
+            let rest = plist[at + marker.view().length..];
+            match (rest.indexOf("<string>")) {
+                Some(open) => {
+                    let value = rest[open + 8..];
+                    match (value.indexOf("</string>")) {
+                        Some(close) => { return text(value[0..close]); }
+                        null => {}
+                    }
+                }
+                null => {}
+            }
+        }
+        null => {}
+    }
+    return String.create();
+}
+
+/// The same for a `<date>`.
+fn plistDate(plist: StringView, key: StringView) -> String {
+    let marker = cat(["<key>", key, "</key>"]);
+    match (plist.indexOf(marker.view())) {
+        Some(at) => {
+            let rest = plist[at + marker.view().length..];
+            match (rest.indexOf("<date>")) {
+                Some(open) => {
+                    let value = rest[open + 6..];
+                    match (value.indexOf("</date>")) {
+                        Some(close) => { return text(value[0..close]); }
+                        null => {}
+                    }
+                }
+                null => {}
+            }
+        }
+        null => {}
+    }
+    return String.create();
+}
+
+/// A provisioning profile for `id` that has not expired: the file and its application identifier (TEAM.id or
+/// TEAM.*). An exact one before a wildcard, then the one that expires last. Empty when there is none.
+struct Profile {
+    path: String;
+    appId: String;
+}
+
+fn findProfile(id: StringView) -> Profile {
+    var found = Profile { path: String.create(), appId: String.create() };
+    var foundExact = false;
+    var foundExpiry = String.create();
+    let now = output("date", ["-u", "+%Y-%m-%dT%H:%M:%SZ"]);
+    let home = Environment.variable("HOME") ?? "";
+    var places = Vector<String>.create();
+    places.push(cat([home, "/Library/Developer/Xcode/UserData/Provisioning Profiles"]))!;
+    places.push(cat([home, "/Library/MobileDevice/Provisioning Profiles"]))!;
+    for (place in places.view()) {
+        let names = match (Directory.list(place.view())) {
+            Ok(n) => n,
+            Err(_) => Vector<String>.create(),
+        };
+        for (name in names.view()) {
+            if (!name.view().endsWith(".mobileprovision")) {
+                continue;
+            }
+            let path = cat([place.view(), "/", name.view()]);
+            let plist = output("security", ["cms", "-D", "-i", path.view()]);
+            let appId = plistString(plist.view(), "application-identifier");
+            let expiry = plistDate(plist.view(), "ExpirationDate");
+            let dot = match (appId.view().indexOf(".")) {
+                Some(d) => d,
+                null => { continue; }
+            };
+            let pattern = appId.view()[dot + 1..];
+            let exact = pattern == id;
+            if (!exact && pattern != "*") {
+                continue;
+            }
+            if (!later(expiry.view(), now.view())) {
+                continue; // expired
+            }
+            let better = if (exact != foundExact) exact else later(expiry.view(), foundExpiry.view());
+            if (found.path.view().length == 0 || better) {
+                found = Profile { path: path, appId: appId };
+                foundExact = exact;
+                foundExpiry = expiry;
+            }
+        }
+    }
+    return found;
+}
+
+/// Signs the bundle at `app` for a device: the profile inside it, and the entitlements the profile's app needs.
+fn signForDevice(o: borrow Options, app: StringView) -> i32 {
+    var profilePath = text(o.profile.view());
+    var appId = String.create();
+    if (profilePath.view().length > 0) {
+        let plist = output("security", ["cms", "-D", "-i", profilePath.view()]);
+        appId = plistString(plist.view(), "application-identifier");
+    } else {
+        let p = findProfile(o.id.view());
+        profilePath = text(p.path.view());
+        appId = text(p.appId.view());
+    }
+    let dot = match (appId.view().indexOf(".")) {
+        Some(d) => d,
+        null => {
+            return fail2(
+                "no provisioning profile on this Mac fits ",
+                o.id.view(),
+            ) + fail("  build any app for the device in Xcode once (it makes a wildcard profile), or pass --profile");
+        }
+    };
+    let team = appId.view()[0..dot];
+    var identity = text(o.identity.view());
+    if (identity.view().length == 0) {
+        // The first "Apple Development" identity: its 40 hex digits, which name it without its owner's name.
+        let listed = output("security", ["find-identity", "-v", "-p", "codesigning"]);
+        var lines = listed.view().split("\n");
+        loop {
+            let line = match (lines.next()) {
+                Some(l) => l.trim(),
+                null => { break; }
+            };
+            if (line.contains("\"Apple Development:")) {
+                match (line.splitOnce(") ")) {
+                    Some(h) => {
+                        match (h.right.splitOnce(" ")) {
+                            Some(parts) => { identity = text(parts.left); }
+                            null => {}
+                        }
+                    }
+                    null => {}
+                }
+                break;
+            }
+        }
+    }
+    if (identity.view().length == 0) {
+        return fail("no \"Apple Development\" signing identity in the keychain; pass --identity");
+    }
+    if (!run("cp", [profilePath.view(), cat([app, "/embedded.mobileprovision"]).view()])) {
+        return fail("could not copy the provisioning profile");
+    }
+    let fullId = cat([team, ".", o.id.view()]);
+    var e = String.create();
+    e.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n")!;
+    e.append("\t<key>application-identifier</key><string>")!;
+    e.append(xml(fullId.view()).view())!;
+    e.append("</string>\n\t<key>com.apple.developer.team-identifier</key><string>")!;
+    e.append(team)!;
+    e.append("</string>\n\t<key>get-task-allow</key><true/>\n")!;
+    e.append("\t<key>keychain-access-groups</key><array><string>")!;
+    e.append(xml(fullId.view()).view())!;
+    e.append("</string></array>\n</dict>\n</plist>\n")!;
+    let entitlements = "out/pack/ios/entitlements.plist";
+    if (!writeText(entitlements, e.view())) {
+        return fail("could not write the entitlements");
+    }
+    if (!run("codesign", ["-f", "-s", identity.view(), "--entitlements", entitlements, app])) {
+        return fail("codesign failed");
+    }
+    return 0;
+}
+
+/// Android's NDK triple for an ABI, or empty for one that is not Android's.
+fn androidTriple(abi: StringView) -> StringView => if (abi == "arm64-v8a") "aarch64-linux-android"
+    else if (abi == "x86_64") "x86_64-linux-android"
+    else if (abi == "armeabi-v7a") "armv7a-linux-androideabi"
+    else if (abi == "x86") "i686-linux-android"
+    else "";
+
+/// ceesafec's `--arch` for an Android ABI (CeeSafe ADR 0192): the 32-bit ones lay types out for 4-byte pointers.
+fn androidArch(abi: StringView) -> StringView => if (abi == "arm64-v8a") "arm64"
+    else if (abi == "x86_64") "x86_64"
+    else if (abi == "armeabi-v7a") "armv7"
+    else "x86";
+
+fn androidManifest(o: borrow Options) -> String {
+    var m = String.create();
+    m.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")!;
+    m.append("<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"")!;
+    m.append(xml(o.id.view()).view())!;
+    m.append("\"\n          android:versionCode=\"1\" android:versionName=\"")!;
+    m.append(xml(o.version.view()).view())!;
+    m.append("\">\n  <uses-sdk android:minSdkVersion=\"25\" android:targetSdkVersion=\"36\"/>\n")!;
+    if (o.network.view().length > 0) {
+        m.append("  <uses-permission android:name=\"android.permission.INTERNET\"/>\n")!;
+    }
+    if (o.bluetooth.view().length > 0) {
+        // Android 12 and later ask for these two at run time (CeeSafe ADR 0177 §2.2), the scan never for a location;
+        // Android 9 to 11 grant the first two at install and ask for the location, which a scan needs there.
+        m.append("  <uses-permission android:name=\"android.permission.BLUETOOTH_CONNECT\"/>\n")!;
+        m.append("  <uses-permission android:name=\"android.permission.BLUETOOTH_SCAN\"")!;
+        m.append(" android:usesPermissionFlags=\"neverForLocation\"/>\n")!;
+        m.append("  <uses-permission android:name=\"android.permission.BLUETOOTH\" android:maxSdkVersion=\"30\"/>\n")!;
+        m.append(
+            "  <uses-permission android:name=\"android.permission.BLUETOOTH_ADMIN\" android:maxSdkVersion=\"30\"/>\n",
+        )!;
+        m.append("  <uses-permission android:name=\"android.permission.ACCESS_FINE_LOCATION\"")!;
+        m.append(" android:maxSdkVersion=\"30\"/>\n")!;
+    }
+    m.append("  <application android:label=\"")!;
+    m.append(xml(o.name.view()).view())!;
+    m.append("\" android:hasCode=\"false\" android:extractNativeLibs=\"true\">\n")!;
+    // The activity is kept through a rotation, a new size and the keyboard (CeeSafe ADR 0156 §2.3): destroyed, the
+    // program would end with it.
+    // One activity, whoever starts it: a start by another app or a link while the program runs comes to the one
+    // that is there (singleTask). A second NativeActivity over it would be a second window of a program that has
+    // one, with no elements for a screen reader.
+    m.append("    <activity android:name=\"android.app.NativeActivity\" android:exported=\"true\"\n")!;
+    m.append("              android:launchMode=\"singleTask\"\n")!;
+    m.append("              android:configChanges=\"orientation|screenSize|screenLayout|keyboardHidden|density|")!;
+    m.append("smallestScreenSize\">\n")!;
+    m.append("      <meta-data android:name=\"android.app.lib_name\" android:value=\"main\"/>\n")!;
+    m.append("      <intent-filter>\n        <action android:name=\"android.intent.action.MAIN\"/>\n")!;
+    m.append("        <category android:name=\"android.intent.category.LAUNCHER\"/>\n      </intent-filter>\n")!;
+    m.append("    </activity>\n  </application>\n</manifest>\n")!;
+    return m;
+}
+
+fn packAndroid(o: borrow Options) -> i32 {
+    let home = Environment.variable("HOME") ?? "";
+    let sdk = match (Environment.variable("ANDROID_HOME")) {
+        Some(s) => text(s),
+        null => match (Environment.variable("ANDROID_SDK_ROOT")) {
+            Some(s) => text(s),
+            null => {
+                let mac = cat([home, "/Library/Android/sdk"]);
+                if (File.kind(mac.view()) is Ok(Some(PathKind.Directory))) mac else cat([home, "/Android/Sdk"])
+            }
+        },
+    };
+    let ndk = match (Environment.variable("ANDROID_NDK_HOME")) {
+        Some(n) => text(n),
+        null => {
+            let dir = cat([sdk.view(), "/ndk"]);
+            cat([dir.view(), "/", newest(dir.view()).view()])
+        }
+    };
+    let toolsDir = cat([sdk.view(), "/build-tools"]);
+    let tools = cat([toolsDir.view(), "/", newest(toolsDir.view()).view()]);
+    let platformsDir = cat([sdk.view(), "/platforms"]);
+    let jar = cat([platformsDir.view(), "/", newest(platformsDir.view()).view(), "/android.jar"]);
+    let prebuiltDir = cat([ndk.view(), "/toolchains/llvm/prebuilt"]);
+    let bin = cat([prebuiltDir.view(), "/", newest(prebuiltDir.view()).view(), "/bin"]);
+    if (!(File.kind(
+        jar.view(),
+    ) is Ok(Some(PathKind.File))) || !(File.kind(bin.view()) is Ok(Some(PathKind.Directory)))) {
+        return fail2(
+            "no Android SDK with an NDK, build-tools and a platform under ",
+            sdk.view(),
+        ) + fail("  set ANDROID_HOME (and ANDROID_NDK_HOME)");
+    }
+    let stage = "out/pack/android";
+    if (!freshDirectory(stage)) {
+        return fail("could not make out/pack/android");
+    }
+    var abis = o.abis.view().split(",");
+    loop {
+        let abi = match (abis.next()) {
+            Some(a) => a.trim(),
+            null => { break; }
+        };
+        let triple = androidTriple(abi);
+        if (triple.length == 0) {
+            return fail2("not an Android ABI: ", abi);
+        }
+        // API level 25 (Android 7.1) is CeeSafe's floor (its ADR 0188).
+        let cc = cat([bin.view(), "/", triple, "25-clang"]);
+        let lib = cat([stage, "/lib/", abi]);
+        if (!run("mkdir", ["-p", lib.view()])) {
+            return fail("could not make the library's directory");
+        }
+        let so = cat([lib.view(), "/libmain.so"]);
+        // A shared library may have undefined symbols, and then the app cannot load on the phone: the link refuses
+        // them here, where it can be seen (a dependency's library that was not built for Android, say).
+        let flags: [StringView; 16] = [
+            "--arch",
+            androidArch(abi),
+            "--cc",
+            cc.view(),
+            "--cflag",
+            "-shared",
+            "--cflag",
+            "-Wl,--no-undefined",
+            "--cflag",
+            "-fPIC",
+            "--cflag",
+            "-landroid",
+            "--cflag",
+            "-llog",
+            "-o",
+            so.view(),
+        ];
+        var variable = String.create();
+        if (Environment.variable("OPENSSL_ANDROID_DIR") == null) {
+            let system = if (abi == "arm64-v8a") text("android-arm64") else cat(["android-", abi]);
+            let found = mobileOpenssl(system.view());
+            if (found.view().length > 0) {
+                variable = cat(["OPENSSL_ANDROID_DIR=", found.view()]);
+            }
+        }
+        if (!build(flags[..], "android", variable.view())) {
+            return fail2("the app was not built for ", abi);
+        }
+    }
+    let manifest = cat([stage, "/AndroidManifest.xml"]);
+    if (!writeText(manifest.view(), androidManifest(o).view())) {
+        return fail("could not write AndroidManifest.xml");
+    }
+    let base = cat([stage, "/base.apk"]);
+    let aligned = cat([stage, "/aligned.apk"]);
+    let apk = cat(["out/pack/", o.name.view(), ".apk"]);
+    if (!run(
+        cat([tools.view(), "/aapt2"]).view(),
+        ["link", "-o", base.view(), "-I", jar.view(), "--manifest", manifest.view()],
+    )) {
+        return fail("aapt2 failed");
+    }
+    // The libraries go into the archive under lib/<abi>/, which zip takes from the directory it runs in.
+    if (!run("sh", ["-c", "cd out/pack/android && zip -q -r base.apk lib"])) {
+        return fail("zip failed");
+    }
+    if (!run(cat([tools.view(), "/zipalign"]).view(), ["-f", "-p", "4", base.view(), aligned.view()])) {
+        return fail("zipalign failed");
+    }
+    let keystore = if (o.keystore.view().length > 0) text(o.keystore.view())
+        else cat([home, "/.android/debug.keystore"]);
+    let pass = cat(["pass:", o.storePass.view()]);
+    if (!run(
+        cat([tools.view(), "/apksigner"]).view(),
+        ["sign", "--ks", keystore.view(), "--ks-pass", pass.view(), "--out", apk.view(), aligned.view()],
+    )) {
+        return fail("apksigner failed (is there a keystore? Android Studio makes ~/.android/debug.keystore)");
+    }
+    Console.write("packed ");
+    Console.writeLine(apk.view());
+    return 0;
+}
+
+/// The directory of the web host (ceeui-web) a package depends on: the path of its `ceeui_web` dependency in
+/// the ceesafe.toml's text, or empty.
+fn webHostPath(toml: StringView) -> String {
+    var lines = toml.split("\n");
+    loop {
+        let line = match (lines.next()) {
+            Some(l) => l.trim(),
+            null => { break; }
+        };
+        match (line.splitOnce("=")) {
+            Some(halves) => {
+                if (halves.left.trim() == "ceeui_web") {
+                    match (halves.right.indexOf("path")) {
+                        Some(at) => {
+                            let rest = halves.right[at..];
+                            match (rest.indexOf("\"")) {
+                                Some(open) => {
+                                    let value = rest[open + 1..];
+                                    match (value.indexOf("\"")) {
+                                        Some(end) => { return text(value[0..end]); }
+                                        null => {}
+                                    }
+                                }
+                                null => {}
+                            }
+                        }
+                        null => {}
+                    }
+                }
+            }
+            null => {}
+        }
+    }
+    return String.create();
+}
+
+/// `n` in decimal.
+fn decimal(n: usize) -> String {
+    var s = String.create();
+    if (n >= 10) {
+        s.append(decimal(n / 10).view())!;
+    }
+    let digits = "0123456789";
+    s.append(digits[n % 10..n % 10 + 1])!;
+    return s;
+}
+
+/// The web target's compiling and linking, for `sh -c`. What the program imports (web_wait and the rest) is the
+/// page's worker's: left undefined, imported.
+const WEB_COMPILE: StringView = "set -e\n" +
+    "CLANG=${CLANG:-$( [ -x /opt/homebrew/opt/llvm/bin/clang ] && echo /opt/homebrew/opt/llvm/bin/clang || echo clang )}\n" +
+    "objects=\"\"\n" +
+    "for source in $(find out/pack/web-c -name '*.c'); do\n" +
+    "    \"$CLANG\" --target=wasm64 -O2 -ffreestanding -nostdlib -mbulk-memory -Iout/pack/web-c -c \"$source\" -o \"${source%.c}.o\"\n" +
+    "    objects=\"$objects ${source%.c}.o\"\n" +
+    "done\n" +
+    "\"${WASM_LD:-wasm-ld}\" -m wasm64 --no-entry --import-undefined --export=run --export=web_take -o out/pack/web/web.wasm $objects\n";
+
+/// Copies the font files named on the lines of `list` into out/pack/web/fonts as PREFIX0, PREFIX1, ..., and appends
+/// their names to `json` as an array; false when one cannot be copied.
+fn copyFonts(list: StringView, prefix: StringView, json: borrow mut String) -> bool {
+    json.append("[")!;
+    var fonts = list.split("\n");
+    var count: usize = 0;
+    loop {
+        let font = match (fonts.next()) {
+            Some(f) => f,
+            null => { break; }
+        };
+        if (font.length == 0) {
+            continue;
+        }
+        let name = cat([prefix, decimal(count).view()]);
+        if (!run("cp", [font, cat(["out/pack/web/fonts/", name.view()]).view()])) {
+            return false;
+        }
+        if (count > 0) {
+            json.append(", ")!;
+        }
+        json.append("\"")!;
+        json.append(name.view())!;
+        json.append("\"")!;
+        count += 1;
+    }
+    json.append("]")!;
+    return true;
+}
+
+/// The web target: the package's C from ceesafec, compiled and linked for 64-bit WebAssembly by clang and wasm-ld,
+/// beside the web host's page, the app's fonts and app.json, which lists them.
+fn packWeb(o: borrow Options, toml: StringView) -> i32 {
+    let host = webHostPath(toml);
+    if (host.view().length == 0) {
+        return fail("the web target needs a package that depends on ceeui_web by path");
+    }
+    let out = "out/pack/web";
+    let c = "out/pack/web-c";
+    // The directory itself stays, so a serve.py running in it keeps serving.
+    if (!run("rm", ["-rf", c, "out/pack/web/fonts"]) || !run("mkdir", ["-p", "out/pack/web/fonts"])) {
+        return fail("cannot make out/pack/web");
+    }
+    if (!run("ceesafec", ["build", "--emit", "c", "-o", c])) {
+        return fail("the package was not built");
+    }
+    if (!run("sh", ["-c", WEB_COMPILE])) {
+        return fail("clang or wasm-ld failed: the web target needs a clang with the wasm64 target, and wasm-ld");
+    }
+    let page = cat([host.view(), "/page/"]);
+    let html = readText(cat([page.view(), "index.html"]).view());
+    let title = "<title>CeeUI</title>";
+    match (html.view().indexOf(title)) {
+        Some(at) => {
+            let named = cat([
+                html.view()[0..at],
+                "<title>",
+                xml(o.name.view()).view(),
+                "</title>",
+                html.view()[at + title.length..],
+            ]);
+            if (!writeText("out/pack/web/index.html", named.view())) {
+                return fail("cannot write out/pack/web/index.html");
+            }
+        }
+        null => { return fail2("no page in ", page.view()); }
+    }
+    for (file in ["web.js", "worker.js", "serve.py"]) {
+        if (!run("cp", [cat([page.view(), file]).view(), out])) {
+            return fail2("cannot copy ", file);
+        }
+    }
+    // The fonts under plain names, and app.json with the names in the app's order.
+    var json = text("{\"fonts\": ");
+    if (!copyFonts(o.fonts.view(), "font-", mut json)) {
+        return fail("cannot copy a font");
+    }
+    json.append(", \"fallbacks\": ")!;
+    if (!copyFonts(o.fallbacks.view(), "fallback-", mut json)) {
+        return fail("cannot copy a fallback font");
+    }
+    json.append("}\n")!;
+    if (!writeText("out/pack/web/app.json", json.view())) {
+        return fail("cannot write out/pack/web/app.json");
+    }
+    Console.writeLine("packed out/pack/web: python3 out/pack/web/serve.py, then http://localhost:8017/");
+    return 0;
+}
+
+fn usage() -> i32 {
+    Console.writeErrorLine("usage: ceeui_pack <macos|ios|ios-simulator|android|web> [--name NAME] [--id ID]");
+    Console.writeErrorLine("           [--version V] [--abi arm64-v8a,x86_64] [--profile FILE] [--identity NAME]");
+    Console.writeErrorLine(
+        "           [--keystore FILE] [--keystore-pass PASSWORD] [--network WHY] [--bluetooth WHY]",
+    );
+    Console.writeErrorLine("           [--font FILE]... [--fallback FILE]...");
+    Console.writeErrorLine("run in the app's package directory; the result is under out/pack");
+    Console.writeErrorLine(
+        "   or: ceeui_pack new NAME [--ceeui PATH]   a new app in directory NAME (its CeeUI",
+    );
+    Console.writeErrorLine("       packages from GitHub, or from the CeeUI checkout at PATH)");
+    return 2;
+}
+
+/// `text` with every `from` in it replaced by `to`.
+fn replaced(text: StringView, from: StringView, to: StringView) -> String {
+    var out = String.create();
+    let t = text.bytes();
+    let f = from.bytes();
+    var i: usize = 0;
+    var run: usize = 0;
+    while (i < t.length) {
+        var same = f.length > 0 && i + f.length <= t.length;
+        if (same) {
+            for (k in 0..f.length) {
+                if (t[i + k] != f[k]) {
+                    same = false;
+                    break;
+                }
+            }
+        }
+        if (same) {
+            out.appendUtf8(t[run..i])!;
+            out.append(to)!;
+            i += f.length;
+            run = i;
+        } else {
+            i += 1;
+        }
+    }
+    out.appendUtf8(t[run..t.length])!;
+    return out;
+}
+
+/// Whether `name` can name a package: lowercase letters, digits and underscores, a letter first.
+fn packageName(name: StringView) -> bool {
+    let b = name.bytes();
+    if (b.length == 0 || b[0] < 'a' || b[0] > 'z') {
+        return false;
+    }
+    for (c in b) {
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// `ceeui-pack new NAME [--ceeui PATH]`: a new app in directory NAME (templates.cee), depending on CeeUI's
+/// packages from its repository, or from the checkout at PATH.
+fn newApp() -> i32 {
+    let name = Process.argument(2) ?? "";
+    if (!packageName(name)) {
+        return fail("new: give the app a name of lowercase letters, digits and underscores, a letter first");
+    }
+    var local = String.create();
+    if (Process.argumentCount() >= 5 && (Process.argument(3) ?? "") == "--ceeui") {
+        local = text(Process.argument(4) ?? "");
+    } else if (Process.argumentCount() != 3) {
+        return usage();
+    }
+    // Never over what is there.
+    if (run("test", ["-e", name])) {
+        return fail("new: there is already a file or directory of that name here");
+    }
+    var deps = String.create();
+    for (dep in [
+        ["ceeui", "ceeui"],
+        ["ceeui_fonts", "ceeui-fonts"],
+        ["ceeui_desktop", "ceeui-desktop"],
+    ]) {
+        deps.append(dep[0])!;
+        if (local.view().length > 0) {
+            deps.append(" = { path = \"")!;
+            deps.append(local.view())!;
+            deps.append("/")!;
+            deps.append(dep[1])!;
+            deps.append("\" }\n")!;
+        } else {
+            deps.append(" = { git = \"https://github.com/CeeSafe/Clay.git\", branch = \"main\", dir = \"")!;
+            deps.append(dep[1])!;
+            deps.append("\" }\n")!;
+        }
+    }
+    if (!run("mkdir", ["-p", cat([name, "/src"]).view()])) {
+        return fail("new: cannot make the app's directory");
+    }
+    for (k in 0..TEMPLATE_COUNT) {
+        let named = replaced(TEMPLATE_TEXTS[k], "__NAME__", name);
+        let content = replaced(named.view(), "__DEPS__\n", deps.view());
+        let path = cat([name, "/", TEMPLATE_PATHS[k]]);
+        if (!writeText(path.view(), content.view())) {
+            return fail("new: cannot write the app's files");
+        }
+    }
+    Console.write("ceeui-pack: made ");
+    Console.write(name);
+    Console.writeLine(": a CeeUI app. Then:");
+    Console.write("  cd ");
+    Console.write(name);
+    Console.write(" && ceesafec fetch && ceesafec build && out/");
+    Console.writeLine(name);
+    return 0;
+}
+
+fn main() -> i32 {
+    if ((Process.argument(1) ?? "") == "new") {
+        return newApp();
+    }
+    let toml = readText("ceesafe.toml");
+    let package = tomlValue(toml.view(), "name");
+    if (package.view().length == 0) {
+        return fail("no ceesafe.toml with a name here: run it in the app's package directory");
+    }
+    var packageVersion = tomlValue(toml.view(), "version");
+    if (packageVersion.view().length == 0) {
+        packageVersion = text("1.0");
+    }
+    var o = Options {
+        target: text(Process.argument(1) ?? ""),
+        name: text(package.view()),
+        id: cat(["com.example.", package.view()]),
+        version: packageVersion,
+        binary: text(package.view()),
+        abis: text("arm64-v8a"),
+        profile: String.create(),
+        identity: String.create(),
+        keystore: String.create(),
+        storePass: text("android"),
+        network: String.create(),
+        bluetooth: String.create(),
+        fonts: String.create(),
+        fallbacks: String.create(),
+    };
+    var i: usize = 2;
+    while (i < Process.argumentCount()) {
+        let flag = Process.argument(i) ?? "";
+        let value = match (Process.argument(i + 1)) {
+            Some(v) => v,
+            null => { return usage(); }
+        };
+        if (flag == "--name") {
+            o.name = text(value);
+        } else if (flag == "--id") {
+            o.id = text(value);
+        } else if (flag == "--version") {
+            o.version = text(value);
+        } else if (flag == "--abi") {
+            o.abis = text(value);
+        } else if (flag == "--profile") {
+            o.profile = text(value);
+        } else if (flag == "--identity") {
+            o.identity = text(value);
+        } else if (flag == "--keystore") {
+            o.keystore = text(value);
+        } else if (flag == "--keystore-pass") {
+            o.storePass = text(value);
+        } else if (flag == "--network") {
+            o.network = text(value);
+        } else if (flag == "--bluetooth") {
+            o.bluetooth = text(value);
+        } else if (flag == "--fallback") {
+            o.fallbacks.append(value)!;
+            o.fallbacks.append("\n")!;
+        } else if (flag == "--font") {
+            o.fonts.append(value)!;
+            o.fonts.append("\n")!;
+        } else {
+            return usage();
+        }
+        i += 2;
+    }
+    if (o.target.view() == "macos") {
+        return packMac(o);
+    }
+    if (o.target.view() == "ios") {
+        return packIos(o, false);
+    }
+    if (o.target.view() == "ios-simulator") {
+        return packIos(o, true);
+    }
+    if (o.target.view() == "android") {
+        return packAndroid(o);
+    }
+    if (o.target.view() == "web") {
+        return packWeb(o, toml.view());
+    }
+    return usage();
+}

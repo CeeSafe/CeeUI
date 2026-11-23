@@ -1,0 +1,60 @@
+// SPDX-License-Identifier: MIT
+// The demo's background jobs on threads (ceeui_tasks), for the hosts that have them: the Controls page's Tasks tab
+// counts primes on a thread of its own, reporting every 100,000 numbers; each report wakes the window.
+
+import ceeui;
+import ceeui_demo;
+import ceeui_tasks;
+
+/// How many numbers a count checks between reports.
+const STEP: u64 = 100000;
+
+/// The job that counts the primes below `below`, reporting every STEP numbers until it is cancelled.
+fn countJob(below: u64) -> Result<Box<dyn mut fn(borrow TaskSender<PrimeCount>) + Send>, AllocError> {
+    return Ok(Box.create(move (out: borrow TaskSender<PrimeCount>) => {
+        var found: u64 = 0;
+        var at: u64 = 0;
+        while (at < below) {
+            let to = (at + STEP).min(below);
+            found += primesIn(at, to);
+            at = to;
+            if (!out.send(PrimeCount { below: below, checked: at, found: found })) {
+                return; // cancelled
+            }
+        }
+    })?);
+}
+
+/// The demo's jobs, each on a thread of its own.
+public struct ThreadJobs {
+    count: Task<PrimeCount>;
+
+    /// Jobs whose reports wake the window of `waker` (null: a host without a window).
+    public fn create(waker: WindowWaker?) -> Result<ThreadJobs, AllocError> {
+        return Ok(ThreadJobs { count: Task<PrimeCount>.create(8, waker)? });
+    }
+}
+
+impl DemoJobs for ThreadJobs {
+    fn available(borrow this) -> bool => true;
+
+    fn startCount(borrow mut this, below: u64) {
+        match (countJob(below)) {
+            Ok(job) => {
+                match (this.count.start(job)) {
+                    Ok() => {}
+                    Err(_) => { Console.writeErrorLine("demo: no thread for the count"); }
+                }
+            }
+            Err(_) => { Console.writeErrorLine("demo: no memory for the count"); }
+        }
+    }
+
+    fn cancelCount(borrow mut this) {
+        this.count.cancel();
+    }
+
+    fn pollCount(borrow mut this, ui: borrow mut Ui) -> PrimeCount? => this.count.poll(mut ui);
+
+    fn counting(borrow this) -> bool => this.count.running();
+}

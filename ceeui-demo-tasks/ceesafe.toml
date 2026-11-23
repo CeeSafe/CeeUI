@@ -1,0 +1,11 @@
+[package]
+name = "ceeui_demo_tasks"
+version = "0.1.0"
+kind = "library"
+ceesafec = ">=0.66.0"
+
+[dependencies]
+ceeui = { path = "../ceeui" }
+ceeui_demo = { path = "../ceeui-demo" }
+ceeui_tasks = { path = "../ceeui-tasks" }
+ceeui_desktop = { path = "../ceeui-desktop" }

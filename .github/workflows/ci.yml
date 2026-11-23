@@ -1,4 +1,4 @@
-# ClayWind CI (roadmap P0): on macOS, Linux and Windows, every package checked and formatted, the test suite, every
+# CeeUI CI (roadmap P0): on macOS, Linux and Windows, every package checked and formatted, the test suite, every
 # host built, the hosts run (the terminal host once, the browser host end to end), and the benchmarks against their
 # budgets (tools/bench.py, bench/budgets.json), whose numbers go to the run's summary and an artifact.
 name: ci
@@ -14,10 +14,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # The release ClayWind was last tested with and is formatted by. 0.88.0 or later: the Kotlin binding opens its window
+  # The release CeeUI was last tested with and is formatted by. 0.88.0 or later: the Kotlin binding opens its window
   # on Linux and Windows from the JVM's thread (CeeSafe ADR 0201), and library builds are position-independent on
   # Linux (ADR 0202); 0.86.0: the C API's bindings open windows on iOS and Android as host programs (ADR 0200); 0.85.0: functions passing a Style by value are kept out of
-  # line (ADR 0199, CEESAFE-FINDINGS.md Q4); 0.84.0: claywind-pack passes --arch for each Android ABI (ADR 0192); on
+  # line (ADR 0199, CEESAFE-FINDINGS.md Q4); 0.84.0: ceeui-pack passes --arch for each Android ABI (ADR 0192); on
   # Linux, 0.77's runtime left the browser host's input unread when its frames ran behind.
   CEESAFE_VERSION: v0.94.3
 
@@ -69,30 +69,30 @@ jobs:
       - name: Check and format
         run: |
           set -e
-          for p in claywind claywind-capi claywind-demo claywind-demo-tasks claywind-desktop claywind-dev claywind-fonts \
-                   claywind-tasks claywind-web claywind-pack claywind-tests claywind-hosts/headless \
-                   claywind-hosts/desktop claywind-hosts/gpu claywind-hosts/terminal claywind-hosts/browser \
-                   claywind-hosts/web; do
+          for p in ceeui ceeui-capi ceeui-demo ceeui-demo-tasks ceeui-desktop ceeui-dev ceeui-fonts \
+                   ceeui-tasks ceeui-web ceeui-pack ceeui-tests ceeui-hosts/headless \
+                   ceeui-hosts/desktop ceeui-hosts/gpu ceeui-hosts/terminal ceeui-hosts/browser \
+                   ceeui-hosts/web; do
             echo "== $p"
             (cd "$p" && ceesafec check && ceesafec fmt --check)
           done
 
       - name: The C API's example, built and linked
-        working-directory: claywind-capi
+        working-directory: ceeui-capi
         run: ./examples/build.sh
 
-      # The bindings over the C API (claywind-capi/bindings), built against its archive: Rust everywhere, Swift on
+      # The bindings over the C API (ceeui-capi/bindings), built against its archive: Rust everywhere, Swift on
       # macOS, Kotlin through JNI on macOS and Linux. Built only: a runner has no screen to run their windows on.
       - name: The C API's Rust binding
-        working-directory: claywind-capi/bindings/rust
+        working-directory: ceeui-capi/bindings/rust
         run: cargo build --example counter
 
       - name: The C API's Swift binding (macOS)
         if: runner.os == 'macOS'
         run: |
           set -e
-          (cd claywind-capi && MACOSX_DEPLOYMENT_TARGET=13.0 ceesafec build)
-          cd claywind-capi/bindings/swift && swift build
+          (cd ceeui-capi && MACOSX_DEPLOYMENT_TARGET=13.0 ceesafec build)
+          cd ceeui-capi/bindings/swift && swift build
 
       - name: The C API's Kotlin binding (macOS, Linux)
         if: runner.os != 'Windows'
@@ -101,19 +101,19 @@ jobs:
           curl -fsSL -o "$RUNNER_TEMP/kotlin.zip" \
             https://github.com/JetBrains/kotlin/releases/download/v2.1.0/kotlin-compiler-2.1.0.zip
           unzip -q "$RUNNER_TEMP/kotlin.zip" -d "$RUNNER_TEMP"
-          KOTLINC="$RUNNER_TEMP/kotlinc/bin/kotlinc" claywind-capi/bindings/kotlin/build.sh
+          KOTLINC="$RUNNER_TEMP/kotlinc/bin/kotlinc" ceeui-capi/bindings/kotlin/build.sh
           # On the Mac, the phones too (CeeSafe ADR 0200): the Swift counter for the iOS simulator, and the Kotlin
           # counter as an Android app, with the runner's Xcode and Android SDK.
           if [ "$(uname -s)" = Darwin ]; then
-            claywind-capi/bindings/swift/build-ios.sh simulator
-            KOTLINC="$RUNNER_TEMP/kotlinc/bin/kotlinc" claywind-capi/bindings/kotlin/build-android.sh
+            ceeui-capi/bindings/swift/build-ios.sh simulator
+            KOTLINC="$RUNNER_TEMP/kotlinc/bin/kotlinc" ceeui-capi/bindings/kotlin/build-android.sh
           fi
 
       - name: Tests
-        working-directory: claywind-tests
+        working-directory: ceeui-tests
         run: ceesafec test
 
-      # The documentation site (site/README.md): every CeeSafe example of its pages compiled against ClayWind, and the
+      # The documentation site (site/README.md): every CeeSafe example of its pages compiled against CeeUI, and the
       # site built, which fails on a dead link. Linux only: the pages are the same everywhere.
       - name: The guide's examples
         if: runner.os == 'Linux'
@@ -139,8 +139,8 @@ jobs:
       - name: Build the hosts
         run: |
           set -e
-          for p in claywind-hosts/headless claywind-hosts/desktop claywind-hosts/gpu claywind-hosts/terminal \
-                   claywind-hosts/browser claywind-pack claywind-dev; do
+          for p in ceeui-hosts/headless ceeui-hosts/desktop ceeui-hosts/gpu ceeui-hosts/terminal \
+                   ceeui-hosts/browser ceeui-pack ceeui-dev; do
             echo "== $p"
             (cd "$p" && ceesafec build)
           done
@@ -149,33 +149,33 @@ jobs:
       - name: The headless host's size
         if: runner.os != 'Windows'
         run: |
-          cd claywind-hosts/headless/out
+          cd ceeui-hosts/headless/out
           ls -la
           if [ "$(uname -s)" = Darwin ]; then size -m headless | grep -E '^Segment|total' ; else size -A headless | sort -k2 -n | tail -8; fi
           cc --version | head -1
           python3 ../../../tools/largest_functions.py headless 25
 
       - name: A new app from the template
-        if: runner.os != 'Windows' # claywind-pack needs a Unix
+        if: runner.os != 'Windows' # ceeui-pack needs a Unix
         run: |
           set -e
-          python3 claywind-pack/template/make_templates.py
-          git diff --exit-code claywind-pack/src/templates.cee # templates.cee made from template/ as it is
+          python3 ceeui-pack/template/make_templates.py
+          git diff --exit-code ceeui-pack/src/templates.cee # templates.cee made from template/ as it is
           cd "$RUNNER_TEMP"
-          "$GITHUB_WORKSPACE/claywind-pack/out/claywind_pack" new ci_app --claywind "$GITHUB_WORKSPACE"
+          "$GITHUB_WORKSPACE/ceeui-pack/out/ceeui_pack" new ci_app --ceeui "$GITHUB_WORKSPACE"
           cd ci_app && ceesafec fetch && ceesafec check && ceesafec fmt --check && ceesafec build
 
       - name: Terminal host, one frame
-        working-directory: claywind-hosts/terminal
+        working-directory: ceeui-hosts/terminal
         run: |
-          CLAYWIND_ONCE=1 ./out/terminal > frame.txt
-          grep -q "ClayWind on CeeSafe" frame.txt
+          CEEUI_ONCE=1 ./out/terminal > frame.txt
+          grep -q "CeeUI on CeeSafe" frame.txt
 
       - name: Browser host, end to end
-        working-directory: claywind-hosts/browser
+        working-directory: ceeui-hosts/browser
         run: |
-          export CLAYWIND_FONT_DIR="$RUNNER_TEMP/fonts"
-          python3 ../../tools/bench.py --fonts "$CLAYWIND_FONT_DIR"
+          export CEEUI_FONT_DIR="$RUNNER_TEMP/fonts"
+          python3 ../../tools/bench.py --fonts "$CEEUI_FONT_DIR"
           ./out/browser 8391 > browser.log 2>&1 &
           host=$!
           for _ in $(seq 50); do grep -q "open http" browser.log && break; sleep 0.2; done

@@ -1,0 +1,88 @@
+// SPDX-License-Identifier: MIT
+// The title bar a program draws (CeeSafe ADR 0206): its own buttons, or, beside the system's (macOS's traffic
+// lights), none, the system's area left clear and the title after it.
+
+import ceeui;
+
+fn barFrame(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    systemButtons: Rect,
+) -> Result<TitleBarPress, TestFailure> => barFrameMaximized(mut ui, mut platform, systemButtons, false);
+
+fn barFrameMaximized(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    systemButtons: Rect,
+    maximized: bool,
+) -> Result<TitleBarPress, TestFailure> {
+    ui.begin(mut platform);
+    let press = TitleBar.drawWith(mut ui, "Title", maximized, systemButtons);
+    let metrics = FixedAdvance { unused: 0 };
+    let ok = match (ui.endFrame(mut platform, metrics)) {
+        Ok() => true,
+        Err(_) => false,
+    };
+    Check.isTrue(ok, "frame fits")?;
+    return Ok(press);
+}
+
+@test
+fn theBarHasItsOwnButtonsWhereTheSystemHasNone() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(600.0, 400.0, -1.0, -1.0);
+    barFrame(mut ui, mut platform, Rect.zero())?;
+    barFrame(mut ui, mut platform, Rect.zero())?;
+    let l = TitleBar.layout(ui)!;
+    Check.isTrue(l.height == TITLE_BAR_HEIGHT, "the bar's height")?;
+    Check.isTrue(l.minimize.w > 0.0 && l.maximize.w > 0.0 && l.close.w > 0.0, "three buttons")?;
+    Check.isTrue(l.close.x + l.close.w > 599.0, "close at the right")?;
+    return Check.isTrue(ui.boxOf("titleBar~system") == null, "no system area");
+}
+
+@test
+fn besideTheSystemsButtonsTheBarLeavesThemClearAndDrawsNone() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(600.0, 400.0, -1.0, -1.0);
+    let lights = Rect { x: 0.0, y: 0.0, w: 82.0, h: 36.0 };
+    barFrame(mut ui, mut platform, lights)?;
+    // A press where the buttons would be presses nothing: they are the system's.
+    platform.pointerState.position = Vec2 { x: 580.0, y: 18.0 };
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    barFrame(mut ui, mut platform, lights)?;
+    platform.pointerState.pressed = false;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    let press = barFrame(mut ui, mut platform, lights)?;
+    Check.isTrue(!press.minimize && !press.maximize && !press.close, "nothing pressed")?;
+    let l = TitleBar.layout(ui)!;
+    Check.isTrue(l.minimize.w == 0.0 && l.maximize.w == 0.0 && l.close.w == 0.0, "no buttons of its own")?;
+    let clear = ui.boxOf("titleBar~system")!;
+    return Check.isTrue(clear.x == 0.0 && clear.w == 82.0, "the system's area left clear");
+}
+
+@test
+fn restoreIsPressedAtItsMiddleOverItsGlyph() -> Result<void, TestFailure> {
+    var storage = heap(1048576);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(600.0, 400.0, -1.0, -1.0);
+    barFrameMaximized(mut ui, mut platform, Rect.zero(), true)?;
+    let r = TitleBar.layout(ui)!.maximize;
+    // The middle, where the Restore glyph's squares float over the button.
+    platform.pointerState.position = Vec2 { x: r.x + r.w / 2.0, y: r.y + r.h / 2.0 };
+    barFrameMaximized(mut ui, mut platform, Rect.zero(), true)?;
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    barFrameMaximized(mut ui, mut platform, Rect.zero(), true)?;
+    platform.pointerState.pressed = false;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    let press = barFrameMaximized(mut ui, mut platform, Rect.zero(), true)?;
+    return Check.isTrue(press.maximize, "Restore pressed");
+}
