@@ -112,10 +112,11 @@ onmessage = async (message) => {
     },
     web_text_input(on, kind, returnKey, x, y, w, h) { postMessage({ input: { on: on !== 0, kind, returnKey, x, y, w, h } }); },
     // The frame's elements for a screen reader: gathered, then sent to the page as one list.
-    web_access_node(id, role, flags, x, y, w, h, min, max, now, label, labelLength, value, valueLength, caret, anchor) {
+    web_access_node(id, role, flags, x, y, w, h, min, max, now, label, labelLength, value, valueLength, caret, anchor,
+      parent, row, column, rows, columns) {
       const read = (pointer, length) => new TextDecoder().decode(bytes().slice(Number(pointer), Number(pointer) + Number(length)));
       nodes.push({ id, role, flags, x, y, w, h, min, max, now, label: read(label, labelLength), value: read(value, valueLength),
-        caret: Number(caret), anchor: Number(anchor) });
+        caret: Number(caret), anchor: Number(anchor), parent, row, column, rows, columns });
     },
     web_access_end() { postMessage({ access: nodes }); nodes = []; },
     // A worker has no clipboard: the text goes where the page reads it, which is told.

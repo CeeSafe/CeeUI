@@ -194,6 +194,7 @@ impl Controls {
                 ).gap(space(1.0)).cursor(Cursor.Pointer).clip().hover(Style.of().bg(ui.tone(SLATE_700))),
             );
             let node = ui.access(title, AccessRole.ColumnHeader, titles[c].bytes());
+            ui.accessPlace(node, 1, truncate<u32>(c + 1));
             let sorted = match (sort.column) {
                 Some(k) => k == c,
                 null => false,
@@ -265,14 +266,26 @@ impl Controls {
     }
 
     /// Opens the cell of column `column` in the row being drawn, its column's width: the program draws its content,
-    /// then closes it (ui.close()). What does not fit is clipped.
+    /// then closes it (ui.close()). What does not fit is clipped. To a screen reader it is the row's cell of that
+    /// column (CeeSafe ADR 0207), and what is drawn in it is the cell's: a reader moves along a row by column and
+    /// says the column's title.
     public fn gridCell(ui: borrow mut Ui, grid: borrow DataGrid, column: usize) {
         let w = if (column < grid.columns) grid.widths[column] else GRID_MIN_WIDTH;
-        ui.open(
-            Style.row().w(Size.fixed(w)).h(Size.grow()).px(space(3.0)).alignXY(AxisAlign.Start, AxisAlign.Center).gap(
-                space(1.0),
-            ).clip(),
-        );
+        // Named after its row, the container open around it; outside a row it is only a box.
+        let row = ui.accessContainer();
+        let cell = virtualRowId(row ^ 0x43454C4C, column);
+        var style = Style.row().w(Size.fixed(w)).h(Size.grow()).px(space(3.0)).alignXY(
+            AxisAlign.Start,
+            AxisAlign.Center,
+        ).gap(space(1.0)).clip();
+        if (row != 0) {
+            style = style.idHash(cell);
+        }
+        ui.open(style);
+        if (row != 0) {
+            let node = ui.access(cell, AccessRole.Cell, "".bytes());
+            ui.accessPlace(node, 0, truncate<u32>(column + 1)); // its row is its row's
+        }
     }
 
     /// Ends a data grid: the rows below the view, as their height, and the grid itself.

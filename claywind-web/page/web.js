@@ -244,38 +244,54 @@ function textInput(state) {
 // Accessibility. The canvas is pixels, so the app's elements (ClayWind's access list: a role, a name, a state and a
 // box each) are kept as elements of the page over it, in reading order, for a screen reader to find. What the reader
 // does to one (a click, the focus, a slider's step) goes to the app as a request; the app's focus is the page's.
-const ROLES = ['paragraph', 'button', 'checkbox', 'radio', 'textbox', 'slider', 'tab', 'button', 'menuitem', 'button', 'img'];
+// Containers (CeeSafe ADR 0207) are elements that hold theirs, as ARIA wants: a list of rows that are chosen is a
+// listbox of options, a table a grid of rows of gridcells under columnheaders; an element says its place and its
+// container its counts where the app gave them (a virtual list's), and the browser counts the rest.
+const ROLES = ['paragraph', 'button', 'checkbox', 'radio', 'textbox', 'slider', 'tab', 'button', 'menuitem', 'button', 'img',
+  'group', 'listbox', 'menu', 'menubar', 'tablist', 'grid', 'row', 'gridcell', 'columnheader'];
 const TEXT_ROLE = 0, CHECKBOX = 2, RADIO = 3, TEXTBOX = 4, SLIDER = 5, TAB = 6, LIST_ITEM = 7, DROPDOWN = 9;
+const GROUP = 11, LIST = 12, MENU = 13, MENU_BAR = 14, TAB_LIST = 15, TABLE = 16, ROW = 17, CELL = 18, COLUMN_HEADER = 19;
+const holds = (role) => role >= GROUP && role <= CELL;
+// What an element is to ARIA: a list's row is an option of its listbox; one outside a list is a button, as it was.
+const ariaRole = (node, inside) => node.role === LIST_ITEM && inside === LIST ? 'option' : ROLES[node.role] || 'paragraph';
 const CHECKED = 1, SELECTED = 2, FOCUSED = 4, DISABLED = 8, EXPANDED = 16, SECURE = 32;
 const mirrored = new Map();   // an element's id to its element here
 let focusing = null;          // the element the page is giving the focus because the app said so
 
 function mirror(nodes) {
   const live = new Set();
-  let previous = null, focused = null, focusedNode = null;
+  let focused = null, focusedNode = null;
+  const given = new Map();      // an id to its node, of this list: a container is before what it holds
+  const last = new Map();       // a container's element (or the page's) to the last element put in it
   for (const node of nodes) {
     if (live.has(node.id)) continue;   // the page takes each id once
     live.add(node.id);
+    given.set(node.id, node);
+    const holder = node.parent !== 0 && given.has(node.parent) && holds(given.get(node.parent).role) ? given.get(node.parent) : null;
+    const role = ariaRole(node, holder === null ? -1 : holder.role);
     let element = mirrored.get(node.id);
-    if (element === undefined || Number(element.dataset.role) !== node.role) {
+    if (element === undefined || element.dataset.aria !== role) {
       if (element !== undefined) element.remove();
       // A text field is a text input of the page; everything else an element with its role.
       element = document.createElement(node.role === TEXTBOX ? 'input' : 'div');
       element.dataset.id = node.id;
       element.dataset.role = node.role;
+      element.dataset.aria = role;
       if (node.role === TEXTBOX) {
         for (const name of ['autocomplete', 'autocapitalize', 'autocorrect']) element.setAttribute(name, 'off');
         element.spellcheck = false;
       } else {
-        element.setAttribute('role', ROLES[node.role] || 'paragraph');
+        element.setAttribute('role', role);
       }
+      if (holds(node.role)) element.dataset.holds = '';
       if (node.role !== TEXT_ROLE) element.tabIndex = -1;   // a reader may focus it; Tab stays the app's
       mirrored.set(node.id, element);
     }
     const set = (name, value) => { if (value === null) element.removeAttribute(name); else if (element.getAttribute(name) !== String(value)) element.setAttribute(name, value); };
     const has = (flag) => (node.flags & flag) !== 0;
-    element.style.left = node.x + 'px';
-    element.style.top = node.y + 'px';
+    // An element's place is in its container's box.
+    element.style.left = node.x - (holder === null ? 0 : holder.x) + 'px';
+    element.style.top = node.y - (holder === null ? 0 : holder.y) + 'px';
     element.style.width = Math.max(1, node.w) + 'px';
     element.style.height = Math.max(1, node.h) + 'px';
     if (node.role === TEXT_ROLE) {
@@ -285,8 +301,16 @@ function mirror(nodes) {
     }
     set('aria-disabled', has(DISABLED) ? 'true' : null);
     if (node.role === CHECKBOX || node.role === RADIO) set('aria-checked', has(CHECKED) ? 'true' : 'false');
-    if (node.role === TAB) set('aria-selected', has(SELECTED) ? 'true' : 'false');
-    if (node.role === LIST_ITEM) set('aria-current', has(SELECTED) ? 'true' : null);
+    if (node.role === TAB || role === 'option' || node.role === ROW) set('aria-selected', has(SELECTED) ? 'true' : 'false');
+    if (node.role === LIST_ITEM && role !== 'option') set('aria-current', has(SELECTED) ? 'true' : null);
+    // Places and counts the app gave (a virtual list's rows, which are not all here); the browser counts the rest.
+    const inSet = holder !== null && (holder.role === LIST || holder.role === MENU || holder.role === MENU_BAR || holder.role === TAB_LIST);
+    set('aria-posinset', inSet && holder.rows > 0 && node.row > 0 ? node.row : null);
+    set('aria-setsize', inSet && holder.rows > 0 && node.row > 0 ? holder.rows : null);
+    if (node.role === TABLE) { set('aria-rowcount', node.rows > 0 ? node.rows : null); set('aria-colcount', node.columns > 0 ? node.columns : null); }
+    if (node.role === ROW) set('aria-rowindex', node.row > 0 ? node.row : null);
+    if (node.role === CELL || node.role === COLUMN_HEADER) set('aria-colindex', node.column > 0 ? node.column : null);
+    if (node.role === MENU_BAR || node.role === TAB_LIST) set('aria-orientation', node.role === TAB_LIST && node.h > node.w ? 'vertical' : null);
     if (node.role === DROPDOWN) { set('aria-haspopup', 'listbox'); set('aria-expanded', has(EXPANDED) ? 'true' : 'false'); }
     if (node.role === DROPDOWN || node.role === LIST_ITEM) set('aria-description', node.value === '' ? null : node.value);
     if (node.role === TEXTBOX) {
@@ -301,10 +325,12 @@ function mirror(nodes) {
       set('aria-valuenow', node.value === '' ? (span > 0 ? Math.round((node.now - node.min) / span * 100) : 0) : node.now);
       set('aria-valuetext', node.value === '' ? null : node.value);
     }
-    // In reading order: each after the one before it.
-    const before = previous === null ? access.firstChild : previous.nextSibling;
-    if (before !== element) access.insertBefore(element, before);
-    previous = element;
+    // In reading order, in its container: each after the one before it there.
+    const into = holder === null ? access : mirrored.get(holder.id);
+    const previous = last.get(into);
+    const before = previous === undefined ? into.firstChild : previous.nextSibling;
+    if (before !== element || element.parentNode !== into) into.insertBefore(element, before);
+    last.set(into, element);
     if (has(FOCUSED)) { focused = element; focusedNode = node; }
   }
   for (const [id, element] of mirrored) {
@@ -324,7 +350,15 @@ function mirror(nodes) {
 }
 
 // A reader's click on an element is a press; its focus, moved there by the reader, is the app's focus.
-access.addEventListener('click', (e) => { if (e.target.dataset.id) queue(ACCESS, Number(e.target.dataset.id), 0); });
+// A click in a row's cell, or on a text, is its nearest element's that can be pressed: the row's.
+const pressed = (target) => {
+  for (let e = target; e !== null && e !== access; e = e.parentElement) {
+    const role = Number(e.dataset.role);
+    if (e.dataset.id && role !== TEXT_ROLE && (!holds(role) || role === ROW)) return e;
+  }
+  return null;
+};
+access.addEventListener('click', (e) => { const on = pressed(e.target); if (on !== null) queue(ACCESS, Number(on.dataset.id), 0); });
 access.addEventListener('focusin', (e) => { if (e.target.dataset.id && e.target !== focusing) queue(ACCESS, Number(e.target.dataset.id), 1); });
 
 const CURSORS = ['default', 'pointer', 'text'];

@@ -345,10 +345,11 @@ sleeping while nothing changes.
   name, value, state, a text field's caret), and take its presses, focus and steps. Lists, menus, the menu bar, tabs
   and the data grid are containers (CeeSafe ADR 0207): a reader hears "list, 6 items", "tab, 2 of 5" and a table of
   10,001 rows and 4 columns with its column headers, and where the focus is in each; the keys reach them all. With
-  CeeSafe 0.94.2 the demo is read and worked by VoiceOver on macOS, NVDA on Windows, Orca on Linux and TalkBack on
+  CeeSafe 0.94.3 the demo is read and worked by VoiceOver on macOS, NVDA on Windows, Orca on Linux and TalkBack on
   Android (on an emulator, its speech from its log); on iOS the same tree is given to VoiceOver, checked through UIKit
-  in the Simulator and not yet by ear on a phone. Not there: a grid row's cells (a reader moves by row, not by
-  column); the place of a list's row on iOS, which has none to give; dragging; a reader setting a field's text itself;
+  in the Simulator and not yet by ear on a phone. The data grid's rows hold
+  a cell a column, so a desktop reader moves along a row and says the column's title; on a phone a row is read
+  whole, as its lists' rows are. Not there: the place of a list's row on iOS, which has none to give; dragging; a reader setting a field's text itself;
   reading by character in a field outside macOS; TalkBack's focus rectangle (the window's surface is the app's). A
   control of your own is one line after its `open`: `ui.access(id, AccessRole.Button, label)`; a field with no label
   of its own is named after it: `ui.accessName("server", "Server address")`.
@@ -364,9 +365,12 @@ sleeping while nothing changes.
   input holding the field's text, caret and selection: a reader reads the field there, by character as the caret
   moves; a phone shows its keyboard for it (of the field's kind, with its Return key), and an input method composes
   in it. Fallback fonts (`claywind-pack web --fallback FILE...`) are fetched only when text has a character the
-  app's fonts lack. Not there: colour emoji, the system's own fonts, lists and menus as containers for a reader,
-  file dialogs, drag and drop from outside, a second window.
-- **Linux:** the desktop host needs X11; Wayland is not supported yet.
+  app's fonts lack. Lists, menus, tabs and the data grid are ARIA's containers for a reader
+  (a listbox of options, a menu, a tablist, a grid of rows of gridcells under columnheaders, with a virtual list's
+  places and counts). Not there: colour emoji, the system's own fonts, file dialogs, drag and drop from outside, a
+  second window.
+- **Linux:** the desktop host runs on Wayland and on X11 (CeeSafe 0.93.1, ADR 0205), with a title bar ClayWind
+  draws (ADR 0206).
 - **Not ported from the C version:** the debug view and Clay's built-in transitions. ClayWind has its own transition
   engine.
 

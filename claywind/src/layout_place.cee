@@ -42,7 +42,8 @@ fn emit(l: borrow mut LayoutTree, command: Command) -> bool => l.commands.push(c
 
 /// Whether the paragraph holding the line at byte `lineStart` of the frame's text is right to left: the element's
 /// text is bytes [`textStart`, `textEnd`), and the text from the paragraph's start (after the last line break before
-/// the line) decides.
+/// the line) decides. `lineStart` is the line's `origin`, in the element's text: a clamped text's last line is a
+/// copy after all the frame's text, from which the way back would cross other elements' text.
 fn paragraphRtl(l: borrow LayoutTree, textStart: usize, textEnd: usize, lineStart: usize) -> bool {
     var start = lineStart;
     while (start > textStart && l.bytes.items[start - 1] != '\n') {
@@ -153,7 +154,7 @@ fn placeText<M: TextMetrics>(l: borrow mut LayoutTree, index: usize, area: Rect,
                 l,
                 node.textStart,
                 node.textStart + node.textLength,
-                line.start,
+                line.origin,
             )) area.w - line.width else 0.0,
             TextAlign.Left => 0.0,
             TextAlign.Center => (area.w - line.width) / 2.0,
@@ -209,7 +210,7 @@ fn placeStyledLine<M: TextMetrics>(
         lineBase = lineBase.max(metrics.baseline(styleAt(l, node, from)));
         from = to;
     }
-    let rtl = paragraphRtl(l, node.textStart, node.textStart + node.textLength, line.start);
+    let rtl = paragraphRtl(l, node.textStart, node.textStart + node.textLength, line.origin);
     // From the right, the runs end where their own widths do (a one-style line then lands where plain text does,
     // whose words measured apart may add up to a little more than the line drawn whole).
     var total: f32 = 0.0;

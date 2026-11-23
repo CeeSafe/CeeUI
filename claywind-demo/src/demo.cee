@@ -724,6 +724,9 @@ fn sidebar(ui: borrow mut Ui, app: borrow DemoApp) {
     ui.open(Style.row().pb(space(3.0)));
     ui.label(if (wide) "ClayWind" else "CW", Text.of().font(TEXT_2XL).color(inkCol(ui)).tracking(1.0));
     ui.close();
+    // The pages are tabs in a tab list, to a screen reader: "Controls, tab, 2 of 6" (CeeSafe ADR 0207).
+    ui.open(Style.column().id("nav").w(Size.grow()).gap(space(2.0)));
+    let _ = ui.access(hashId("nav"), AccessRole.TabList, "Pages".bytes());
     for (i in 0..NAV_COUNT) {
         let name = NAV_ITEMS[i];
         let active = i == app.activeNav;
@@ -744,6 +747,7 @@ fn sidebar(ui: borrow mut Ui, app: borrow DemoApp) {
         }
         ui.close();
     }
+    ui.close();
     // Push the footer to the bottom.
     ui.open(Style.box().h(Size.grow()));
     ui.close();

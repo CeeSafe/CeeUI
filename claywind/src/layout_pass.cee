@@ -64,7 +64,13 @@ fn wrapText<M: TextMetrics>(l: borrow mut LayoutTree, index: usize, metrics: bor
     l.nodes.items[index].linesCount = 0;
     if (!node.containsNewlines && node.preferred.w <= width) {
         if (!l.lines.push(
-            TextLine { start: node.textStart, length: node.textLength, width: node.dims.w, height: node.dims.h },
+            TextLine {
+                start: node.textStart,
+                length: node.textLength,
+                origin: node.textStart,
+                width: node.dims.w,
+                height: node.dims.h,
+            },
         )) {
             return false;
         }
@@ -83,7 +89,13 @@ fn wrapText<M: TextMetrics>(l: borrow mut LayoutTree, index: usize, metrics: bor
         if (lineLength == 0 && lineWidth + word.width > width) {
             // The only word on the line is too wide: render it anyway.
             if (!l.lines.push(
-                TextLine { start: word.start, length: word.length, width: word.width, height: lineHeight },
+                TextLine {
+                    start: word.start,
+                    length: word.length,
+                    origin: word.start,
+                    width: word.width,
+                    height: lineHeight,
+                },
             )) {
                 return false;
             }
@@ -100,6 +112,7 @@ fn wrapText<M: TextMetrics>(l: borrow mut LayoutTree, index: usize, metrics: bor
             if (!l.lines.push(TextLine {
                 start: lineStart,
                 length: if (finalSpace) lineLength - 1 else lineLength,
+                origin: lineStart,
                 width: lineWidth - finalWidth,
                 height: lineHeight,
             })) {
@@ -123,6 +136,7 @@ fn wrapText<M: TextMetrics>(l: borrow mut LayoutTree, index: usize, metrics: bor
             TextLine {
                 start: lineStart,
                 length: lineLength,
+                origin: lineStart,
                 width: lineWidth - config.letterSpacing,
                 height: lineHeight,
             },
@@ -161,6 +175,7 @@ fn wrapText<M: TextMetrics>(l: borrow mut LayoutTree, index: usize, metrics: bor
             }
         }
         let newLength = keep + 3;
+        // Its `origin` stays where the line began in the element's text: the paragraph it is in is found from it.
         l.lines.items[lastSlot].start = newStart;
         l.lines.items[lastSlot].length = newLength;
         l.lines.items[lastSlot].width = metrics.measure(l.bytes.items[newStart..newStart + newLength], config).w;

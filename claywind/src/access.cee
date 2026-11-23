@@ -238,6 +238,10 @@ impl<region r> Ui<r> {
     fn accessParent(borrow this) -> u32 =>
         if (this.accessOpenCount > 0) this.accessOpenIds[this.accessOpenCount - 1] else 0;
 
+    /// The id of the container the element being built is in (a list, a table's row...), 0 for none: what a
+    /// control that is part of one names itself after.
+    public fn accessContainer(borrow this) -> u32 => this.accessParent();
+
     /// Node `index`'s value as text: a field's text, a dropdown's choice.
     public fn accessValue(borrow mut this, index: usize, value: Slice<u8>) {
         if (index >= this.accessNodes.length()) {

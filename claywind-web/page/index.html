@@ -7,10 +7,12 @@
   canvas { display: block; outline: none; touch-action: none; }
   /* The app's elements for a screen reader: over the canvas, where each is drawn, unseen and out of the pointer's way. */
   #access { position: fixed; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; outline: none; }
-  #access > * { position: absolute; margin: 0; padding: 0; border: 0; background: none; color: transparent;
+  #access * { position: absolute; margin: 0; padding: 0; border: 0; background: none; color: transparent;
     font: 1px sans-serif; overflow: hidden; white-space: pre; outline: none; opacity: 0.01; }
   /* A text field's element is a text input: a phone's keyboard and the input method are for it. */
-  #access > input { font: 16px sans-serif; caret-color: transparent; }
+  #access input { font: 16px sans-serif; caret-color: transparent; }
+  /* A container (a list, a menu, a tab list, a grid, a row, a cell) holds its elements: they show outside its box. */
+  #access [data-holds] { overflow: visible; }
   #note { position: fixed; left: 12px; bottom: 10px; color: #94a3b8; font: 13px system-ui, sans-serif; }
 </style>
 <canvas id="frame" aria-hidden="true"></canvas>

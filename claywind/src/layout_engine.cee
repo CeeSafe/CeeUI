@@ -109,8 +109,12 @@ struct StyleRun {
 
 /// One line of wrapped text, as a byte range of the frame's text buffer.
 struct TextLine {
+    /// The line's bytes in the frame's text: the element's own, but for a clamped text's last line, which is a
+    /// copy with its ellipsis put after all the text.
     start: usize;
     length: usize;
+    /// Where the line begins in the element's own text: `start`, but for that copy.
+    origin: usize;
     width: f32;
     height: f32;
 }
@@ -316,7 +320,10 @@ public struct LayoutTree<region r> {
         let styles = memory.allocArray(capacity.styles, StyleRun { start: 0, length: 0, config: TextConfig.of(16.0) })?;
         let breakMarks = memory.allocArray(capacity.textBytes, 0u8)?;
         let breakScratch = memory.allocArray(capacity.textBytes * 2, 0u32)?;
-        let lines = memory.allocArray(capacity.lines, TextLine { start: 0, length: 0, width: 0.0, height: 0.0 })?;
+        let lines = memory.allocArray(
+            capacity.lines,
+            TextLine { start: 0, length: 0, origin: 0, width: 0.0, height: 0.0 },
+        )?;
         let commands = memory.allocArray(capacity.commands, Command.ClipEnd)?;
         let order = memory.allocArray(n, 0usize)?;
         let snapshot = Snapshot { dims: Dims { w: 0.0, h: 0.0 }, minDims: Dims { w: 0.0, h: 0.0 }, heightMax: 0.0 };

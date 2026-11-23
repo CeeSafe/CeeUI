@@ -188,3 +188,79 @@ fn aDataGridSelectsRowsAndDrawsOnlyThoseInView() -> Result<void, TestFailure> {
     let top = (0.0 - ui.scrollOffset("orders").y) / 20.0;
     return Check.isTrue(top >= 989.5 && top <= 990.5, "scrolled to show the last row");
 }
+
+@test
+fn aDataGridsCellsAreTheirRowsByColumn() -> Result<void, TestFailure> {
+    var storage = heap(16777216);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(1024))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var s = gridState();
+    gridFrame(mut ui, mut platform, mut s)?;
+    gridFrame(mut ui, mut platform, mut s)?;
+    // To a screen reader (CeeSafe ADR 0207): a table, its titles' row, then each drawn row with a cell a column;
+    // a cell is its row's, at its column, and what is drawn in it is the cell's.
+    var rows = 0usize;
+    var cells = 0usize;
+    var texts = 0usize;
+    var row = 0u32;
+    var cell = 0u32;
+    var column = 0u32;
+    for (i in 0..ui.accessCount()) {
+        let node = ui.accessAt(i);
+        match (node.role) {
+            AccessRole.Row => {
+                rows += 1;
+                row = node.id;
+                column = 0;
+            }
+            AccessRole.Cell => {
+                cells += 1;
+                column += 1;
+                cell = node.id;
+                Check.isTrue(node.parent == row, "a cell is in the row before it")?;
+                Check.equalU64(column as u64, node.column as u64)?;
+            }
+            AccessRole.Text => {
+                texts += 1;
+                Check.isTrue(node.parent == cell, "a cell's text is the cell's")?;
+            }
+            _ => {}
+        }
+    }
+    Check.isTrue(rows >= 11, "the titles' row and a screenful of rows")?;
+    Check.equalU64((rows - 1) as u64 * 3, cells as u64)?;
+    return Check.equalU64(cells as u64, texts as u64);
+}
+
+@test
+fn aScreenReadersPressOnARowSelectsIt() -> Result<void, TestFailure> {
+    var storage = heap(16777216);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(1024))!;
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var s = gridState();
+    gridFrame(mut ui, mut platform, mut s)?;
+    gridFrame(mut ui, mut platform, mut s)?;
+    // The fourth node that is a row: the titles' row, then rows 0, 1 and 2.
+    var seen = 0usize;
+    var third = 0u32;
+    for (i in 0..ui.accessCount()) {
+        let node = ui.accessAt(i);
+        if (node.role == AccessRole.Row) {
+            seen += 1;
+            if (seen == 4) {
+                third = node.id;
+            }
+        }
+    }
+    Check.isTrue(ui.accessAct(third, AccessAction.Press), "the press is taken")?;
+    gridFrame(mut ui, mut platform, mut s)?;
+    gridFrame(mut ui, mut platform, mut s)?;
+    Check.equalU64(2, (s.selected ?? 99) as u64)?;
+    // A page gives the selected row its focus, and tells the app so: the row stays chosen.
+    Check.isTrue(ui.accessAct(third, AccessAction.Focus), "the focus is taken")?;
+    gridFrame(mut ui, mut platform, mut s)?;
+    gridFrame(mut ui, mut platform, mut s)?;
+    return Check.equalU64(2, (s.selected ?? 99) as u64);
+}

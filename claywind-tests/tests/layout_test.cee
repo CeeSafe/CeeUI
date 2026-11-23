@@ -745,6 +745,27 @@ fn lineClampEllipsizes() -> Result<void, TestFailure> {
 }
 
 @test
+fn aClampedTextBeforeOneWithLineBreaksIsPlaced() -> Result<void, TestFailure> {
+    // The clamped text's last line is a copy with its ellipsis, after all the frame's text: the paragraph it is in
+    // is found from where the line began in its own text, not back from the copy across the text between, whose
+    // line break ended the slice before it began (a panic on the demo's Data page in a wide window).
+    var storage = [0u8; 262144];
+    let memory = FixedBufferAllocator.over(mut storage);
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    t.begin(1000.0, 1000.0);
+    t.open(hashId("clampbox"), sized(SizingAxis.fixed(100.0), SizingAxis.fit()));
+    var config = TextConfig.of(16.0);
+    config.lineClamp = 2;
+    t.text("one two three four five six seven eight nine ten eleven twelve".bytes(), config);
+    t.close();
+    t.open(hashId("broken"), sized(SizingAxis.fixed(100.0), SizingAxis.fit()));
+    t.text("first\nsecond".bytes(), TextConfig.of(16.0));
+    t.close();
+    finishTree(mut t)?;
+    return expect("clamped to 2 lines (height)", boxIn(t, "clampbox").h, 32.0);
+}
+
+@test
 fn containerQueriesReadThePreviousFrame() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
