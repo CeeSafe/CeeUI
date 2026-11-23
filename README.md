@@ -347,8 +347,10 @@ sleeping while nothing changes.
   10,001 rows and 4 columns with its column headers, and where the focus is in each; the keys reach them all. With
   CeeSafe 0.94.3 the demo is read and worked by VoiceOver on macOS and on an iPhone, NVDA on Windows, Orca on Linux
   and TalkBack on an Android phone. The data grid's rows hold
-  a cell a column, so a desktop reader moves along a row and says the column's title; on a phone a row is read
-  whole, as its lists' rows are. Not there: the place of a list's row on iOS, which has none to give; dragging; a reader setting a field's text itself;
+  a cell a column, which UI Automation, AT-SPI, AppKit and a web page have at their row and column under the
+  column's title; a reader's focus is the row, which says its name (NVDA: "Barbara Liskov, data item, selected, 4 of
+  10001"), and NVDA's and Orca's table keys do not yet step from it into its cells. On a phone a row is read whole,
+  as its lists' rows are. Not there: the place of a list's row on iOS, which has none to give; dragging; a reader setting a field's text itself;
   reading by character in a field outside macOS; TalkBack's focus rectangle (the window's surface is the app's). A
   control of your own is one line after its `open`: `ui.access(id, AccessRole.Button, label)`; a field with no label
   of its own is named after it: `ui.accessName("server", "Server address")`.
