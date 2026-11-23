@@ -341,14 +341,17 @@ sleeping while nothing changes.
 - **Every host** builds and runs on macOS. The desktop host has also run on Windows 11 and on Ubuntu under X11.
 - **The browser host** streams a fixed 1024 × 640 frame.
 - **The terminal host** runs its own small dashboard. The full demo is laid out for pixels, not character cells.
-- **Accessibility:** the controls tell a screen reader what they are (`Ui.access` and `claywind/src/access.cee`:
-  role, name, value, state, a text field's caret), and take its presses, focus and steps. With CeeSafe 0.66.0 (ADR
-  0164) VoiceOver reads and works the demo on macOS and iOS, TalkBack on Android, and NVDA on Windows; Linux gives
-  a reader nothing yet. Not there: containers and tables (a list's rows are buttons); dragging; a reader setting a
-  field's text itself; reading by character in a field outside macOS; TalkBack's focus rectangle (the window's
-  surface is the app's). A control of your own is one line after its `open`:
-  `ui.access(id, AccessRole.Button, label)`; a field with no label of its own is named after it:
-  `ui.accessName("server", "Server address")`.
+- **Accessibility:** the controls tell a screen reader what they are (`Ui.access` and `claywind/src/access.cee`: role,
+  name, value, state, a text field's caret), and take its presses, focus and steps. Lists, menus, the menu bar, tabs
+  and the data grid are containers (CeeSafe ADR 0207): a reader hears "list, 6 items", "tab, 2 of 5" and a table of
+  10,001 rows and 4 columns with its column headers, and where the focus is in each; the keys reach them all. With
+  CeeSafe 0.94.2 the demo is read and worked by VoiceOver on macOS, NVDA on Windows, Orca on Linux and TalkBack on
+  Android (on an emulator, its speech from its log); on iOS the same tree is given to VoiceOver, checked through UIKit
+  in the Simulator and not yet by ear on a phone. Not there: a grid row's cells (a reader moves by row, not by
+  column); the place of a list's row on iOS, which has none to give; dragging; a reader setting a field's text itself;
+  reading by character in a field outside macOS; TalkBack's focus rectangle (the window's surface is the app's). A
+  control of your own is one line after its `open`: `ui.access(id, AccessRole.Button, label)`; a field with no label
+  of its own is named after it: `ui.accessName("server", "Server address")`.
 - **The web host** (`claywind-web`, with the demo on it in `claywind-hosts/web`): a ClayWind app as a WebAssembly
   module in a browser, drawn by the software renderer onto a canvas at the screen's pixel ratio. It redraws and
   shows only what changed and sleeps while nothing does; it has the pointer, the keyboard, touches, the pointer's

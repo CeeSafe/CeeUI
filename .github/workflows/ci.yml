@@ -19,7 +19,7 @@ env:
   # Linux (ADR 0202); 0.86.0: the C API's bindings open windows on iOS and Android as host programs (ADR 0200); 0.85.0: functions passing a Style by value are kept out of
   # line (ADR 0199, CEESAFE-FINDINGS.md Q4); 0.84.0: claywind-pack passes --arch for each Android ABI (ADR 0192); on
   # Linux, 0.77's runtime left the browser host's input unread when its frames ran behind.
-  CEESAFE_VERSION: v0.94.1
+  CEESAFE_VERSION: v0.94.2
 
 defaults:
   run:
