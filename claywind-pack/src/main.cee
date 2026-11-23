@@ -645,7 +645,11 @@ fn androidManifest(o: borrow Options) -> String {
     m.append("\" android:hasCode=\"false\" android:extractNativeLibs=\"true\">\n")!;
     // The activity is kept through a rotation, a new size and the keyboard (CeeSafe ADR 0156 §2.3): destroyed, the
     // program would end with it.
+    // One activity, whoever starts it: a start by another app or a link while the program runs comes to the one
+    // that is there (singleTask). A second NativeActivity over it would be a second window of a program that has
+    // one, with no elements for a screen reader.
     m.append("    <activity android:name=\"android.app.NativeActivity\" android:exported=\"true\"\n")!;
+    m.append("              android:launchMode=\"singleTask\"\n")!;
     m.append("              android:configChanges=\"orientation|screenSize|screenLayout|keyboardHidden|density|")!;
     m.append("smallestScreenSize\">\n")!;
     m.append("      <meta-data android:name=\"android.app.lib_name\" android:value=\"main\"/>\n")!;
