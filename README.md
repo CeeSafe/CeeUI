@@ -32,8 +32,8 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
   line clamping, and per-element transforms. It is checked against the C original with a differential fuzzer.
 - **A software renderer** that matches ThorVG's output: a render fuzzer against ThorVG finds 490 of 500 random
   frames identical, and every difference is a known, documented case.
-  - Anti-aliased paths, rounded rectangles, borders and rings, linear and radial gradients, and images (PNG and BMP
-    decoding included).
+  - Anti-aliased paths, rounded rectangles, borders and rings, linear and radial gradients, and images (PNG, JPEG and
+    BMP decoding included).
   - Shadows, blur, grayscale and brightness filters, opacity, and all CSS blend modes.
 - **TrueType and OpenType (CFF) fonts:** glyphs read and rendered by the toolkit itself, from single fonts and
   collections (.ttc), CID-keyed CJK fonts such as Hiragino and Noto Sans CJK included. Text

@@ -1,0 +1,136 @@
+// SPDX-License-Identifier: MIT
+// The JPEG decoder against the fixtures from fixtures/make_jpegs.py, whose expected pixels are Pillow's decoding
+// (libjpeg's): baseline and progressive, every chroma sampling, restart intervals, odd sizes, an EXIF orientation.
+// Two correct decoders round their inverse DCT and their upsampling differently, so a channel may differ by 3.
+// Damaged files must fail, or decode, without a panic.
+
+import ceeui;
+
+fn jpegFixture(name: StringView, suffix: StringView) -> Vector<u8> {
+    var buffer = [0u8; 256];
+    var w = TextWriter.create(mut buffer[..]);
+    w.text("fixtures/images/jpeg/");
+    w.text(name);
+    w.text(suffix);
+    return readFile(StringView.fromUtf8(w.written())!);
+}
+
+/// The number `text` writes in decimal digits (0 for none).
+fn decimal(text: StringView) -> u64 {
+    var v: u64 = 0;
+    for (b in text.bytes()) {
+        if (b >= '0' && b <= '9') {
+            v = v * 10 + (b - '0') as u64;
+        }
+    }
+    return v;
+}
+
+fn zeros32(n: usize) -> Vector<u32> {
+    var v = Vector<u32>.withCapacity(n)!;
+    for (i in 0..n) {
+        v.push(0)!;
+    }
+    return v;
+}
+
+/// Decodes `bytes` if it can: what matters for a damaged file is that this returns.
+fn tryDecode(bytes: Slice<u8>) -> bool {
+    let info = match (imageInfo(bytes)) {
+        Ok(i) => i,
+        Err(_) => { return false; }
+    };
+    if (info.w * info.h > 4000000 || info.scratchBytes > 100000000) {
+        return false;
+    }
+    var pixels = zeros32(info.w * info.h);
+    var scratch = heap(info.scratchBytes + 1);
+    return decodeImage(bytes, mut pixels.viewMut(), mut scratch.viewMut()) is Ok(_);
+}
+
+@test
+fn decodesEveryJpegFixtureAsLibjpegDoes() -> Result<void, TestFailure> {
+    let cases = jpegFixture("cases", ".txt");
+    Check.isTrue(cases.length > 0, "the fixtures exist (run fixtures/make_jpegs.py fixtures/images/jpeg)")?;
+    let text = StringView.fromUtf8(cases.view())!;
+    var checked: u64 = 0;
+    for (line in text.split("\n")) {
+        var parts = line.split(" ");
+        let name = parts.next() ?? "";
+        let w = decimal(parts.next() ?? "");
+        let h = decimal(parts.next() ?? "");
+        if (name.length == 0 || w == 0) {
+            continue;
+        }
+        let jpg = jpegFixture(name, ".jpg");
+        let rgb = jpegFixture(name, ".rgb");
+        let info = match (imageInfo(jpg.view())) {
+            Ok(i) => i,
+            Err(_) => { return Check.fail(name); }
+        };
+        Check.isTrue(info.w as u64 == w && info.h as u64 == h, name)?;
+        var pixels = zeros32(info.w * info.h);
+        var scratch = heap(info.scratchBytes + 1);
+        if (decodeImage(jpg.view(), mut pixels.viewMut(), mut scratch.viewMut()) is Err(_)) {
+            return Check.fail(name);
+        }
+        Check.equalU64(w * h * 3, rgb.length as u64)?;
+        for (i in 0..info.w * info.h) {
+            let p = pixels[i];
+            let mine = [p & 255, (p >> 8) & 255, (p >> 16) & 255];
+            for (c in 0usize..3) {
+                let theirs = rgb[i * 3 + c] as u32;
+                let d = if (mine[c] > theirs) mine[c] - theirs else theirs - mine[c];
+                if (d > 3) {
+                    Console.write("  ");
+                    Console.write(name);
+                    Console.write(": a channel differs by ");
+                    Console.writeLine(d);
+                    return Check.fail(name);
+                }
+            }
+            Check.isTrue(p >> 24 == 255, "opaque")?;
+        }
+        checked += 1;
+    }
+    return Check.equalU64(9, checked);
+}
+
+@test
+fn aDamagedJpegFailsWithoutAPanic() -> Result<void, TestFailure> {
+    for (name in ["s420", "progressive", "restarts", "rotated"]) {
+        let jpg = jpegFixture(name, ".jpg");
+        Check.isTrue(jpg.length > 0, name)?;
+        var cut: usize = 0;
+        while (cut < jpg.length) {
+            let _ = tryDecode(jpg.view()[0..cut]);
+            cut += 41;
+        }
+        var at: usize = 2;
+        while (at < jpg.length) {
+            for (value in [0u8, 0xFF, 0x7F, 0x01]) {
+                var copy = Vector<u8>.withCapacity(jpg.length)!;
+                for (b in jpg.view()) {
+                    copy.push(b)!;
+                }
+                copy[at] = value;
+                let _ = tryDecode(copy.view());
+            }
+            at += 29;
+        }
+    }
+    return Ok();
+}
+
+@test
+fn aJpegOfCmykOrTwelveBitsIsUnsupported() -> Result<void, TestFailure> {
+    // SOI, then a SOF0 of 12-bit samples.
+    let twelve = [0xFFu8, 0xD8, 0xFF, 0xC0, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0];
+    Check.isTrue(errorIs(imageInfo(twelve[..]), ImageError.Unsupported), "12-bit")?;
+    // Four components: CMYK.
+    let cmyk = [0xFFu8, 0xD8, 0xFF, 0xC0, 0, 20, 8, 0, 8, 0, 8, 4, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0, 4, 0x11, 0];
+    Check.isTrue(errorIs(imageInfo(cmyk[..]), ImageError.Unsupported), "CMYK")?;
+    // Arithmetic coding (SOF9).
+    let arithmetic = [0xFFu8, 0xD8, 0xFF, 0xC9, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0];
+    return Check.isTrue(errorIs(imageInfo(arithmetic[..]), ImageError.Unsupported), "arithmetic");
+}

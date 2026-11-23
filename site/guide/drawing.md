@@ -133,7 +133,7 @@ ui.open(Style.box().w(Size.fixed(160.0)).h(Size.fixed(90.0)).rounded(Radius.Lg).
 ui.close();
 ```
 
-`loadImage` decodes a PNG or a BMP into the raster. It runs once, in the host or at startup, not in the frame.
+`loadImage` decodes a PNG, a JPEG or a BMP into the raster. It runs once, in the host or at startup, not in the frame.
 CeeUI reads no files itself: the caller gives it the file's bytes.
 
 ```ceesafe
@@ -149,8 +149,8 @@ public fn loadPhoto(raster: borrow mut Raster, file: Slice<u8>, scratch: SliceMu
 }
 ```
 
-Decoding allocates nothing. A PNG needs scratch bytes for its inflated rows, and `imageInfo` says how many before
-you decode:
+Decoding allocates nothing. A PNG needs scratch bytes for its inflated rows and a JPEG for its coefficients and
+samples, and `imageInfo` says how many before you decode:
 
 ```ceesafe
 import ceeui;
@@ -163,14 +163,16 @@ public fn scratchFor(file: Slice<u8>) -> usize {
 }
 ```
 
-`ImageInfo` holds the `kind` (`ImageKind.Png` or `Bmp`), the size `w` and `h`, and `scratchBytes` (0 for a BMP).
-A failure is an `ImageError`:
+`ImageInfo` holds the `kind` (`ImageKind.Png`, `Jpeg` or `Bmp`), the size `w` and `h`, and `scratchBytes` (0 for a
+BMP). A JPEG is baseline or progressive, with any chroma sampling; a camera's EXIF orientation is applied, so its
+`w` and `h` are those of the photo as it is meant to be seen, and its pixels come out upright. A failure is an
+`ImageError`:
 
 | `ImageError` | Meaning |
 |---|---|
-| `NotAnImage` | Neither a BMP nor a PNG |
+| `NotAnImage` | Not a PNG, a JPEG or a BMP |
 | `Truncated` | The file ends early |
-| `Unsupported` | A valid file using something not supported, such as BMP RLE |
+| `Unsupported` | A valid file using something not supported: BMP RLE, or a JPEG that is CMYK, 12-bit, arithmetic-coded, lossless or hierarchical |
 | `Corrupt` | Malformed data |
 | `TooSmall` | The scratch is too small, or the raster has no room for the image |
 

@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
-// Image decoding with no dependencies: BMP (1/4/8-bit palette, 16/24/32-bit, bit fields, top-down or bottom-up) and
-// PNG (every color type and bit depth, palettes with tRNS, Adam7 interlacing, a full zlib inflate). The C build
-// loaded images through ThorVG's loaders; this replaces them.
+// Image decoding with no dependencies: BMP (1/4/8-bit palette, 16/24/32-bit, bit fields, top-down or bottom-up), PNG
+// (every color type and bit depth, palettes with tRNS, Adam7 interlacing, a full zlib inflate) and JPEG (baseline and
+// progressive, any chroma sampling, restart intervals, EXIF orientation; image_jpeg.cee). The C build loaded images
+// through ThorVG's loaders; this replaces them.
 //
-// Nothing allocates: `imageInfo` reports the size and the scratch a PNG needs for its inflated rows, and
+// Nothing allocates: `imageInfo` reports the size and the scratch a PNG needs for its inflated rows (a JPEG for its
+// coefficients and samples), and
 // `decodeImage` writes 0xAABBGGRR pixels (straight alpha, the Raster's image format) into the caller's slice.
 // `loadImage` does both into a Raster image slot.
 
@@ -11,15 +13,17 @@
 public enum ImageKind {
     Bmp,
     Png,
+    Jpeg,
 }
 
 /// Why an image did not decode.
 public enum ImageError {
-    /// Neither a BMP nor a PNG.
+    /// Not a BMP, a PNG or a JPEG.
     NotAnImage,
     /// The file ends early, or a chunk or row runs past its end.
     Truncated,
-    /// A valid file using something not supported (BMP RLE, a PNG compression method other than deflate).
+    /// A valid file using something not supported (BMP RLE, a PNG compression method other than deflate, JPEG with
+    /// arithmetic coding, 12-bit samples, CMYK, or the lossless and hierarchical modes).
     Unsupported,
     /// Malformed data: bad Huffman codes, distances before the start, a bad filter type, a bad palette index.
     Corrupt,
@@ -27,7 +31,8 @@ public enum ImageError {
     TooSmall,
 }
 
-/// An image's size, and how many scratch bytes `decodeImage` needs for it (0 for a BMP).
+/// An image's size (a JPEG's as it is shown, turned as its EXIF orientation says), and how many scratch bytes
+/// `decodeImage` needs for it (0 for a BMP).
 public struct ImageInfo {
     public kind: ImageKind;
     public w: usize;
@@ -54,6 +59,9 @@ public fn imageInfo(bytes: Slice<u8>) -> Result<ImageInfo, ImageError> {
     if (bytes.length >= 8 && bytes[0] == 0x89 && bytes[1] == 'P' && bytes[2] == 'N' && bytes[3] == 'G') {
         return pngInfo(bytes);
     }
+    if (bytes.length >= 4 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF) {
+        return jpegInfo(bytes);
+    }
     return Err(ImageError.NotAnImage);
 }
 
@@ -66,6 +74,7 @@ public fn decodeImage(bytes: Slice<u8>, pixels: SliceMut<u32>, scratch: SliceMut
     match (info.kind) {
         ImageKind.Bmp => { decodeBmp(bytes, info, mut pixels)?; }
         ImageKind.Png => { decodePng(bytes, info, mut pixels, mut scratch)?; }
+        ImageKind.Jpeg => { decodeJpeg(bytes, info, mut pixels, mut scratch)?; }
     }
     return Ok(info);
 }
@@ -86,6 +95,7 @@ public fn loadImage(
             match (info.kind) {
                 ImageKind.Bmp => { decodeBmp(bytes, info, mut pixels)?; }
                 ImageKind.Png => { decodePng(bytes, info, mut pixels, mut scratch)?; }
+                ImageKind.Jpeg => { decodeJpeg(bytes, info, mut pixels, mut scratch)?; }
             }
         }
         null => { return Err(ImageError.TooSmall); }

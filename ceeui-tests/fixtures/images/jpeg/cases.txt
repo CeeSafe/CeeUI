@@ -1,0 +1,9 @@
+s444 64 48
+s422 64 48
+s420 75 53
+grey 40 33
+progressive 97 61
+progressive444 50 50
+restarts 80 64
+rotated 40 60
+large 160 120
