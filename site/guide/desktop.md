@@ -28,7 +28,7 @@ import ceeui_fonts;
 
 ## The manifest
 
-`ceesafe.toml` names the package and its dependencies. This is what `ceeui-pack new tasks --ceeui Clay`
+`ceesafe.toml` names the package and its dependencies. This is what `ceeui-pack new tasks --ceeui CeeUI`
 writes:
 
 ```toml
@@ -40,9 +40,9 @@ windowed = true # a GUI program: no console window on Windows
 ceesafec = ">=0.78.0"
 
 [dependencies]
-ceeui = { path = "Clay/ceeui" }
-ceeui_fonts = { path = "Clay/ceeui-fonts" }
-ceeui_desktop = { path = "Clay/ceeui-desktop" }
+ceeui = { path = "CeeUI/ceeui" }
+ceeui_fonts = { path = "CeeUI/ceeui-fonts" }
+ceeui_desktop = { path = "CeeUI/ceeui-desktop" }
 ```
 
 | Key | Meaning |
@@ -57,9 +57,9 @@ Without `--ceeui PATH` the dependencies come from GitHub, and `ceesafec fetch` g
 
 ```toml
 [dependencies]
-ceeui = { git = "https://github.com/CeeSafe/Clay.git", branch = "main", dir = "ceeui" }
-ceeui_fonts = { git = "https://github.com/CeeSafe/Clay.git", branch = "main", dir = "ceeui-fonts" }
-ceeui_desktop = { git = "https://github.com/CeeSafe/Clay.git", branch = "main", dir = "ceeui-desktop" }
+ceeui = { git = "https://github.com/CeeSafe/CeeUI.git", branch = "main", dir = "ceeui" }
+ceeui_fonts = { git = "https://github.com/CeeSafe/CeeUI.git", branch = "main", dir = "ceeui-fonts" }
+ceeui_desktop = { git = "https://github.com/CeeSafe/CeeUI.git", branch = "main", dir = "ceeui-desktop" }
 ```
 
 ## The window

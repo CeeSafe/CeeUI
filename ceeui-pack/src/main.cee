@@ -1016,7 +1016,7 @@ fn newApp() -> i32 {
             deps.append(dep[1])!;
             deps.append("\" }\n")!;
         } else {
-            deps.append(" = { git = \"https://github.com/CeeSafe/Clay.git\", branch = \"main\", dir = \"")!;
+            deps.append(" = { git = \"https://github.com/CeeSafe/CeeUI.git\", branch = \"main\", dir = \"")!;
             deps.append(dep[1])!;
             deps.append("\" }\n")!;
         }

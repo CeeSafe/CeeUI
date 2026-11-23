@@ -51,7 +51,7 @@ const guide = [
 export default defineConfig({
   title: "CeeUI",
   description: "A Tailwind-flavoured immediate-mode UI toolkit in CeeSafe, for desktops, phones and the web.",
-  base: "/Clay/",
+  base: "/CeeUI/",
   srcExclude: ["README.md"],
   cleanUrls: true,
   lastUpdated: true,
@@ -64,7 +64,7 @@ export default defineConfig({
       { text: "CeeSafe", link: "https://ceesafe.github.io/CeeSafe/" },
     ],
     sidebar: { "/guide/": guide },
-    socialLinks: [{ icon: "github", link: "https://github.com/CeeSafe/Clay" }],
+    socialLinks: [{ icon: "github", link: "https://github.com/CeeSafe/CeeUI" }],
     search: { provider: "local" },
     outline: [2, 3],
     footer: { message: "CeeUI is MIT licensed. Its layout engine is a port of Clay by Nic Barker (zlib)." },

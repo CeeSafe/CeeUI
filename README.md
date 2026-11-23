@@ -8,7 +8,7 @@ Direct3D 12 layers, the web host's glue, and the C API for other languages.
 
 It began as ClayWind, a C toolkit built on [Clay](https://github.com/nicbarker/clay),
 [ThorVG](https://github.com/thorvg/thorvg) and SDL3, ported to CeeSafe, and was called ClayWind (in the repository
-`Clay`) until November 2026; the tag `claywind-final` is its last commit under that name.
+`CeeSafe/Clay`, now `CeeSafe/CeeUI`) until November 2026; the tag `claywind-final` is its last commit under that name.
 
 The same demo runs in a native window on macOS, Windows and Linux, headless (for tests and screenshots), in a
 browser, and in a terminal.

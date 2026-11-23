@@ -21,9 +21,9 @@ irm https://ceesafe.github.io/CeeSafe/install.ps1 | iex               # Windows
 `ceeui-pack` makes a new app from a template. Build it once from a checkout of CeeUI:
 
 ```sh
-git clone https://github.com/CeeSafe/Clay
-cd Clay/ceeui-pack && ceesafec build && cd ../..
-Clay/ceeui-pack/out/ceeui_pack new tasks --ceeui Clay
+git clone https://github.com/CeeSafe/CeeUI
+cd CeeUI/ceeui-pack && ceesafec build && cd ../..
+CeeUI/ceeui-pack/out/ceeui_pack new tasks --ceeui CeeUI
 cd tasks
 ceesafec build
 out/tasks

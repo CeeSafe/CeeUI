@@ -16,7 +16,7 @@ hero:
       link: /guide/introduction
     - theme: alt
       text: GitHub
-      link: https://github.com/CeeSafe/Clay
+      link: https://github.com/CeeSafe/CeeUI
 features:
   - title: A frame is a function
     details: The app declares its window each frame from its own state, and what the user did comes back as the controls' results. An idle window runs no frames.

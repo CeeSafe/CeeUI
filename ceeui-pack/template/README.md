@@ -1,6 +1,6 @@
 # __NAME__
 
-A [CeeUI](https://github.com/CeeSafe/Clay) app, made by `ceeui-pack new`: a list of tasks to add to, tick
+A [CeeUI](https://github.com/CeeSafe/CeeUI) app, made by `ceeui-pack new`: a list of tasks to add to, tick
 off and delete, in a window of its own.
 
 ```sh
