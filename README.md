@@ -9,6 +9,10 @@ the compiler.
 The same demo runs in a native window on macOS, Windows and Linux, headless (for tests and screenshots), in a
 browser, and in a terminal.
 
+**The guide** is in [`site/guide`](site/guide/introduction.md): getting started, layout and styles, the controls, text,
+phones, the web, accessibility and the tools, with every example compiled against the library
+(`tools/guide_check.py`). [`site/README.md`](site/README.md) says how to build it as a site.
+
 **Credits.** ClayWind stands on [Clay](https://github.com/nicbarker/clay) by Nic Barker. The layout model, the
 element and sizing rules and the layout algorithms are Clay's, and the layout engine here (`claywind/src/layout_*.cee`)
 is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
@@ -138,8 +142,8 @@ is a port of them, altered for CeeSafe. Clay is under the zlib licence ([THIRD_P
 
 ## Getting started
 
-Install the CeeSafe compiler, **ceesafec 0.66.0 or later** (the hosts use its window text input and clipboard, ADR 0141, sleep while nothing changes, ADRs 0142 and 0145, show the system's menus and file dialogs, ADR 0146, take files dropped from the system, ADR 0150, are GUI programs on Windows, ADR 0151, and take a touch screen's
-fingers, ADR 0155, a phone's safe area, ADR 0156, its soft keyboard, ADR 0157, its file dialogs, ADR 0158, an app's life, ADR 0159, and tell a screen reader what a window holds, ADR 0164; ClayWind's array sizes are constant expressions, ADR 0143; 0.50.2 links with MinGW's gcc on Windows):
+Install the CeeSafe compiler: **ceesafec 0.93.5 or later** for the desktop host (`claywind-desktop/ceesafe.toml` says
+what each package needs; CI tests with the release `.github/workflows/ci.yml` names):
 
 ```sh
 curl -fsSL https://ceesafe.github.io/CeeSafe/install.sh | sh          # macOS and Linux

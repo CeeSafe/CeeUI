@@ -113,6 +113,29 @@ jobs:
         working-directory: claywind-tests
         run: ceesafec test
 
+      # The documentation site (site/README.md): every CeeSafe example of its pages compiled against ClayWind, and the
+      # site built, which fails on a dead link. Linux only: the pages are the same everywhere.
+      - name: The guide's examples
+        if: runner.os == 'Linux'
+        run: python3 tools/guide_check.py
+
+      - uses: pnpm/action-setup@v4
+        if: runner.os == 'Linux'
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        if: runner.os == 'Linux'
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: site/pnpm-lock.yaml
+
+      - name: The site
+        if: runner.os == 'Linux'
+        working-directory: site
+        run: pnpm install --frozen-lockfile && pnpm run build
+
       - name: Build the hosts
         run: |
           set -e

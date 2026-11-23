@@ -123,7 +123,7 @@ fn main() -> i32 {
         Some(r) => r.height,
         null => START_HEIGHT,
     };
-    // ClayWind draws the title bar where the system lets it (CeeSafe ADR 0206: Wayland so far); elsewhere the
+    // ClayWind draws the title bar where the system lets it (CeeSafe ADR 0206: every desktop system); elsewhere the
     // system's bar stays.
     var window = match (Window.openStyled(
         "ClayWind — CeeSafe",
