@@ -424,7 +424,11 @@ fn decodeBlock(
             if (k > 63) {
                 return false;
             }
-            setCoef(mut scratch, at + (ZIGZAG[k] as usize) * 2, extendBits(readBits(mut r, b, size), size) * truncate<i32>(1u32 << scan.al));
+            setCoef(
+                mut scratch,
+                at + (ZIGZAG[k] as usize) * 2,
+                extendBits(readBits(mut r, b, size), size) * truncate<i32>(1u32 << scan.al),
+            );
             k += 1;
         }
         return true;
@@ -756,7 +760,17 @@ fn decodeJpeg(b: Slice<u8>, info: ImageInfo, pixels: SliceMut<u32>, scratch: Sli
                             let blockAt = f.comps[c].coefAt + (by * f.comps[c].blocksW + bx) * 128;
                             let dc = dcTables[f.comps[c].td];
                             let ac = acTables[f.comps[c].ta];
-                            if (!decodeBlock(mut r, b, mut scratch, blockAt, mut f.comps[c], dc, ac, mut scan, f.progressive)) {
+                            if (!decodeBlock(
+                                mut r,
+                                b,
+                                mut scratch,
+                                blockAt,
+                                mut f.comps[c],
+                                dc,
+                                ac,
+                                mut scan,
+                                f.progressive,
+                            )) {
                                 return Err(ImageError.Corrupt);
                             }
                         }
@@ -813,7 +827,11 @@ fn decodeJpeg(b: Slice<u8>, info: ImageInfo, pixels: SliceMut<u32>, scratch: Sli
                 let rr = truncate<i32>(down((yy + 91881 * cr) as i64, 16));
                 let gg = truncate<i32>(down((yy - 22554 * cb - 46802 * cr) as i64, 16));
                 let bb = truncate<i32>(down((yy + 116130 * cb) as i64, 16));
-                rgb = [truncate<u32>(rr.max(0).min(255)), truncate<u32>(gg.max(0).min(255)), truncate<u32>(bb.max(0).min(255))];
+                rgb = [
+                    truncate<u32>(rr.max(0).min(255)),
+                    truncate<u32>(gg.max(0).min(255)),
+                    truncate<u32>(bb.max(0).min(255)),
+                ];
             }
             // Where this stored pixel goes, as the orientation turns the photo (EXIF 2.32, tag 0x0112).
             let w = f.w;
