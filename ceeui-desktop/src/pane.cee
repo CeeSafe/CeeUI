@@ -108,6 +108,12 @@ public struct Pane<region r> {
     touchesAsked: bool;
     /// What the window was last told the frame holds, for a screen reader (access.cee).
     accessGiven: u64;
+    /// What the system told a phone's app of its life (CeeSafe's Window.nextAppEvent, ADR 0159), taken with the
+    /// events, for the host's `nextAppEvent`: 0 Background, 1 Foreground, 2 MemoryWarning, at most 8, the oldest
+    /// dropped.
+    appEvents: [u8; 8];
+    appHead: usize;
+    appCount: usize;
 
     /// A pane numbered `id` (each window's its own, from 1), with room for `elements` elements and `commands` render
     /// commands a frame, frames of up to `pixels` pixels kept, for a window of `size` points.
@@ -128,6 +134,9 @@ public struct Pane<region r> {
             id: id,
             touchesAsked: false,
             accessGiven: 0,
+            appEvents: [0u8; 8],
+            appHead: 0,
+            appCount: 0,
         });
     }
 
@@ -164,6 +173,7 @@ public struct Pane<region r> {
             }
         }
         takeAccessActions(mut this.ui, mut window); // what a screen reader asked, for the next frame's controls
+        this.takeAppEvents(mut window);
         loop {
             match (window.nextEvent()) {
                 Some(WindowEvent.Closed) => { return true; }
@@ -171,6 +181,47 @@ public struct Pane<region r> {
                 null => { return false; }
             }
         }
+    }
+
+    /// A phone's app off the screen and back (CeeSafe ADR 0159). Back on it, the window may be a new one, holding
+    /// nothing (Android makes the activity's window again), and what was presented while away showed nothing: the
+    /// whole frame is drawn and presented again, not only what changed.
+    fn takeAppEvents(borrow mut this, window: borrow mut Window) {
+        loop {
+            let code: u8 = match (window.nextAppEvent()) {
+                Some(WindowAppEvent.Background) => 0,
+                Some(WindowAppEvent.Foreground) => 1,
+                Some(WindowAppEvent.MemoryWarning) => 2,
+                null => { return; }
+            };
+            if (code == 1) {
+                this.damage.invalidate();
+                this.ui.requestFrame();
+            }
+            if (this.appCount == 8) {
+                this.appHead = (this.appHead + 1) % 8;
+                this.appCount -= 1;
+            }
+            this.appEvents[(this.appHead + this.appCount) % 8] = code;
+            this.appCount += 1;
+        }
+    }
+
+    /// The next thing the system told the app of its life, in order, or null (CeeSafe's Window.nextAppEvent, which
+    /// the pane takes with the window's events): a host saves at a Background, and may stop work it does only for the
+    /// screen. The pane itself draws the whole frame again at a Foreground.
+    public fn nextAppEvent(borrow mut this) -> WindowAppEvent? {
+        if (this.appCount == 0) {
+            return null;
+        }
+        let code = this.appEvents[this.appHead];
+        this.appHead = (this.appHead + 1) % 8;
+        this.appCount -= 1;
+        return match (code) {
+            0 => WindowAppEvent.Background,
+            1 => WindowAppEvent.Foreground,
+            _ => WindowAppEvent.MemoryWarning,
+        };
     }
 
     /// Starts a frame: the clock, the input, and the text the window's input method has.
