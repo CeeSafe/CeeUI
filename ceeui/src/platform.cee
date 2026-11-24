@@ -35,10 +35,12 @@ public enum Key {
     F10,
     F11,
     F12,
+    /// The system's Back (Android's button or gesture), while the frame asked for it (`Ui.wantBack`; CeeSafe ADR 0233).
+    Back,
 }
 
 /// How many `Key` values there are.
-public const KEY_COUNT: u32 = 31;
+public const KEY_COUNT: u32 = 32;
 
 /// A key's bit index (0..KEY_COUNT).
 public fn keyIndex(k: Key) -> u32 => match (k) {
@@ -73,6 +75,7 @@ public fn keyIndex(k: Key) -> u32 => match (k) {
     Key.F10 => 28,
     Key.F11 => 29,
     Key.F12 => 30,
+    Key.Back => 31,
 };
 
 /// The key with bit index `i`.
@@ -107,7 +110,8 @@ public fn keyAt(i: u32) -> Key => match (i) {
     27 => Key.F9,
     28 => Key.F10,
     29 => Key.F11,
-    _ => Key.F12,
+    30 => Key.F12,
+    _ => Key.Back,
 };
 
 /// Pointer state for one frame: the primary (left) button, the secondary (right) button and the wheel.
@@ -198,4 +202,7 @@ public interface Platform {
     /// leaves the default; one with it gives every finger, and no pointer for them.
     @effects() fn nextTouch(borrow mut this) -> Touch? => null;
     @effects() fn setCursor(borrow mut this, cursor: Cursor);
+    /// Whether the program wants the system's Back (CeeSafe ADR 0233): then Back is `Key.Back`, else the system's,
+    /// which leaves the app. A platform without one does nothing.
+    @effects() fn setBackWanted(borrow mut this, on: bool) {}
 }

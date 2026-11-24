@@ -97,6 +97,8 @@ public struct Ui<region r> {
     pointerState: Pointer;
     frameDt: f32;
     cursorWanted: Cursor;
+    /// Whether this frame asked for the system's Back (`wantBack`).
+    backWanted: bool;
     /// The scroll panel whose scroll bar's thumb the pointer is dragging (0 for none), and where on the thumb it took
     /// hold, from its top.
     thumbDrag: u32;
@@ -244,6 +246,7 @@ public struct Ui<region r> {
             pointerState: Pointer.at(Vec2 { x: -1.0, y: -1.0 }),
             frameDt: 0.0,
             cursorWanted: Cursor.Default,
+            backWanted: false,
             thumbDrag: 0,
             thumbGrab: 0.0,
             darkMode: false,
@@ -418,6 +421,7 @@ public struct Ui<region r> {
         this.touchScrolling();
         this.animations.tick();
         this.cursorWanted = Cursor.Default;
+        this.backWanted = false;
         this.screen = platform.screenSize();
         this.safe = platform.safeArea();
         this.keyboard = platform.keyboardInset();
@@ -592,6 +596,13 @@ public struct Ui<region r> {
     // ---- keys, text and the clock (ceeui_platform.h's wrappers, as of this frame's `begin`) -------------------
 
     public fn keyDown(borrow this, k: Key) -> bool => (this.keysDown & (1u64 << (keyIndex(k) as u64))) != 0;
+    /// Asks for the system's Back this frame (CeeSafe ADR 0233): while a frame asks, Back is `Key.Back`
+    /// (`keyPressed(Key.Back)`), for going back a page; a frame that does not ask leaves it to the system, which leaves
+    /// the app, as an app's first page should. Nothing on a system without a Back.
+    public fn wantBack(borrow mut this) {
+        this.backWanted = true;
+    }
+
     public fn keyPressed(borrow this, k: Key) -> bool => (this.keysPressed & (1u64 << (keyIndex(k) as u64))) != 0;
     public fn keyRepeated(borrow this, k: Key) -> bool => (this.keysRepeated & (1u64 << (keyIndex(k) as u64))) != 0;
     /// Pressed or OS-repeated this frame.
@@ -1121,6 +1132,7 @@ impl<region r> Ui<r> {
             k += 1;
         }
         platform.setCursor(this.cursorWanted);
+        platform.setBackWanted(this.backWanted);
         // ClayWind_EndControls: Tab / Shift-Tab move focus through the controls registered this frame.
         let count = this.focusables.length();
         if (this.keyPressed(Key.Tab) && count > 0) {

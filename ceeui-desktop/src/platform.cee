@@ -39,6 +39,8 @@ public struct DesktopPlatform {
     dt: f32;
     clock: f64;
     public cursor: Cursor;
+    /// Whether the last frame asked for the system's Back (`Ui.wantBack`), for the window (CeeSafe ADR 0233).
+    public backWanted: bool;
     /// Keys pressed this frame with their modifiers, for the Ui's key bindings; and whether the input method was
     /// on after the last frame.
     strokes: [Keystroke; 16];
@@ -71,6 +73,7 @@ public struct DesktopPlatform {
         dt: 0.0,
         clock: 0.0,
         cursor: Cursor.Default,
+        backWanted: false,
         strokes: [Keystroke { key: null, character: 0, modifiers: Modifiers.none() }; 16],
         strokeCount: 0,
         strokeRead: 0,
@@ -363,11 +366,15 @@ impl Platform for DesktopPlatform {
     fn setCursor(borrow mut this, cursor: Cursor) {
         this.cursor = cursor;
     }
+    fn setBackWanted(borrow mut this, on: bool) {
+        this.backWanted = on;
+    }
 }
 
 /// The window's key as CeeUI's; printable keys arrive as typed text instead (`Text`).
 fn ceeuiKey(key: WindowKey) -> Key? => match (key) {
     WindowKey.Escape => Key.Escape,
+    WindowKey.Back => Key.Back,
     WindowKey.Enter => Key.Enter,
     WindowKey.Tab => Key.Tab,
     WindowKey.Backspace => Key.Backspace,

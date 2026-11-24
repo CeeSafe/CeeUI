@@ -191,6 +191,7 @@ public struct Pane<region r> {
         }
         this.platform.editFrom(this.ui, mut window);
         window.setCursor(windowCursor(this.platform.cursor));
+        let _ = window.setBackWanted(this.platform.backWanted);
         giveAccessNodes(this.ui, mut window, mut this.accessGiven);
         return true;
     }
