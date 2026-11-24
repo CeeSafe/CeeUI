@@ -329,6 +329,10 @@ runs the system's tools. The name, identifier and version default to the package
   sentence shown when the app first reaches a device on the local network (`NSLocalNetworkUsageDescription`).
 - **`--notifications`**, for an app that shows notifications (CeeSafe's `Notifications`, ADR 0243): Android's
   `POST_NOTIFICATIONS`, which Android 13 and later ask the user for; Apple's systems need nothing declared.
+- **`--firebase FILE`**, for an Android app with push (CeeSafe ADR 0249): the app's `google-services.json`; the APK
+  is then built with Gradle (the project in `out/pack/android-gradle`, a wrapper pinned to Gradle 9.6.0, fetched once),
+  with Firebase Messaging and `org.ceeui.pack.PushService`, which shows a data push (`title`, `body`) while the program
+  is not running and leaves it to a running one. Without it nothing changes, and no Gradle is needed.
 - **`--extension DIR`** and **`--group ID`**, for an iOS app with a notification service extension (CeeSafe ADR 0246):
   the package in DIR is built into `PlugIns/<name>Notifications.appex` (identifier `<id>.NotificationService`, the
   extension point and CeeSafe's principal class in its Info.plist), signed with its own profile; the App Group they

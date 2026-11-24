@@ -54,6 +54,7 @@ struct Options {
     push: bool;          // --push: iOS's aps-environment, from the profile (CeeSafe ADR 0244)
     group: String;       // --group: an App Group the app (and its extension) share (CeeSafe ADR 0246)
     extension: String;   // --extension: the directory of a package built as the app's notification service extension
+    firebase: String;    // --firebase: an Android app's google-services.json; the APK is then built with Gradle
     fonts: String;       // --font, each on a line: the web target's fonts, in the app's order
     fallbacks: String;   // --fallback, each on a line: the web target's fallback fonts, in the order they are tried
 }
@@ -733,14 +734,22 @@ fn androidArch(abi: StringView) -> StringView => if (abi == "arm64-v8a") "arm64"
     else if (abi == "armeabi-v7a") "armv7"
     else "x86";
 
+/// The app's AndroidManifest.xml. With Firebase (`--firebase`), for Gradle: the package, the versions and the SDK
+/// levels are build.gradle.kts's, the APK has code (Firebase's and the messaging service), and the service is declared.
 fn androidManifest(o: borrow Options) -> String {
+    let gradle = o.firebase.view().length > 0;
     var m = String.create();
     m.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")!;
-    m.append("<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"")!;
-    m.append(xml(o.id.view()).view())!;
-    m.append("\"\n          android:versionCode=\"1\" android:versionName=\"")!;
-    m.append(xml(o.version.view()).view())!;
-    m.append("\">\n  <uses-sdk android:minSdkVersion=\"25\" android:targetSdkVersion=\"36\"/>\n")!;
+    m.append("<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"")!;
+    if (gradle) {
+        m.append(">\n")!;
+    } else {
+        m.append(" package=\"")!;
+        m.append(xml(o.id.view()).view())!;
+        m.append("\"\n          android:versionCode=\"1\" android:versionName=\"")!;
+        m.append(xml(o.version.view()).view())!;
+        m.append("\">\n  <uses-sdk android:minSdkVersion=\"25\" android:targetSdkVersion=\"36\"/>\n")!;
+    }
     if (o.network.view().length > 0) {
         m.append("  <uses-permission android:name=\"android.permission.INTERNET\"/>\n")!;
     }
@@ -763,7 +772,8 @@ fn androidManifest(o: borrow Options) -> String {
     }
     m.append("  <application android:label=\"")!;
     m.append(xml(o.name.view()).view())!;
-    m.append("\" android:hasCode=\"false\" android:extractNativeLibs=\"true\">\n")!;
+    m.append(if (gradle) "\" android:hasCode=\"true\"" else "\" android:hasCode=\"false\"")!;
+    m.append(" android:extractNativeLibs=\"true\">\n")!;
     // The activity is kept through a rotation, a new size and the keyboard (CeeSafe ADR 0156 §2.3): destroyed, the
     // program would end with it.
     // One activity, whoever starts it: a start by another app or a link while the program runs comes to the one
@@ -776,8 +786,118 @@ fn androidManifest(o: borrow Options) -> String {
     m.append("      <meta-data android:name=\"android.app.lib_name\" android:value=\"main\"/>\n")!;
     m.append("      <intent-filter>\n        <action android:name=\"android.intent.action.MAIN\"/>\n")!;
     m.append("        <category android:name=\"android.intent.category.LAUNCHER\"/>\n      </intent-filter>\n")!;
-    m.append("    </activity>\n  </application>\n</manifest>\n")!;
+    m.append("    </activity>\n")!;
+    if (gradle) {
+        // The push that comes while the app is not running (CeeSafe ADR 0249): src/PushService.java.
+        m.append("    <service android:name=\"org.ceeui.pack.PushService\" android:exported=\"false\">\n")!;
+        m.append("      <intent-filter>\n")!;
+        m.append("        <action android:name=\"com.google.firebase.MESSAGING_EVENT\"/>\n")!;
+        m.append("      </intent-filter>\n    </service>\n")!;
+    }
+    m.append("  </application>\n</manifest>\n")!;
     return m;
+}
+
+/// The messaging service an APK with Firebase carries (CeeSafe ADR 0249).
+const PUSH_SERVICE: StringView = embedText("PushService.java");
+
+/// The Gradle that builds an APK with Firebase, and the Android Gradle plugin and Firebase Messaging it uses: the
+/// wrapper pins the Gradle (fetched once into ~/.gradle), so a build does not depend on the one a machine has.
+const GRADLE_VERSION: StringView = "9.6.0";
+const ANDROID_PLUGIN_VERSION: StringView = "9.5.2";
+const GOOGLE_SERVICES_VERSION: StringView = "4.6.0";
+const FIREBASE_MESSAGING_VERSION: StringView = "26.0.2";
+
+/// A Gradle to write the wrapper with: $CEEUI_GRADLE, else `gradle` on the PATH, else the newest a wrapper has
+/// fetched under ~/.gradle; empty when there is none.
+fn someGradle() -> String {
+    if (Environment.variable("CEEUI_GRADLE") is Some(g)) {
+        return text(g);
+    }
+    let found = output("sh", [
+        "-c",
+        "command -v gradle || ls -d \"$HOME\"/.gradle/wrapper/dists/gradle-*-bin/*/gradle-*/bin/gradle 2>/dev/null | sort -V | tail -1",
+    ]);
+    return text(found.view().trim());
+}
+
+/// An APK with Firebase Messaging (`--firebase`, CeeSafe ADR 0249), built by Gradle into `base` (unsigned): a project
+/// in out/pack/android-gradle around what packAndroid made in out/pack/android (the manifest, lib/<abi>), with the
+/// app's google-services.json, Firebase Messaging and the messaging service. Gradle merges the libraries' manifests,
+/// resources and classes, which the Gradle-free path cannot. The project is kept between builds, for Gradle's caches.
+fn gradleBuild(o: borrow Options, sdk: StringView, base: StringView) -> i32 {
+    let project = "out/pack/android-gradle";
+    let java = cat([project, "/java/org/ceeui/pack"]);
+    if (!run("mkdir", ["-p", java.view()])) {
+        return fail("could not make out/pack/android-gradle");
+    }
+    if (!(File.kind(o.firebase.view()) is Ok(Some(PathKind.File)))) {
+        return fail2("no google-services.json at ", o.firebase.view());
+    }
+    if (!run("cp", [o.firebase.view(), cat([project, "/google-services.json"]).view()])) {
+        return fail("could not copy google-services.json");
+    }
+    var build = String.create();
+    build.append("// Written by ceeui-pack --firebase (CeeSafe ADR 0249); made again at every build.\n")!;
+    build.append("plugins {\n    id(\"com.android.application\") version \"")!;
+    build.append(ANDROID_PLUGIN_VERSION)!;
+    build.append("\"\n    id(\"com.google.gms.google-services\") version \"")!;
+    build.append(GOOGLE_SERVICES_VERSION)!;
+    build.append("\"\n}\nandroid {\n    namespace = \"")!;
+    build.append(o.id.view())!;
+    build.append("\"\n    compileSdk = 36\n    defaultConfig {\n        applicationId = \"")!;
+    build.append(o.id.view())!;
+    build.append("\"\n        minSdk = 25\n        targetSdk = 36\n        versionCode = 1\n        versionName = \"")!;
+    build.append(o.version.view())!;
+    build.append("\"\n    }\n    buildTypes { getByName(\"release\") { isMinifyEnabled = false } }\n")!;
+    build.append("    packaging { jniLibs { useLegacyPackaging = true } }\n")!;
+    build.append("    sourceSets {\n        getByName(\"main\") {\n")!;
+    build.append("            manifest.srcFile(\"../android/AndroidManifest.xml\")\n")!;
+    build.append("            jniLibs.directories.add(\"../android/lib\")\n")!;
+    build.append("            java.directories.add(\"java\")\n        }\n    }\n}\n")!;
+    build.append("dependencies {\n    implementation(\"com.google.firebase:firebase-messaging:")!;
+    build.append(FIREBASE_MESSAGING_VERSION)!;
+    build.append("\")\n}\n")!;
+    let settings = cat([
+        "pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }\n",
+        "dependencyResolutionManagement { repositories { google(); mavenCentral() } }\n",
+        "rootProject.name = \"app\"\n",
+    ]);
+    if (!writeText(cat([project, "/build.gradle.kts"]).view(), build.view()) ||
+        !writeText(cat([project, "/settings.gradle.kts"]).view(), settings.view()) ||
+        !writeText(
+            cat([project, "/gradle.properties"]).view(),
+            "android.useAndroidX=true\norg.gradle.jvmargs=-Xmx2g\n",
+        ) ||
+        !writeText(cat([project, "/local.properties"]).view(), cat(["sdk.dir=", sdk, "\n"]).view()) ||
+        !writeText(cat([java.view(), "/PushService.java"]).view(), PUSH_SERVICE)) {
+        return fail("could not write the Gradle project");
+    }
+    let wrapperProperties = cat([project, "/gradle/wrapper/gradle-wrapper.properties"]);
+    if (!readText(wrapperProperties.view()).view().contains(cat(["gradle-", GRADLE_VERSION, "-"]).view())) {
+        let gradle = someGradle();
+        if (gradle.view().length == 0) {
+            return fail("no Gradle to write the wrapper with: install Gradle, or set CEEUI_GRADLE to one");
+        }
+        // The wrapper is written in an empty directory: the project's own build needs the wrapper's Gradle.
+        let script = cat([
+            "rm -rf out/pack/gradle-wrapper && mkdir -p out/pack/gradle-wrapper && cd out/pack/gradle-wrapper && ",
+            "touch settings.gradle.kts && \"$0\" -q --no-daemon wrapper --gradle-version ",
+            GRADLE_VERSION,
+            " && cp -R gradlew gradle ../android-gradle/",
+        ]);
+        if (!run("sh", ["-c", script.view(), gradle.view()])) {
+            return fail("could not write the Gradle wrapper");
+        }
+    }
+    Console.writeLine("ceeui-pack: building with Gradle (Firebase Messaging)");
+    if (!run("sh", ["-c", "cd out/pack/android-gradle && ./gradlew -q assembleRelease"])) {
+        return fail("Gradle failed (out/pack/android-gradle)");
+    }
+    if (!run("cp", ["out/pack/android-gradle/build/outputs/apk/release/app-release-unsigned.apk", base])) {
+        return fail("Gradle made no APK");
+    }
+    return 0;
 }
 
 fn packAndroid(o: borrow Options) -> i32 {
@@ -873,15 +993,21 @@ fn packAndroid(o: borrow Options) -> i32 {
     let base = cat([stage, "/base.apk"]);
     let aligned = cat([stage, "/aligned.apk"]);
     let apk = cat(["out/pack/", o.name.view(), ".apk"]);
-    if (!run(
-        cat([tools.view(), "/aapt2"]).view(),
-        ["link", "-o", base.view(), "-I", jar.view(), "--manifest", manifest.view()],
-    )) {
-        return fail("aapt2 failed");
-    }
-    // The libraries go into the archive under lib/<abi>/, which zip takes from the directory it runs in.
-    if (!run("sh", ["-c", "cd out/pack/android && zip -q -r base.apk lib"])) {
-        return fail("zip failed");
+    if (o.firebase.view().length > 0) {
+        if (gradleBuild(o, sdk.view(), base.view()) != 0) {
+            return 1;
+        }
+    } else {
+        if (!run(
+            cat([tools.view(), "/aapt2"]).view(),
+            ["link", "-o", base.view(), "-I", jar.view(), "--manifest", manifest.view()],
+        )) {
+            return fail("aapt2 failed");
+        }
+        // The libraries go into the archive under lib/<abi>/, which zip takes from the directory it runs in.
+        if (!run("sh", ["-c", "cd out/pack/android && zip -q -r base.apk lib"])) {
+            return fail("zip failed");
+        }
     }
     if (!run(cat([tools.view(), "/zipalign"]).view(), ["-f", "-p", "4", base.view(), aligned.view()])) {
         return fail("zipalign failed");
@@ -1053,7 +1179,7 @@ fn usage() -> i32 {
     Console.writeErrorLine(
         "           [--keystore FILE] [--keystore-pass PASSWORD] [--network WHY] [--bluetooth WHY]",
     );
-    Console.writeErrorLine("           [--notifications] [--push] [--group ID] [--extension DIR]");
+    Console.writeErrorLine("           [--notifications] [--push] [--group ID] [--extension DIR] [--firebase FILE]");
     Console.writeErrorLine("           [--font FILE]... [--fallback FILE]...");
     Console.writeErrorLine("run in the app's package directory; the result is under out/pack");
     Console.writeErrorLine(
@@ -1194,6 +1320,7 @@ fn main() -> i32 {
         push: false,
         group: String.create(),
         extension: String.create(),
+        firebase: String.create(),
         fonts: String.create(),
         fallbacks: String.create(),
     };
@@ -1236,6 +1363,8 @@ fn main() -> i32 {
             o.group = text(value);
         } else if (flag == "--extension") {
             o.extension = text(value);
+        } else if (flag == "--firebase") {
+            o.firebase = text(value);
         } else if (flag == "--bluetooth") {
             o.bluetooth = text(value);
         } else if (flag == "--fallback") {
