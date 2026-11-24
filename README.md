@@ -327,6 +327,8 @@ runs the system's tools. The name, identifier and version default to the package
 - **macOS**: signed ad hoc, for this Mac; no Developer ID, notarization or icon yet.
 - **`--network WHY`**, for an app that uses the network: Android's `INTERNET` permission, and on iOS the
   sentence shown when the app first reaches a device on the local network (`NSLocalNetworkUsageDescription`).
+- **`--notifications`**, for an app that shows notifications (CeeSafe's `Notifications`, ADR 0243): Android's
+  `POST_NOTIFICATIONS`, which Android 13 and later ask the user for; Apple's systems need nothing declared.
 It needs a Mac for the Apple targets and a Unix for all (it runs `mkdir`, `cp`, `rm`, `zip`): Windows is not a host
 for it yet.
 

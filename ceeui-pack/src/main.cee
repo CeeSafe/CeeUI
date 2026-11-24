@@ -21,6 +21,9 @@
 // when the app first reaches a device on the local network.
 // `--bluetooth WHY` is for an app that prints to Bluetooth printers (CeeSafe ADR 0177): Android's Bluetooth
 // permissions, and on iOS and macOS the sentence shown when the app first uses Bluetooth.
+// `--notifications` is for an app that shows notifications (CeeSafe ADR 0243): Android's POST_NOTIFICATIONS, which
+// Android 13 and later ask the user for when the app calls Notifications.requestPermission. Apple's systems need
+// nothing declared.
 //
 // It runs ceesafec for the target, writes the Info.plist or AndroidManifest.xml, and runs the system's own tools
 // (xcrun, codesign, security; the NDK's clang, aapt2, zipalign, apksigner). It needs a Mac for the Apple targets, and
@@ -42,8 +45,9 @@ struct Options {
     // network description; empty for an app that uses none
     bluetooth: String; // --bluetooth, why the app uses Bluetooth (CeeSafe ADR 0177 §2.2): Android's permissions and
     // Apple's NSBluetoothAlwaysUsageDescription; empty for an app that uses none
-    fonts: String;     // --font, each on a line: the web target's fonts, in the app's order
-    fallbacks: String; // --fallback, each on a line: the web target's fallback fonts, in the order they are tried
+    notifications: bool; // --notifications: Android's POST_NOTIFICATIONS (CeeSafe ADR 0243)
+    fonts: String;       // --font, each on a line: the web target's fonts, in the app's order
+    fallbacks: String;   // --fallback, each on a line: the web target's fallback fonts, in the order they are tried
 }
 
 fn fail(what: StringView) -> i32 {
@@ -627,6 +631,10 @@ fn androidManifest(o: borrow Options) -> String {
     if (o.network.view().length > 0) {
         m.append("  <uses-permission android:name=\"android.permission.INTERNET\"/>\n")!;
     }
+    if (o.notifications) {
+        // Android 13 and later ask for it at run time (CeeSafe ADR 0243); before them it is granted at install.
+        m.append("  <uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>\n")!;
+    }
     if (o.bluetooth.view().length > 0) {
         // Android 12 and later ask for these two at run time (CeeSafe ADR 0177 §2.2), the scan never for a location;
         // Android 9 to 11 grant the first two at install and ask for the location, which a scan needs there.
@@ -932,6 +940,7 @@ fn usage() -> i32 {
     Console.writeErrorLine(
         "           [--keystore FILE] [--keystore-pass PASSWORD] [--network WHY] [--bluetooth WHY]",
     );
+    Console.writeErrorLine("           [--notifications]");
     Console.writeErrorLine("           [--font FILE]... [--fallback FILE]...");
     Console.writeErrorLine("run in the app's package directory; the result is under out/pack");
     Console.writeErrorLine(
@@ -1068,12 +1077,18 @@ fn main() -> i32 {
         storePass: text("android"),
         network: String.create(),
         bluetooth: String.create(),
+        notifications: false,
         fonts: String.create(),
         fallbacks: String.create(),
     };
     var i: usize = 2;
     while (i < Process.argumentCount()) {
         let flag = Process.argument(i) ?? "";
+        if (flag == "--notifications") {
+            o.notifications = true; // a switch: no value follows
+            i += 1;
+            continue;
+        }
         let value = match (Process.argument(i + 1)) {
             Some(v) => v,
             null => { return usage(); }

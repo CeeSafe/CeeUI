@@ -58,6 +58,7 @@ For the first four it runs `ceesafec build --windowed` for the target, writes th
 | `--keystore FILE`, `--keystore-pass PASS` | Android: the keystore to sign with | `~/.android/debug.keystore` |
 | `--network WHY` | The app uses the network: Android's `INTERNET` permission, and on iOS the sentence shown when the app first reaches a device on the local network | No network |
 | `--bluetooth WHY` | The app prints to Bluetooth printers: Android's Bluetooth permissions, and on iOS and macOS the sentence shown when the app first uses Bluetooth | No Bluetooth |
+| `--notifications` | The app shows notifications (CeeSafe's `Notifications`): Android's `POST_NOTIFICATIONS`, which Android 13 and later ask the user for | No notifications |
 | `--font FILE`, `--fallback FILE` | `web`: the app's fonts and its fallback fonts | None |
 
 What to know of each system:
