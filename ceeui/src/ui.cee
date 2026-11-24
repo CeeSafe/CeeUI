@@ -67,6 +67,9 @@ struct ScrollState {
     openThisFrame: bool;
     /// A mouse drag does not scroll it (`Style.noDragScroll`: a drag in a text view selects).
     noDrag: bool;
+    /// `scrollToBottom` was asked this frame: once the frame's layout has measured the content (which may have
+    /// grown in it, a message added), the container goes to that end, and the next frame draws it there.
+    toBottom: bool;
 }
 
 /// How much a `Ui` holds.
@@ -213,6 +216,7 @@ public struct Ui<region r> {
             vertical: false,
             openThisFrame: false,
             noDrag: false,
+            toBottom: false,
         };
         let scrolls = memory.allocArray(capacity.scrollContainers, empty)?;
         let pressed = memory.allocArray(capacity.layout.elements, 0u32)?;
@@ -851,12 +855,15 @@ public struct Ui<region r> {
         }
     }
 
-    /// ScrollContainerBottom.
+    /// ScrollContainerBottom. Scrolls to the end of the content as the last frame measured it, and again after this
+    /// frame's layout, to the end of what this frame put in it: content added in the same frame (a message just
+    /// sent) is not left below the view. The second move shows in the next frame, which it asks for.
     public fn scrollToBottom(borrow mut this, name: StringView) {
         match (this.scrollSlot(hashId(name))) {
             Some(k) => {
                 let s = this.scrolls.items[k];
                 this.scrolls.items[k].position.y = -(s.content.h - s.size.h).max(0.0);
+                this.scrolls.items[k].toBottom = true;
             }
             null => {}
         }
@@ -942,6 +949,7 @@ public struct Ui<region r> {
                     vertical: clip.vertical,
                     openThisFrame: true,
                     noDrag: noDrag,
+                    toBottom: false,
                 };
                 this.scrolls.push(fresh);
                 return Vec2.zero();
@@ -1099,9 +1107,17 @@ impl<region r> Ui<r> {
                     this.scrolls.items[k].size = e.size;
                     this.scrolls.items[k].content = e.content;
                     this.scrolls.items[k].area = e.area;
+                    if (state.toBottom) {
+                        let end = -(e.content.h - e.size.h).max(0.0);
+                        if (end != this.scrolls.items[k].position.y) {
+                            this.scrolls.items[k].position.y = end;
+                            this.requestFrame();
+                        }
+                    }
                 }
                 null => {}
             }
+            this.scrolls.items[k].toBottom = false;
             k += 1;
         }
         platform.setCursor(this.cursorWanted);

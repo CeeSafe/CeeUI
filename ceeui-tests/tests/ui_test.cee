@@ -344,6 +344,40 @@ fn wheelAndDragScrolling() -> Result<void, TestFailure> {
     return Ok();
 }
 
+fn rowsList(ui: borrow mut Ui, rows: usize) {
+    ui.open(Style.column().id("chat").w(Size.fixed(100.0)).h(Size.fixed(50.0)).scroll(ScrollAxis.Vertical));
+    for (i in 0..rows) {
+        ui.open(Style.row().size(Size.fixed(20.0)).bg(SLATE_800));
+        ui.close();
+    }
+    ui.close();
+}
+
+@test
+fn scrollingToTheBottomReachesWhatTheSameFrameAdded() -> Result<void, TestFailure> {
+    var storage = [0u8; 524288];
+    let memory = FixedBufferAllocator.over(mut storage);
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(400.0, 300.0, 300.0, 300.0);
+    for (f in 0..2) {
+        ui.begin(mut platform);
+        rowsList(mut ui, 10);
+        finish(mut ui, mut platform)?;
+    }
+    // A message is sent: the frame that shows it asks to go to the end. The last frame measured 10 rows (200).
+    ui.begin(mut platform);
+    rowsList(mut ui, 11);
+    ui.scrollToBottom("chat");
+    finish(mut ui, mut platform)?;
+    expect("at the end of the 11 rows, not the 10", ui.scrollOffset("chat").y, -170.0)?;
+    Check.isTrue(ui.needsFrame(), "the next frame is asked for, to draw it there")?;
+    ui.begin(mut platform);
+    rowsList(mut ui, 11);
+    finish(mut ui, mut platform)?;
+    expect("and it stays there", ui.scrollOffset("chat").y, -170.0)?;
+    return Check.isFalse(ui.needsFrame(), "nothing more to do");
+}
+
 @test
 fn breakpointsThemeAndContainers() -> Result<void, TestFailure> {
     var storage = [0u8; 524288];
