@@ -59,6 +59,7 @@ For the first four it runs `ceesafec build --windowed` for the target, writes th
 | `--network WHY` | The app uses the network: Android's `INTERNET` permission, and on iOS the sentence shown when the app first reaches a device on the local network | No network |
 | `--bluetooth WHY` | The app prints to Bluetooth printers: Android's Bluetooth permissions, and on iOS and macOS the sentence shown when the app first uses Bluetooth | No Bluetooth |
 | `--notifications` | The app shows notifications (CeeSafe's `Notifications`): Android's `POST_NOTIFICATIONS`, which Android 13 and later ask the user for | No notifications |
+| `--push` | The app receives push notifications (CeeSafe's `Push`): on an iOS device it is signed with the profile's `aps-environment`; the profile must be an explicit App ID's with Push Notifications | No push |
 | `--font FILE`, `--fallback FILE` | `web`: the app's fonts and its fallback fonts | None |
 
 What to know of each system:

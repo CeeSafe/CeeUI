@@ -329,6 +329,9 @@ runs the system's tools. The name, identifier and version default to the package
   sentence shown when the app first reaches a device on the local network (`NSLocalNetworkUsageDescription`).
 - **`--notifications`**, for an app that shows notifications (CeeSafe's `Notifications`, ADR 0243): Android's
   `POST_NOTIFICATIONS`, which Android 13 and later ask the user for; Apple's systems need nothing declared.
+- **`--push`**, for an app that receives push notifications (CeeSafe's `Push`, ADR 0244): on an iOS device the app is
+  signed with the profile's `aps-environment`, which only a profile of an explicit App ID with Push Notifications
+  grants (a wildcard one has none, and the packer says so).
 It needs a Mac for the Apple targets and a Unix for all (it runs `mkdir`, `cp`, `rm`, `zip`): Windows is not a host
 for it yet.
 

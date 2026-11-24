@@ -24,6 +24,8 @@
 // `--notifications` is for an app that shows notifications (CeeSafe ADR 0243): Android's POST_NOTIFICATIONS, which
 // Android 13 and later ask the user for when the app calls Notifications.requestPermission. Apple's systems need
 // nothing declared.
+// `--push` is for an app that receives push notifications (CeeSafe ADR 0244): on an iOS device the app is signed with
+// the profile's `aps-environment`, which only a profile of an explicit App ID with Push Notifications has.
 //
 // It runs ceesafec for the target, writes the Info.plist or AndroidManifest.xml, and runs the system's own tools
 // (xcrun, codesign, security; the NDK's clang, aapt2, zipalign, apksigner). It needs a Mac for the Apple targets, and
@@ -46,6 +48,7 @@ struct Options {
     bluetooth: String; // --bluetooth, why the app uses Bluetooth (CeeSafe ADR 0177 §2.2): Android's permissions and
     // Apple's NSBluetoothAlwaysUsageDescription; empty for an app that uses none
     notifications: bool; // --notifications: Android's POST_NOTIFICATIONS (CeeSafe ADR 0243)
+    push: bool;          // --push: iOS's aps-environment, from the profile (CeeSafe ADR 0244)
     fonts: String;       // --font, each on a line: the web target's fonts, in the app's order
     fallbacks: String;   // --fallback, each on a line: the web target's fallback fonts, in the order they are tried
 }
@@ -586,6 +589,18 @@ fn signForDevice(o: borrow Options, app: StringView) -> i32 {
     if (!run("cp", [profilePath.view(), cat([app, "/embedded.mobileprovision"]).view()])) {
         return fail("could not copy the provisioning profile");
     }
+    // Push (--push): the environment the profile grants, "development" or "production"; a wildcard profile grants none.
+    var apsEnvironment = String.create();
+    if (o.push) {
+        let plist = output("security", ["cms", "-D", "-i", profilePath.view()]);
+        apsEnvironment = plistString(plist.view(), "aps-environment");
+        if (apsEnvironment.view().length == 0) {
+            return fail2("--push: the profile grants no push notifications: ", profilePath.view()) +
+                fail(
+                    "  register the App ID with Push Notifications and make a profile for it (a wildcard one has none)",
+                );
+        }
+    }
     let fullId = cat([team, ".", o.id.view()]);
     var e = String.create();
     e.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n")!;
@@ -594,6 +609,11 @@ fn signForDevice(o: borrow Options, app: StringView) -> i32 {
     e.append("</string>\n\t<key>com.apple.developer.team-identifier</key><string>")!;
     e.append(team)!;
     e.append("</string>\n\t<key>get-task-allow</key><true/>\n")!;
+    if (apsEnvironment.view().length > 0) {
+        e.append("\t<key>aps-environment</key><string>")!;
+        e.append(xml(apsEnvironment.view()).view())!;
+        e.append("</string>\n")!;
+    }
     e.append("\t<key>keychain-access-groups</key><array><string>")!;
     e.append(xml(fullId.view()).view())!;
     e.append("</string></array>\n</dict>\n</plist>\n")!;
@@ -940,7 +960,7 @@ fn usage() -> i32 {
     Console.writeErrorLine(
         "           [--keystore FILE] [--keystore-pass PASSWORD] [--network WHY] [--bluetooth WHY]",
     );
-    Console.writeErrorLine("           [--notifications]");
+    Console.writeErrorLine("           [--notifications] [--push]");
     Console.writeErrorLine("           [--font FILE]... [--fallback FILE]...");
     Console.writeErrorLine("run in the app's package directory; the result is under out/pack");
     Console.writeErrorLine(
@@ -1078,6 +1098,7 @@ fn main() -> i32 {
         network: String.create(),
         bluetooth: String.create(),
         notifications: false,
+        push: false,
         fonts: String.create(),
         fallbacks: String.create(),
     };
@@ -1086,6 +1107,11 @@ fn main() -> i32 {
         let flag = Process.argument(i) ?? "";
         if (flag == "--notifications") {
             o.notifications = true; // a switch: no value follows
+            i += 1;
+            continue;
+        }
+        if (flag == "--push") {
+            o.push = true;
             i += 1;
             continue;
         }
