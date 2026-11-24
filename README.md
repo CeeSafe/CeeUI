@@ -329,6 +329,10 @@ runs the system's tools. The name, identifier and version default to the package
   sentence shown when the app first reaches a device on the local network (`NSLocalNetworkUsageDescription`).
 - **`--notifications`**, for an app that shows notifications (CeeSafe's `Notifications`, ADR 0243): Android's
   `POST_NOTIFICATIONS`, which Android 13 and later ask the user for; Apple's systems need nothing declared.
+- **`--extension DIR`** and **`--group ID`**, for an iOS app with a notification service extension (CeeSafe ADR 0246):
+  the package in DIR is built into `PlugIns/<name>Notifications.appex` (identifier `<id>.NotificationService`, the
+  extension point and CeeSafe's principal class in its Info.plist), signed with its own profile; the App Group they
+  share is in both entitlements (each App ID needs it in the developer portal).
 - **`--push`**, for an app that receives push notifications (CeeSafe's `Push`, ADR 0244): on an iOS device the app is
   signed with the profile's `aps-environment`, which only a profile of an explicit App ID with Push Notifications
   grants (a wildcard one has none, and the packer says so).

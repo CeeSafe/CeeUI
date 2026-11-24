@@ -24,6 +24,9 @@
 // `--notifications` is for an app that shows notifications (CeeSafe ADR 0243): Android's POST_NOTIFICATIONS, which
 // Android 13 and later ask the user for when the app calls Notifications.requestPermission. Apple's systems need
 // nothing declared.
+// `--extension DIR` builds the package in DIR as the app's notification service extension (iOS; CeeSafe ADR 0246),
+// PlugIns/<package>.appex, identifier <the app's>.NotificationService, signed with its own profile; `--group ID` is
+// an App Group the app and the extension share (their entitlements). With an extension the app needs the group.
 // `--push` is for an app that receives push notifications (CeeSafe ADR 0244): on an iOS device the app is signed with
 // the profile's `aps-environment`, which only a profile of an explicit App ID with Push Notifications has.
 //
@@ -49,6 +52,8 @@ struct Options {
     // Apple's NSBluetoothAlwaysUsageDescription; empty for an app that uses none
     notifications: bool; // --notifications: Android's POST_NOTIFICATIONS (CeeSafe ADR 0243)
     push: bool;          // --push: iOS's aps-environment, from the profile (CeeSafe ADR 0244)
+    group: String;       // --group: an App Group the app (and its extension) share (CeeSafe ADR 0246)
+    extension: String;   // --extension: the directory of a package built as the app's notification service extension
     fonts: String;       // --font, each on a line: the web target's fonts, in the app's order
     fallbacks: String;   // --fallback, each on a line: the web target's fallback fonts, in the order they are tried
 }
@@ -426,18 +431,98 @@ fn packIos(o: borrow Options, simulator: bool) -> i32 {
     if (!bundle(o, app.view(), true, flags[..], "ios", variable.view())) {
         return fail("the app was not built");
     }
+    var extensionPath = String.create();
+    if (o.extension.view().length > 0) {
+        extensionPath = cat([app.view(), "/PlugIns/", o.name.view(), "Notifications.appex"]);
+        let built = extensionBundle(o, extensionPath.view(), flags[..], variable.view());
+        if (built != 0) {
+            return built;
+        }
+    }
     if (simulator) {
         if (!run("codesign", ["-s", "-", "-f", app.view()])) {
             return fail("codesign failed");
         }
     } else {
-        let signed = signForDevice(o, app.view());
+        if (extensionPath.view().length > 0) {
+            let inner = signForDevice(o, extensionPath.view(), extensionId(o).view(), false);
+            if (inner != 0) {
+                return inner;
+            }
+        }
+        let signed = signForDevice(o, app.view(), o.id.view(), o.push);
         if (signed != 0) {
             return signed;
         }
     }
     Console.write("packed ");
     Console.writeLine(app.view());
+    return 0;
+}
+
+/// The extension's identifier: the app's and `.NotificationService`.
+fn extensionId(o: borrow Options) -> String => cat([o.id.view(), ".NotificationService"]);
+
+/// The notification service extension at `appex`: the package in `--extension`'s directory built into it (its
+/// executable named after the package), and its Info.plist, which names CeeSafe's principal class (ADR 0246). 0, or a
+/// failure's code.
+fn extensionBundle(o: borrow Options, appex: StringView, flags: Slice<StringView>, variable: StringView) -> i32 {
+    let toml = readText(cat([o.extension.view(), "/ceesafe.toml"]).view());
+    let binary = tomlValue(toml.view(), "name");
+    if (binary.view().length == 0) {
+        return fail2("--extension: no ceesafe.toml with a name in ", o.extension.view());
+    }
+    if (!freshDirectory(appex)) {
+        return fail("could not make the extension's bundle");
+    }
+    // The package is built in its own directory: a shell's `cd`, then ceesafec as for the app.
+    var command = String.create();
+    command.append("cd '")!;
+    command.append(o.extension.view())!;
+    command.append("' && ")!;
+    if (variable.length > 0) {
+        command.append("env '")!;
+        command.append(variable)!;
+        command.append("' ")!;
+    }
+    command.append("ceesafec build --windowed --target ios")!;
+    for (f in flags) {
+        command.append(" '")!;
+        command.append(f)!;
+        command.append("'")!;
+    }
+    command.append(" -o '")!;
+    command.append(Directory.current()!.view())!;
+    command.append("/")!;
+    command.append(appex)!;
+    command.append("/")!;
+    command.append(binary.view())!;
+    command.append("'")!;
+    if (!run("sh", ["-c", command.view()])) {
+        return fail("the extension was not built");
+    }
+    var p = String.create();
+    p.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n")!;
+    p.append("\t<key>CFBundleExecutable</key><string>")!;
+    p.append(xml(binary.view()).view())!;
+    p.append("</string>\n\t<key>CFBundleIdentifier</key><string>")!;
+    p.append(xml(extensionId(o).view()).view())!;
+    p.append("</string>\n\t<key>CFBundleName</key><string>")!;
+    p.append(xml(binary.view()).view())!;
+    // Apple requires an extension's versions to be its app's.
+    p.append("</string>\n\t<key>CFBundleShortVersionString</key><string>")!;
+    p.append(xml(o.version.view()).view())!;
+    p.append("</string>\n\t<key>CFBundleVersion</key><string>1</string>\n")!;
+    p.append("\t<key>CFBundlePackageType</key><string>XPC!</string>\n")!;
+    p.append("\t<key>MinimumOSVersion</key><string>17.0</string>\n")!;
+    p.append("\t<key>CFBundleSupportedPlatforms</key><array><string>iPhoneOS</string></array>\n")!;
+    p.append("\t<key>NSExtension</key><dict>\n")!;
+    p.append("\t\t<key>NSExtensionPointIdentifier</key><string>com.apple.usernotifications.service</string>\n")!;
+    p.append("\t\t<key>NSExtensionPrincipalClass</key><string>CeeSafeNotificationService</string>\n")!;
+    p.append("\t</dict>\n</dict>\n</plist>\n")!;
+    if (!writeText(cat([appex, "/Info.plist"]).view(), p.view())) {
+        return fail("could not write the extension's Info.plist");
+    }
     return 0;
 }
 
@@ -538,14 +623,15 @@ fn findProfile(id: StringView) -> Profile {
 }
 
 /// Signs the bundle at `app` for a device: the profile inside it, and the entitlements the profile's app needs.
-fn signForDevice(o: borrow Options, app: StringView) -> i32 {
-    var profilePath = text(o.profile.view());
+fn signForDevice(o: borrow Options, app: StringView, id: StringView, push: bool) -> i32 {
+    // --profile names the app's; an extension's is found as a default app's is.
+    var profilePath = if (id == o.id.view()) text(o.profile.view()) else String.create();
     var appId = String.create();
     if (profilePath.view().length > 0) {
         let plist = output("security", ["cms", "-D", "-i", profilePath.view()]);
         appId = plistString(plist.view(), "application-identifier");
     } else {
-        let p = findProfile(o.id.view());
+        let p = findProfile(id);
         profilePath = text(p.path.view());
         appId = text(p.appId.view());
     }
@@ -554,7 +640,7 @@ fn signForDevice(o: borrow Options, app: StringView) -> i32 {
         null => {
             return fail2(
                 "no provisioning profile on this Mac fits ",
-                o.id.view(),
+                id,
             ) + fail("  build any app for the device in Xcode once (it makes a wildcard profile), or pass --profile");
         }
     };
@@ -591,7 +677,7 @@ fn signForDevice(o: borrow Options, app: StringView) -> i32 {
     }
     // Push (--push): the environment the profile grants, "development" or "production"; a wildcard profile grants none.
     var apsEnvironment = String.create();
-    if (o.push) {
+    if (push) {
         let plist = output("security", ["cms", "-D", "-i", profilePath.view()]);
         apsEnvironment = plistString(plist.view(), "aps-environment");
         if (apsEnvironment.view().length == 0) {
@@ -601,7 +687,7 @@ fn signForDevice(o: borrow Options, app: StringView) -> i32 {
                 );
         }
     }
-    let fullId = cat([team, ".", o.id.view()]);
+    let fullId = cat([team, ".", id]);
     var e = String.create();
     e.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n")!;
     e.append("\t<key>application-identifier</key><string>")!;
@@ -613,6 +699,13 @@ fn signForDevice(o: borrow Options, app: StringView) -> i32 {
         e.append("\t<key>aps-environment</key><string>")!;
         e.append(xml(apsEnvironment.view()).view())!;
         e.append("</string>\n")!;
+    }
+    if (o.group.view().length > 0) {
+        // The App Group (--group): iOS also takes it as a keychain access group the app and its extension share
+        // (CeeSafe ADR 0246), without its being listed in keychain-access-groups.
+        e.append("\t<key>com.apple.security.application-groups</key><array><string>")!;
+        e.append(xml(o.group.view()).view())!;
+        e.append("</string></array>\n")!;
     }
     e.append("\t<key>keychain-access-groups</key><array><string>")!;
     e.append(xml(fullId.view()).view())!;
@@ -960,7 +1053,7 @@ fn usage() -> i32 {
     Console.writeErrorLine(
         "           [--keystore FILE] [--keystore-pass PASSWORD] [--network WHY] [--bluetooth WHY]",
     );
-    Console.writeErrorLine("           [--notifications] [--push]");
+    Console.writeErrorLine("           [--notifications] [--push] [--group ID] [--extension DIR]");
     Console.writeErrorLine("           [--font FILE]... [--fallback FILE]...");
     Console.writeErrorLine("run in the app's package directory; the result is under out/pack");
     Console.writeErrorLine(
@@ -1099,6 +1192,8 @@ fn main() -> i32 {
         bluetooth: String.create(),
         notifications: false,
         push: false,
+        group: String.create(),
+        extension: String.create(),
         fonts: String.create(),
         fallbacks: String.create(),
     };
@@ -1137,6 +1232,10 @@ fn main() -> i32 {
             o.storePass = text(value);
         } else if (flag == "--network") {
             o.network = text(value);
+        } else if (flag == "--group") {
+            o.group = text(value);
+        } else if (flag == "--extension") {
+            o.extension = text(value);
         } else if (flag == "--bluetooth") {
             o.bluetooth = text(value);
         } else if (flag == "--fallback") {
