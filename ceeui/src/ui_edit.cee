@@ -73,6 +73,29 @@ impl<region r> Ui<r> {
     /// Whether the system clipboard had text when the host last looked (`setClipboardHasText`).
     public fn clipboardHasText(borrow this) -> bool => this.clipboardText;
 
+    /// Hosts: whether a menu that offers Paste opened (a text field's, on a long press as on a secondary click), so
+    /// the clipboard is to be read for it now; true once a time.
+    public fn takeClipboardWanted(borrow mut this) -> bool {
+        let wanted = this.clipboardWanted;
+        this.clipboardWanted = false;
+        return wanted;
+    }
+
+    /// The text field whose own edit menu is open (0: none), and where (Controls.textField).
+    fn fieldMenuOwner(borrow this) -> u32 => this.fieldMenu;
+
+    fn openFieldMenu(borrow mut this, field: u32, x: f32, y: f32) {
+        this.fieldMenu = field;
+        this.fieldMenuX = x;
+        this.fieldMenuY = y;
+        this.clipboardWanted = true;
+        this.requestFrame();
+    }
+
+    fn closeFieldMenu(borrow mut this) {
+        this.fieldMenu = 0;
+    }
+
     /// Hosts: the user gave editing command `c` this frame (the focused text field acts on it).
     public fn editCommand(borrow mut this, c: EditCommand) {
         this.commands |= commandBit(c);

@@ -38,7 +38,6 @@ fn showcase(ui: borrow mut Ui, app: borrow mut App) {
 }
 
 /// One frame, then the one-frame input edges are consumed (as the C test's frame()).
-
 fn step(ui: borrow mut Ui, platform: borrow mut FakePlatform, app: borrow mut App) -> Result<void, TestFailure> {
     ui.begin(mut platform);
     showcase(mut ui, mut app);
@@ -396,7 +395,12 @@ fn anOpenDropdownTakesTheClickFromWhatItCovers() -> Result<void, TestFailure> {
 
 /// A frame of the showcase in which a hit of Save focuses the name field again, as a chat's Send button keeps its
 /// line; whether the name field had the focus while the frame was built, and whether Save was hit.
-fn stepKeeping(ui: borrow mut Ui, platform: borrow mut FakePlatform, app: borrow mut App, keep: bool) -> Result<[bool; 2], TestFailure> {
+fn stepKeeping(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    app: borrow mut App,
+    keep: bool,
+) -> Result<[bool; 2], TestFailure> {
     ui.begin(mut platform);
     showcase(mut ui, mut app);
     let focusedInFrame = ui.hasFocusNamed("name");
@@ -641,4 +645,51 @@ fn theKeyboardAloneReachesAndWorksEveryControl() -> Result<void, TestFailure> {
     keyFrame(mut ui, mut platform, mut app)?;
     Check.isTrue(ui.hasFocusNamed("name"), "and Tab comes round to the field")?;
     return Ok();
+}
+
+/// A text field's own edit menu, as a system's has: a secondary press (on a phone, a long press) opens it over the
+/// field, and a choice acts on the field, which keeps the focus (a phone keeps its keyboard).
+@test
+fn aTextFieldsMenuOpensOnASecondaryPressAndActs() -> Result<void, TestFailure> {
+    var storage = Vector<u8>.create();
+    let _ = storage.resize(1048576, 0);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var platform = platformAt(800.0, 600.0, -1.0, -1.0);
+    var app = KeyApp { text: [0u8; 16], length: 0, edit: TextEdit.at(0), presses: 0, on: false };
+    for (i in 0..11) {
+        app.text[i] = "hello world".bytes()[i];
+    }
+    app.length = 11;
+    keyFrame(mut ui, mut platform, mut app)?;
+    Check.isTrue(ui.boxOf("ceeui-field-menu") == null, "no menu at first")?;
+
+    // A secondary press over the field: it takes the focus, and its menu opens where the press was.
+    let field = ui.boxOf("name")!;
+    platform.pointerState.position = Vec2 { x: field.x + 20.0, y: field.y + field.h / 2.0 };
+    platform.pointerState.secondaryPressed = true;
+    keyFrame(mut ui, mut platform, mut app)?;
+    platform.pointerState.secondaryPressed = false;
+    keyFrame(mut ui, mut platform, mut app)?;
+    let menu = match (ui.boxOf("ceeui-field-menu")) {
+        Some(b) => b,
+        null => { return Check.fail("the field's menu opens"); }
+    };
+    Check.isTrue(ui.hasFocusNamed("name"), "with the field focused")?;
+    Check.isTrue(menu.x >= field.x + 19.0 && menu.y >= field.y, "at the press")?;
+
+    // Select All, the last of its five items: the field selects everything, and keeps the focus after the release.
+    platform.pointerState.position = Vec2 { x: menu.x + 40.0, y: menu.y + menu.h - 12.0 };
+    platform.pointerState.pressed = true;
+    platform.pointerState.down = true;
+    keyFrame(mut ui, mut platform, mut app)?;
+    platform.pointerState.pressed = false;
+    platform.pointerState.down = false;
+    platform.pointerState.released = true;
+    keyFrame(mut ui, mut platform, mut app)?;
+    platform.pointerState.released = false;
+    keyFrame(mut ui, mut platform, mut app)?;
+    Check.isTrue(app.edit.from() == 0 && app.edit.to() == 11, "Select All selected the field's text")?;
+    Check.isTrue(ui.hasFocusNamed("name"), "and the field kept the focus")?;
+    return Check.isTrue(ui.boxOf("ceeui-field-menu") == null, "and the menu closed");
 }

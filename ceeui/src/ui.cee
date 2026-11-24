@@ -125,6 +125,14 @@ public struct Ui<region r> {
     commands: u32;
     /// Whether the system clipboard has text, as the host last found (an edit menu enables Paste by it).
     clipboardText: bool;
+    /// A text field's own edit menu (ui_edit.cee): the field it is open for (0: none), and where.
+    fieldMenu: u32;
+    fieldMenuX: f32;
+    fieldMenuY: f32;
+    /// The field whose menu took a choice: it keeps the focus through that press's release (a phone keeps its keyboard).
+    fieldMenuChoice: u32;
+    /// Set when a menu that offers Paste opened: the host reads the clipboard for it (takeClipboardWanted).
+    clipboardWanted: bool;
     pasted: SliceMut<r, u8>;
     pastedLength: usize;
     copied: SliceMut<r, u8>;
@@ -265,6 +273,11 @@ public struct Ui<region r> {
             focusables: FixedList<u32>.over(focusables),
             commands: 0,
             clipboardText: false,
+            fieldMenu: 0,
+            fieldMenuX: 0.0,
+            fieldMenuY: 0.0,
+            fieldMenuChoice: 0,
+            clipboardWanted: false,
             pasted: pasted,
             pastedLength: 0,
             copied: copied,

@@ -600,6 +600,12 @@ if (ui.action("mark-bold")) {
 
 ## The edit menu
 
+A text field (`Controls.textField`, `passwordField`) has this menu of its own, as a system's text field has: a
+secondary click opens it at the pointer, and on a touch screen a long press opens it beside the field, first
+selecting the word under the finger when nothing is selected. Copy and Cut are off in a password field. The field keeps
+the focus through a choice, so a phone keeps its keyboard. The host reads the clipboard when the menu opens, for Paste
+(`Ui.takeClipboardWanted`; `ceeui-desktop`'s pane does).
+
 `Controls.editMenu` is a context menu for text: Cut, Copy, Paste, Delete and Select All. A choice runs the
 action its shortcut does, and the focused field or editor acts on it the next frame. It returns `true` when an
 item was chosen.

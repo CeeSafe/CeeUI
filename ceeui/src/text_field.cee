@@ -292,7 +292,9 @@ impl Controls {
                 }
                 null => {}
             }
-        } else if (ui.hasFocus(h) && ui.releasedOutside(h)) {
+        } else if (ui.hasFocus(h) && ui.releasedOutside(h) && ui.fieldMenuChoice != h &&
+            !(ui.fieldMenuOwner() == h && ui.overHash(hashId("ceeui-field-menu")))) {
+            // (A choice in the field's own menu keeps the focus: the field acts on it the next frame.)
             // A click or a tap anywhere else leaves the field when it ends (on a phone, that hides the keyboard), at
             // the frame's end: what was tapped may focus the field again first (a Send button). A field that was
             // pressed took the focus at the press.
@@ -308,6 +310,40 @@ impl Controls {
         }
         if (p.released && ui.captured() == h) {
             ui.capture(0);
+        }
+        if (p.released && ui.fieldMenuChoice == h) {
+            ui.fieldMenuChoice = 0;
+        }
+        // Its edit menu, as a system's text field has: a secondary click, or a long press on a touch screen, which
+        // first selects the word under the finger when nothing is selected (the press put the caret there).
+        if (ui.secondaryPressedOn(h)) {
+            ui.setFocus(h);
+            if (ui.touchDriven && edit.anchor == edit.caret && !masked) {
+                let w = wordAround(buf[0..len], edit.caret);
+                // Only a word: between words (spaces) the caret stays where the finger put it, as a phone's own.
+                var word = false;
+                for (b in buf[w[0]..w[1]]) {
+                    word = word || (b != ' ' && b != '\t');
+                }
+                if (word) {
+                    edit.anchor = w[0];
+                    edit.caret = w[1];
+                }
+            }
+            // With a mouse, at the pointer. On a touch screen, beside the field rather than under the finger, as a
+            // phone's own: above it, or below it when the screen has no room above (its five items, about 190 points).
+            var mx = p.position.x;
+            var my = p.position.y;
+            if (ui.touchDriven) {
+                match (box) {
+                    Some(b) => {
+                        mx = b.x;
+                        my = if (b.y >= 200.0) b.y - 194.0 else b.y + b.h + 4.0;
+                    }
+                    null => {}
+                }
+            }
+            ui.openFieldMenu(h, mx, my);
         }
         // A word the input method was still composing here when the focus left: it is the field's text, as if
         // committed before the focus moved (a phone's keyboard composes a word until a space or a tap elsewhere).
@@ -495,6 +531,25 @@ impl Controls {
             }
         }
         ui.close();
+        if (ui.fieldMenuOwner() == h) {
+            // Cut, Copy and Delete with a selection (none in a password field), Paste when the clipboard has text;
+            // a choice acts on this field the next frame. A press elsewhere, or the field losing the focus, closes it.
+            var open = ui.hasFocus(h);
+            let chose = Controls.editMenu(
+                mut ui,
+                "ceeui-field-menu",
+                mut open,
+                ui.fieldMenuX,
+                ui.fieldMenuY,
+                edit.selects() && !masked,
+            );
+            if (chose) {
+                ui.fieldMenuChoice = h;
+            }
+            if (!open) {
+                ui.closeFieldMenu();
+            }
+        }
         return changed;
     }
 }
