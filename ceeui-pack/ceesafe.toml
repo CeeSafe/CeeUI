@@ -2,5 +2,5 @@
 name = "ceeui_pack"
 version = "0.1.0"
 kind = "executable"
-ceesafec = ">=0.95.18" # out-of-memory = "panic", with a Result kept where it is used as one (CeeSafe ADR 0261)
+ceesafec = ">=0.95.21" # --extension, --camera, --microphone, --save-photos: the runtime of CeeSafe ADRs 0263 and 0265; out-of-memory = "panic" (ADR 0261)
 out-of-memory = "panic" # an allocation that fails stops the program; `?` still passes it on
