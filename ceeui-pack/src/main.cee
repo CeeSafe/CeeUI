@@ -809,13 +809,17 @@ fn androidManifest(o: borrow Options) -> String {
     m.append("        <category android:name=\"android.intent.category.LAUNCHER\"/>\n      </intent-filter>\n");
     m.append("    </activity>\n");
     if (gradle) {
-        // The push that comes while the app is not running (CeeSafe ADR 0249): src/PushService.java, in a process of
-        // its own, where it may start the app's notification extension (CeeSafe ADR 0263).
-        m.append("    <service android:name=\"org.ceeui.pack.PushService\" android:exported=\"false\"");
-        m.append(" android:process=\":push\">\n");
+        // The push that comes while the app is not running (CeeSafe ADR 0249): src/PushService.java, in the app's
+        // process, where Firebase's receiver hands it the message.
+        m.append("    <service android:name=\"org.ceeui.pack.PushService\" android:exported=\"false\">\n");
         m.append("      <intent-filter>\n");
         m.append("        <action android:name=\"com.google.firebase.MESSAGING_EVENT\"/>\n");
         m.append("      </intent-filter>\n    </service>\n");
+        if (o.extension.view().length > 0) {
+            // The notification extension's process (CeeSafe ADR 0263): src/ExtensionHost.java, which PushService binds.
+            m.append("    <service android:name=\"org.ceeui.pack.ExtensionHost\" android:exported=\"false\"");
+            m.append(" android:process=\":push\"/>\n");
+        }
     }
     m.append("  </application>\n</manifest>\n");
     return m;
@@ -825,6 +829,7 @@ fn androidManifest(o: borrow Options) -> String {
 /// app's notification extension (CeeSafe ADR 0263), whose natives the extension's runtime registers.
 const PUSH_SERVICE: StringView = embedText("PushService.java");
 const EXTENSION_CLASS: StringView = embedText("Extension.java");
+const EXTENSION_HOST: StringView = embedText("ExtensionHost.java");
 
 /// The Gradle that builds an APK with Firebase, and the Android Gradle plugin and Firebase Messaging it uses: the
 /// wrapper pins the Gradle (fetched once into ~/.gradle), so a build does not depend on the one a machine has.
@@ -897,7 +902,8 @@ fn gradleBuild(o: borrow Options, sdk: StringView, base: StringView) -> i32 {
         ) ||
         !writeText(cat([project, "/local.properties"]).view(), cat(["sdk.dir=", sdk, "\n"]).view()) ||
         !writeText(cat([java.view(), "/PushService.java"]).view(), PUSH_SERVICE) ||
-        !writeText(cat([ceesafeJava.view(), "/Extension.java"]).view(), EXTENSION_CLASS)) {
+        !writeText(cat([ceesafeJava.view(), "/Extension.java"]).view(), EXTENSION_CLASS) ||
+        !writeText(cat([java.view(), "/ExtensionHost.java"]).view(), EXTENSION_HOST)) {
         return fail("could not write the Gradle project");
     }
     let wrapperProperties = cat([project, "/gradle/wrapper/gradle-wrapper.properties"]);

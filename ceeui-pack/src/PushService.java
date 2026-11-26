@@ -1,46 +1,53 @@
 // SPDX-License-Identifier: MIT
 // The Firebase messaging service of an APK that ceeui-pack builds with --firebase (CeeSafe ADR 0249): it is compiled
 // into the APK itself, since the system starts it for a push while the app is not running, before any of the
-// program's code is loaded. It runs in a process of its own (":push", CeeSafe ADR 0263). A push is data only (the
-// server's title and body). While the app's program runs (it holds files/ceesafe-program.lock; in this process, the
-// system property ceesafe.program), the push is left to it: the program has the message over its own connection and
-// shows it itself, decrypted. Otherwise the app's notification extension, when the APK has one (--extension), is
-// given it to show its real content, decrypted (8 seconds); failing that it is shown as it came, on the channel
-// CeeSafe's Notifications use ("ceesafe", named after the app), and a tap opens the app. The token is the program's
-// to ask for (CeeSafe's Push.register), so a new one is sent at the app's next start.
+// program's code is loaded. It runs in the app's own process, where Firebase's receiver hands it the message (held in
+// that process's memory, so a service in another process would never see it). A push is data only (the server's title
+// and body). While the program runs in this process (the system property ceesafe.program, which CeeSafe's runtime
+// sets), the push is left to it: the program has the message over its own connection and shows it itself, decrypted.
+// Otherwise, in an APK with a notification extension (--extension, CeeSafe ADR 0263), the push is sent to
+// ExtensionHost in the process ":push", where the extension shows its real content, decrypted, within 8 seconds;
+// failing that it is shown as it came, on the channel CeeSafe's Notifications use ("ceesafe", named after the app),
+// and a tap opens the app. The token is the program's to ask for (CeeSafe's Push.register), so a new one is sent at
+// the app's next start.
 package org.ceeui.pack;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.ServiceConnection;
+import android.content.pm.PackageManager;
 import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.HandlerThread;
+import android.os.IBinder;
+import android.os.Message;
+import android.os.Messenger;
+import android.os.RemoteException;
+import android.util.Log;
 
 import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
 
-import org.ceesafe.Extension;
 import org.json.JSONObject;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.RandomAccessFile;
-import java.nio.channels.FileChannel;
-import java.nio.channels.FileLock;
-import java.nio.channels.OverlappingFileLockException;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class PushService extends FirebaseMessagingService {
     private static final String CHANNEL = "ceesafe";
-
-    /** How long the extension has to show a push before it is shown as it came (CeeSafe ADR 0263 §6.2). */
-    private static final int EXTENSION_MILLISECONDS = 8000;
+    private static final String TAG = "ceesafe-push";
 
     @Override
     public void onMessageReceived(RemoteMessage message) {
-        if ("running".equals(System.getProperty("ceesafe.program")) || programRunning(this)) {
+        if ("running".equals(System.getProperty("ceesafe.program"))) {
             return;
         }
         Map<String, String> data = message.getData();
@@ -60,33 +67,74 @@ public final class PushService extends FirebaseMessagingService {
         String tag = conversation != null ? "push:" + conversation : "push";
         String shownTitle = title != null ? title : "";
         String shownBody = body != null ? body : "";
-        if (Extension.deliver(this, shownTitle, shownBody, new JSONObject(data).toString(), tag,
-                EXTENSION_MILLISECONDS)) {
+        if (extensionShows(this, shownTitle, shownBody, new JSONObject(data).toString(), tag)) {
+            Log.i(TAG, "a push shown by the app's notification extension");
             return;
         }
         show(this, tag, shownTitle, shownBody);
     }
 
     /**
-     * Whether the app's program runs, in its own process: CeeSafe's runtime holds a lock on files/ceesafe-program.lock
-     * from its start until its process ends (CeeSafe ADR 0263 §2.4). A lock taken here for a moment says it is free.
+     * Whether the app's notification extension showed the push: it is sent to ExtensionHost (in ":push"), bound for the
+     * call, and its answer waited for a little longer than the extension's time. False without an extension.
      */
-    private static boolean programRunning(Context context) {
-        File file = new File(context.getFilesDir(), "ceesafe-program.lock");
-        if (!file.exists()) {
-            return false;
+    private static boolean extensionShows(Context context, String title, String body, String json, String tag) {
+        ComponentName host = new ComponentName(context, ExtensionHost.class);
+        try {
+            context.getPackageManager().getServiceInfo(host, 0);
+        } catch (PackageManager.NameNotFoundException e) {
+            return false; // an APK without --extension
         }
-        try (RandomAccessFile access = new RandomAccessFile(file, "rw"); FileChannel channel = access.getChannel()) {
-            FileLock lock = channel.tryLock();
-            if (lock == null) {
-                return true;
+        final CountDownLatch answered = new CountDownLatch(1);
+        final AtomicBoolean result = new AtomicBoolean(false);
+        HandlerThread replies = new HandlerThread("ceesafe-push-reply");
+        replies.start();
+        final Messenger replyTo = new Messenger(new Handler(replies.getLooper()) {
+            @Override
+            public void handleMessage(Message message) {
+                result.set(message.arg1 == 1);
+                answered.countDown();
             }
-            lock.release();
+        });
+        final Bundle push = new Bundle();
+        push.putString("title", title);
+        push.putString("body", body);
+        push.putString("json", json);
+        push.putString("tag", tag);
+        ServiceConnection connection = new ServiceConnection() {
+            @Override
+            public void onServiceConnected(ComponentName name, IBinder binder) {
+                Message message = Message.obtain(null, ExtensionHost.PUSH);
+                message.setData(push);
+                message.replyTo = replyTo;
+                try {
+                    new Messenger(binder).send(message);
+                } catch (RemoteException e) {
+                    answered.countDown();
+                }
+            }
+
+            @Override
+            public void onServiceDisconnected(ComponentName name) {
+                answered.countDown(); // the extension's process ended
+            }
+        };
+        try {
+            if (!context.bindService(new Intent().setComponent(host), connection, Context.BIND_AUTO_CREATE)) {
+                return false;
+            }
+            try {
+                // The host's process may need starting, and its library loading, before the extension's own time.
+                answered.await(ExtensionHost.MILLISECONDS + 3000, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            context.unbindService(connection);
+            return result.get();
+        } catch (RuntimeException e) {
             return false;
-        } catch (OverlappingFileLockException e) {
-            return true;
-        } catch (IOException e) {
-            return false;
+        } finally {
+            replies.quitSafely();
         }
     }
 
