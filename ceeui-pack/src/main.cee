@@ -820,7 +820,8 @@ fn androidManifest(o: borrow Options) -> String {
     }
     m.append("  <application android:label=\"")!;
     m.append(xml(o.name.view()).view());
-    m.append(if (gradle) "\" android:hasCode=\"true\"" else "\" android:hasCode=\"false\"");
+    // Every APK has code: the provider through which the app's files go to another app (CeeSafe ADR 0268).
+    m.append("\" android:hasCode=\"true\"");
     m.append(" android:extractNativeLibs=\"true\">\n");
     // The activity is kept through a rotation, a new size and the keyboard (CeeSafe ADR 0156 §2.3): destroyed, the
     // program would end with it.
@@ -848,6 +849,11 @@ fn androidManifest(o: borrow Options) -> String {
             m.append(" android:process=\":push\"/>\n");
         }
     }
+    // The app's files for another app (CeeSafe ADR 0268): src/Files.java, which ShareSheet and Launcher.openFile hand
+    // as content://<package>.ceesafe.files/<path>, with a grant to read that one URI.
+    m.append("    <provider android:name=\"org.ceesafe.Files\" android:authorities=\"");
+    m.append(xml(o.id.view()).view());
+    m.append(".ceesafe.files\"\n              android:exported=\"false\" android:grantUriPermissions=\"true\"/>\n");
     m.append("  </application>\n</manifest>\n");
     return m;
 }
@@ -857,6 +863,8 @@ fn androidManifest(o: borrow Options) -> String {
 const PUSH_SERVICE: StringView = embedText("PushService.java");
 const EXTENSION_CLASS: StringView = embedText("Extension.java");
 const EXTENSION_HOST: StringView = embedText("ExtensionHost.java");
+/// The content provider every APK carries (CeeSafe ADR 0268).
+const FILES_PROVIDER: StringView = embedText("Files.java");
 
 /// The Gradle that builds an APK with Firebase, and the Android Gradle plugin and Firebase Messaging it uses: the
 /// wrapper pins the Gradle (fetched once into ~/.gradle), so a build does not depend on the one a machine has.
@@ -930,7 +938,8 @@ fn gradleBuild(o: borrow Options, sdk: StringView, base: StringView) -> i32 {
         !writeText(cat([project, "/local.properties"]).view(), cat(["sdk.dir=", sdk, "\n"]).view()) ||
         !writeText(cat([java.view(), "/PushService.java"]).view(), PUSH_SERVICE) ||
         !writeText(cat([ceesafeJava.view(), "/Extension.java"]).view(), EXTENSION_CLASS) ||
-        !writeText(cat([java.view(), "/ExtensionHost.java"]).view(), EXTENSION_HOST)) {
+        !writeText(cat([java.view(), "/ExtensionHost.java"]).view(), EXTENSION_HOST) ||
+        !writeText(cat([ceesafeJava.view(), "/Files.java"]).view(), FILES_PROVIDER)) {
         return fail("could not write the Gradle project");
     }
     let wrapperProperties = cat([project, "/gradle/wrapper/gradle-wrapper.properties"]);
@@ -1082,8 +1091,37 @@ fn packAndroid(o: borrow Options) -> i32 {
         )) {
             return fail("aapt2 failed");
         }
-        // The libraries go into the archive under lib/<abi>/, which zip takes from the directory it runs in.
-        if (!run("sh", ["-c", "cd out/pack/android && zip -q -r base.apk lib"])) {
+        // The provider (CeeSafe ADR 0268), compiled with javac against the platform and made a classes.dex by d8.
+        let source = cat([stage, "/java/org/ceesafe/Files.java"]);
+        let classes = cat([stage, "/classes"]);
+        if (!run("mkdir", ["-p", cat([stage, "/java/org/ceesafe"]).view(), classes.view()]) ||
+            !writeText(source.view(), FILES_PROVIDER)) {
+            return fail("could not write the provider's source");
+        }
+        if (!run(
+            "javac",
+            ["--release", "11", "-Xlint:-options", "-classpath", jar.view(), "-d", classes.view(), source.view()],
+        )) {
+            return fail("javac failed (is a JDK on PATH?)");
+        }
+        if (!run(
+            cat([tools.view(), "/d8"]).view(),
+            [
+                "--release",
+                "--min-api",
+                "25",
+                "--lib",
+                jar.view(),
+                "--output",
+                stage,
+                cat([classes.view(), "/org/ceesafe/Files.class"]).view(),
+            ],
+        )) {
+            return fail("d8 failed");
+        }
+        // The libraries go into the archive under lib/<abi>/, and the dex at its root, which zip takes from the
+        // directory it runs in.
+        if (!run("sh", ["-c", "cd out/pack/android && zip -q -r base.apk lib classes.dex"])) {
             return fail("zip failed");
         }
     }
