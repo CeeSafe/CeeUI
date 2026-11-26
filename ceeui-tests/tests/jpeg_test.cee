@@ -96,6 +96,69 @@ fn decodesEveryJpegFixtureAsLibjpegDoes() -> Result<void, TestFailure> {
     return Check.equalU64(9, checked);
 }
 
+/// At an eighth of the size (decodeImageScaled with 8, a thumbnail's), each pixel is its 8 by 8 block's average:
+/// against the reference pixels averaged so, a channel differs by 6 at most on average (the rounding of a block's DC,
+/// and the edges a block shares with the next where chroma is subsampled or the image is turned).
+@test
+fn anEighthOfAJpegIsItsBlocksAverages() -> Result<void, TestFailure> {
+    let cases = readFile("fixtures/images/jpeg/cases.txt");
+    let text = StringView.fromUtf8(cases.view())!;
+    var checked: u64 = 0;
+    for (line in text.split("\n")) {
+        var parts = line.split(" ");
+        let name = parts.next() ?? "";
+        let w = decimal(parts.next() ?? "") as usize;
+        let h = decimal(parts.next() ?? "") as usize;
+        if (name.length == 0 || w == 0) {
+            continue;
+        }
+        let jpg = jpegFixture(name, ".jpg");
+        let rgb = jpegFixture(name, ".rgb");
+        let info = match (imageInfoScaled(jpg.view(), 8)) {
+            Ok(i) => i,
+            Err(_) => { return Check.fail(name); }
+        };
+        Check.isTrue(info.w == (w + 7) / 8 && info.h == (h + 7) / 8, name)?;
+        var pixels = zeros32(info.w * info.h);
+        var scratch = heap(info.scratchBytes + 1);
+        if (decodeImageScaled(jpg.view(), 8, mut pixels.viewMut(), mut scratch.viewMut()) is Err(_)) {
+            return Check.fail(name);
+        }
+        var total: u64 = 0;
+        var count: u64 = 0;
+        for (sy in 0..info.h) {
+            for (sx in 0..info.w) {
+                let p = pixels[sy * info.w + sx];
+                Check.isTrue(p >> 24 == 255, "opaque")?;
+                let mine = [p & 255, (p >> 8) & 255, (p >> 16) & 255];
+                for (c in 0usize..3) {
+                    var sum: u64 = 0;
+                    var n: u64 = 0;
+                    for (y in sy * 8..(sy * 8 + 8).min(h)) {
+                        for (x in sx * 8..(sx * 8 + 8).min(w)) {
+                            sum += rgb[(y * w + x) * 3 + c] as u64;
+                            n += 1;
+                        }
+                    }
+                    let theirs = (sum + n / 2) / n;
+                    let m = mine[c] as u64;
+                    total += if (m > theirs) m - theirs else theirs - m;
+                    count += 1;
+                }
+            }
+        }
+        if (total > count * 6) {
+            Console.write("  ");
+            Console.write(name);
+            Console.write(": the mean difference is over 6, in ");
+            Console.writeLine(count);
+            return Check.fail(name);
+        }
+        checked += 1;
+    }
+    return Check.equalU64(9, checked);
+}
+
 @test
 fn aDamagedJpegFailsWithoutAPanic() -> Result<void, TestFailure> {
     for (name in ["s420", "progressive", "restarts", "rotated"]) {

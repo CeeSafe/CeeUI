@@ -207,13 +207,18 @@ fn jpegFrame(b: Slice<u8>) -> Result<JpegFrame, ImageError> {
 }
 
 /// A JPEG's size as it is shown (turned as its orientation says), and the scratch `decodeJpeg` needs.
-fn jpegInfo(b: Slice<u8>) -> Result<ImageInfo, ImageError> {
+fn jpegInfo(b: Slice<u8>) -> Result<ImageInfo, ImageError> => jpegInfoScaled(b, 1);
+
+/// The same at 1/`scale` of its size (1 or 8: at an eighth, each block's average, its DC coefficient).
+fn jpegInfoScaled(b: Slice<u8>, scale: usize) -> Result<ImageInfo, ImageError> {
     let f = jpegFrame(b)?;
     let turned = f.orientation >= 5;
+    let w = (f.w + scale - 1) / scale;
+    let h = (f.h + scale - 1) / scale;
     return Ok(ImageInfo {
         kind: ImageKind.Jpeg,
-        w: if (turned) f.h else f.w,
-        h: if (turned) f.w else f.h,
+        w: if (turned) h else w,
+        h: if (turned) w else h,
         scratchBytes: f.scratch,
     });
 }
@@ -551,6 +556,63 @@ fn idctBlock(
     }
 }
 
+/// The block at `coefAt` as `nx` by `ny` averages of its samples (1, 2, 4 or 8 each way), into the plane at
+/// `sampleAt`, a row of `stride` bytes apart: the inverse DCT with each axis's basis summed over the pixels of a part,
+/// which is the part's average with no 8 by 8 transform made (an eighth of a JPEG's size, where a subsampled
+/// component needs more than its block's average).
+fn idctAverages(
+    scratch: SliceMut<u8>,
+    coefAt: usize,
+    sampleAt: usize,
+    stride: usize,
+    q: borrow [u16; 64],
+    table: borrow [i32; 64],
+    nx: usize,
+    ny: usize,
+) {
+    let gx = 8 / nx;
+    let gy = 8 / ny;
+    var shift: u32 = 24;
+    var g = gx * gy;
+    while (g > 1) {
+        shift += 1;
+        g /= 2;
+    }
+    // tmp[v * nx + i]: row v's coefficients against the x basis summed over part i.
+    var tmp = [0i64; 64];
+    for (v in 0usize..8) {
+        for (i in 0..nx) {
+            var sum: i64 = 0;
+            for (u in 0usize..8) {
+                let c = getCoef(scratch, coefAt + (v * 8 + u) * 2) * (q[v * 8 + u] as i32);
+                if (c == 0) {
+                    continue;
+                }
+                var k: i64 = 0;
+                for (x in i * gx..i * gx + gx) {
+                    k += table[u * 8 + x] as i64;
+                }
+                sum += (c as i64) * k;
+            }
+            tmp[v * nx + i] = sum;
+        }
+    }
+    for (j in 0..ny) {
+        for (i in 0..nx) {
+            var sum: i64 = 0;
+            for (v in 0usize..8) {
+                var k: i64 = 0;
+                for (y in j * gy..j * gy + gy) {
+                    k += table[v * 8 + y] as i64;
+                }
+                sum += tmp[v * nx + i] * k;
+            }
+            let value = truncate<i32>(down(sum + truncate<i64>(1u64 << (shift - 1)), shift)) + 128;
+            scratch[sampleAt + j * stride + i] = truncate<u8>(value.max(0).min(255));
+        }
+    }
+}
+
 /// One axis of a component's sampling at the image's pixel `p`: the two samples to blend and their weights, in
 /// quarters. A component at half the resolution is blended 3:1 from the two samples nearest the pixel's middle,
 /// as libjpeg's "fancy" upsampling does; one at full resolution is its own sample; other ratios take the nearest.
@@ -572,7 +634,8 @@ fn taps(p: usize, ratio: usize, extent: usize) -> Taps {
     return Taps { a: base, b: base, wa: 4, wb: 0 };
 }
 
-/// The sample of component `comp` at the image's pixel (`x`, `y`).
+/// The sample of component `comp` at the image's pixel (`x`, `y`), its plane `per` samples a block wide (8, or 1 at
+/// an eighth of the size).
 fn sampleAt(
     scratch: Slice<u8>,
     comp: borrow JpegComponent,
@@ -582,10 +645,16 @@ fn sampleAt(
     h: usize,
     hmax: usize,
     vmax: usize,
+    per: usize,
 ) -> i32 {
-    let stride = comp.blocksW * 8;
+    let stride = comp.blocksW * per;
     let rx = hmax / comp.hs;
     let ry = vmax / comp.vs;
+    if (per == 1) {
+        // At an eighth every component has one sample a pixel: a subsampled one's blocks were made as `rx` by `ry`
+        // averages (idctAverages).
+        return scratch[comp.sampleAt + y * comp.blocksW * rx + x] as i32;
+    }
     if (rx == 1 && ry == 1) {
         return scratch[comp.sampleAt + y * stride + x] as i32;
     }
@@ -613,7 +682,18 @@ fn turn(orientation: u32, x: usize, y: usize, w: usize, h: usize) -> [usize; 2] 
 
 /// Decodes a JPEG into `pixels` (`info.w * info.h`, as `jpegInfo` gives them: turned as the photo is meant to be
 /// seen), using `scratch` (`info.scratchBytes`).
-fn decodeJpeg(b: Slice<u8>, info: ImageInfo, pixels: SliceMut<u32>, scratch: SliceMut<u8>) -> Result<void, ImageError> {
+fn decodeJpeg(b: Slice<u8>, info: ImageInfo, pixels: SliceMut<u32>, scratch: SliceMut<u8>) -> Result<void, ImageError> =>
+    decodeJpegScaled(b, info, 1, mut pixels, mut scratch);
+
+/// The same at 1/`scale` of the size (1 or 8, as `jpegInfoScaled`): at an eighth, each block is one sample, its DC
+/// coefficient (the block's average), so no inverse DCT is done and an eighth of the pixels in each way are made.
+fn decodeJpegScaled(
+    b: Slice<u8>,
+    info: ImageInfo,
+    scale: usize,
+    pixels: SliceMut<u32>,
+    scratch: SliceMut<u8>,
+) -> Result<void, ImageError> {
     var f = jpegFrame(b)?;
     for (i in 0..f.scratch) {
         scratch[i] = 0;
@@ -787,38 +867,62 @@ fn decodeJpeg(b: Slice<u8>, info: ImageInfo, pixels: SliceMut<u32>, scratch: Sli
     if (scans == 0) {
         return Err(ImageError.Truncated);
     }
-    // Samples from coefficients, then colours.
+    // Samples from coefficients (each block's DC alone at an eighth of the size), then colours.
+    let eighth = scale == 8;
+    let per: usize = if (eighth) 1 else 8;
     let table = IDCT;
     for (c in 0..f.count) {
         let comp = f.comps[c];
-        let stride = comp.blocksW * 8;
+        // At an eighth a full component's block is its average, its DC; a subsampled one's is rx by ry averages.
+        let rx = if (eighth) f.hmax / comp.hs else 1;
+        let ry = if (eighth) f.vmax / comp.vs else 1;
+        let stride = comp.blocksW * per * rx;
         for (by in 0..comp.blocksH) {
             for (bx in 0..comp.blocksW) {
                 let block = by * comp.blocksW + bx;
-                idctBlock(
-                    mut scratch,
-                    comp.coefAt + block * 128,
-                    comp.sampleAt + by * 8 * stride + bx * 8,
-                    stride,
-                    quant[comp.tq],
-                    table,
-                );
+                if (eighth && rx == 1 && ry == 1) {
+                    let dc = getCoef(scratch, comp.coefAt + block * 128) * (quant[comp.tq][0] as i32);
+                    let value = truncate<i32>(down((dc as i64) + 4, 3)) + 128;
+                    scratch[comp.sampleAt + by * stride + bx] = truncate<u8>(value.max(0).min(255));
+                } else if (eighth) {
+                    idctAverages(
+                        mut scratch,
+                        comp.coefAt + block * 128,
+                        comp.sampleAt + by * ry * stride + bx * rx,
+                        stride,
+                        quant[comp.tq],
+                        table,
+                        rx,
+                        ry,
+                    );
+                } else {
+                    idctBlock(
+                        mut scratch,
+                        comp.coefAt + block * 128,
+                        comp.sampleAt + by * 8 * stride + bx * 8,
+                        stride,
+                        quant[comp.tq],
+                        table,
+                    );
+                }
             }
         }
     }
+    let w = if (eighth) (f.w + 7) / 8 else f.w;
+    let h = if (eighth) (f.h + 7) / 8 else f.h;
     let turned = f.orientation >= 5;
-    let outW = if (turned) f.h else f.w;
-    for (y in 0..f.h) {
-        for (x in 0..f.w) {
+    let outW = if (turned) h else w;
+    for (y in 0..h) {
+        for (x in 0..w) {
             var rgb = [0u32; 3];
             if (f.count == 1) {
                 let comp = f.comps[0];
-                let v = scratch[comp.sampleAt + y * comp.blocksW * 8 + x] as u32;
+                let v = scratch[comp.sampleAt + y * comp.blocksW * per + x] as u32;
                 rgb = [v, v, v];
             } else {
                 var ycc = [0i32; 3];
                 for (c in 0usize..3) {
-                    ycc[c] = sampleAt(scratch, f.comps[c], x, y, f.w, f.h, f.hmax, f.vmax);
+                    ycc[c] = sampleAt(scratch, f.comps[c], x, y, w, h, f.hmax, f.vmax, per);
                 }
                 // JFIF: YCbCr to RGB, in 16 fractional bits.
                 let cb = ycc[1] - 128;
@@ -834,8 +938,6 @@ fn decodeJpeg(b: Slice<u8>, info: ImageInfo, pixels: SliceMut<u32>, scratch: Sli
                 ];
             }
             // Where this stored pixel goes, as the orientation turns the photo (EXIF 2.32, tag 0x0112).
-            let w = f.w;
-            let h = f.h;
             let to = turn(f.orientation, x, y, w, h);
             pixels[to[1] * outW + to[0]] = packRgba(rgb[0], rgb[1], rgb[2], 255);
         }

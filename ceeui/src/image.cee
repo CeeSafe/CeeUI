@@ -79,6 +79,36 @@ public fn decodeImage(bytes: Slice<u8>, pixels: SliceMut<u32>, scratch: SliceMut
     return Ok(info);
 }
 
+/// What `bytes` holds and how big it is decoded at 1/`scale` of its size: 8 makes a JPEG an eighth of its size each
+/// way, far faster (no inverse DCT; a thumbnail's); any other scale, and any other kind of image, is its whole size.
+public fn imageInfoScaled(bytes: Slice<u8>, scale: usize) -> Result<ImageInfo, ImageError> {
+    let info = imageInfo(bytes)?;
+    return match (info.kind) {
+        ImageKind.Jpeg => jpegInfoScaled(bytes, if (scale == 8) 8 else 1),
+        _ => Ok(info),
+    };
+}
+
+/// Decodes `bytes` at 1/`scale` of its size (as `imageInfoScaled` says) into `pixels` (`info.w * info.h`) using
+/// `scratch` (`info.scratchBytes`).
+public fn decodeImageScaled(
+    bytes: Slice<u8>,
+    scale: usize,
+    pixels: SliceMut<u32>,
+    scratch: SliceMut<u8>,
+) -> Result<ImageInfo, ImageError> {
+    let info = imageInfoScaled(bytes, scale)?;
+    if (pixels.length < info.w * info.h || scratch.length < info.scratchBytes) {
+        return Err(ImageError.TooSmall);
+    }
+    match (info.kind) {
+        ImageKind.Bmp => { decodeBmp(bytes, info, mut pixels)?; }
+        ImageKind.Png => { decodePng(bytes, info, mut pixels, mut scratch)?; }
+        ImageKind.Jpeg => { decodeJpegScaled(bytes, info, if (scale == 8) 8 else 1, mut pixels, mut scratch)?; }
+    }
+    return Ok(info);
+}
+
 /// Decodes `bytes` into a new Raster image under `handle` (then `Style.image(handle, ...)` draws it).
 public fn loadImage(
     raster: borrow mut Raster,
