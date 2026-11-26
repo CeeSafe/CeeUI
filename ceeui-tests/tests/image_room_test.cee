@@ -82,6 +82,9 @@ fn aRendererWithoutBeginCountsItsFrames() -> Result<void, TestFailure> {
     Check.isTrue(!ras.useImage(7), "7 is not held")?;
     Check.isTrue(ras.missingImages().length == 1 && ras.missingImages()[0] == 7, "7 is missing")?;
     Check.isTrue(ras.addImage(3, 10, 10) && !holds(ras, 1) && holds(ras, 2), "1, not drawn, made room")?;
+    // The handles above IMAGE_HANDLE_LIMIT are the emoji's: a program's image there is refused, not taken for one.
+    Check.isTrue(ras.removeImage(3), "room for one more")?;
+    Check.isTrue(!ras.addImage(IMAGE_HANDLE_LIMIT + 1, 1, 1) && ras.addImage(IMAGE_HANDLE_LIMIT, 1, 1), "the limit")?;
     return Ok();
 }
 

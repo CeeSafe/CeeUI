@@ -913,6 +913,7 @@ public struct Style {
         s.props.icon = Icon { id: iconId, color: Color.hex(if (color == 0) DEFAULT_INK else color), stroke: stroke };
         return s;
     }
+    /// Draws image `handle` (Raster.addImage; 1 to IMAGE_HANDLE_LIMIT) to fill the element, tinted by its background.
     public fn image(this, handle: u32) -> Style {
         var s = this;
         s.props.image = handle;

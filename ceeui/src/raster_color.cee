@@ -9,8 +9,12 @@
 //   of paints: gradients, transforms, composites (version 1, raster_colr.cee; Segoe UI Emoji has both, and version
 //   1 is drawn). drawText draws them; a GPU host asks for the glyph as an image (colorGlyphImage).
 
-/// The first image handle a colour glyph takes; a program's own images use handles below it.
+/// The first image handle a colour glyph takes: a program's own images use handles from 1 to IMAGE_HANDLE_LIMIT.
 const COLOR_HANDLE_BASE: u32 = 0xC0000000;
+
+/// The largest handle a program's image may have (Raster.addImage, Style.image): the handles above it are the colour
+/// glyphs' (emoji), which the raster lets go of and draws again on its own.
+public const IMAGE_HANDLE_LIMIT: u32 = 0xBFFFFFFF;
 
 /// A colour glyph kept as an image: a bitmap the host supplied at a strike, or a COLR glyph drawn at a size (`strike`
 /// then holds its size in quarter pixels, with bit 31 set).
@@ -131,7 +135,7 @@ impl<region r> Raster<r> {
         for (attempt in 0..2) {
             let handle = COLOR_HANDLE_BASE | ((this.colorGeneration & 0x3FFF) << 16) |
                 (truncate<u32>(this.colorBitmaps.length()) & 0xFFFF);
-            if (this.colorBitmaps.length() < this.colorBitmaps.items.length && this.addImage(handle, w, h)) {
+            if (this.colorBitmaps.length() < this.colorBitmaps.items.length && this.placeImage(handle, w, h)) {
                 return handle;
             }
             if (attempt == 0) {

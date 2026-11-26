@@ -369,8 +369,17 @@ public struct Raster<region r> {
     /// it fit. Fill its pixels (straight RGBA8, bytes R, G, B, A) with `setImagePixel` or `imagePixelsMut`. An image
     /// already under `handle` is replaced. When there is no room, the program's images drawn longest ago are let go
     /// (never one the last two frames drew), and then the colour glyphs, until it fits; a frame that draws an image
-    /// let go names it in `missingImages`, for the program to add it again. False when it does not fit even so.
+    /// let go names it in `missingImages`, for the program to add it again. False when it does not fit even so, and
+    /// for a handle of 0 or above IMAGE_HANDLE_LIMIT (the colour glyphs').
     public fn addImage(borrow mut this, handle: u32, w: usize, h: usize) -> bool {
+        if (handle > IMAGE_HANDLE_LIMIT) {
+            return false;
+        }
+        return this.placeImage(handle, w, h);
+    }
+
+    /// addImage for any handle: a program's, or a colour glyph's (raster_color.cee).
+    fn placeImage(borrow mut this, handle: u32, w: usize, h: usize) -> bool {
         if (handle == 0 || w * h > this.imagePool.length) {
             return false;
         }
