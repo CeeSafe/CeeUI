@@ -12,7 +12,7 @@ fn colrRaster(memory: borrow FixedBufferAllocator) -> Raster? {
     if (font.length == 0) {
         return null;
     }
-    var ras = Raster.create(memory, RasterCapacity.of(100, 100))!;
+    var ras = Raster.create(memory, RasterCapacity.of(100, 100));
     if (!ras.loadFont(0, font.view())) {
         return null;
     }

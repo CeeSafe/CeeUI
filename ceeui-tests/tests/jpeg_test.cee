@@ -27,9 +27,9 @@ fn decimal(text: StringView) -> u64 {
 }
 
 fn zeros32(n: usize) -> Vector<u32> {
-    var v = Vector<u32>.withCapacity(n)!;
+    var v = Vector<u32>.withCapacity(n);
     for (i in 0..n) {
-        v.push(0)!;
+        v.push(0);
     }
     return v;
 }
@@ -109,9 +109,9 @@ fn aDamagedJpegFailsWithoutAPanic() -> Result<void, TestFailure> {
         var at: usize = 2;
         while (at < jpg.length) {
             for (value in [0u8, 0xFF, 0x7F, 0x01]) {
-                var copy = Vector<u8>.withCapacity(jpg.length)!;
+                var copy = Vector<u8>.withCapacity(jpg.length);
                 for (b in jpg.view()) {
-                    copy.push(b)!;
+                    copy.push(b);
                 }
                 copy[at] = value;
                 let _ = tryDecode(copy.view());

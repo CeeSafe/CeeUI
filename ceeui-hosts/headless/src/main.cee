@@ -39,7 +39,7 @@ fn readFile(path: Slice<u8>) -> Vector<u8> {
                     break;
                 }
                 for (i in 0usize..n) {
-                    bytes.push(chunk[i])!;
+                    bytes.push(chunk[i]);
                 }
             }
         }
@@ -144,10 +144,10 @@ fn main() -> i32 {
     var uiStorage = Vector<u8>.create();
     var rasterStorage = Vector<u8>.create();
     for (i in 0..8388608) {
-        uiStorage.push(0)!;
+        uiStorage.push(0);
     }
     for (i in 0..67108864 * scale * scale) {
-        rasterStorage.push(0)!;
+        rasterStorage.push(0);
     }
     let uiMemory = FixedBufferAllocator.over(mut uiStorage.viewMut());
     let rasterMemory = FixedBufferAllocator.over(mut rasterStorage.viewMut());
@@ -197,7 +197,7 @@ fn main() -> i32 {
             platform.beginFrame();
             ui.begin(mut platform);
             demoFrame(mut ui, mut app, raster);
-            ui.endFrame(mut platform, raster)!;
+            ui.endFrame(mut platform, raster);
             raster.begin(Color.hex(pageBg(ui)));
             ui.renderInto(mut raster);
             raster.finish();
@@ -219,7 +219,7 @@ fn main() -> i32 {
     let incremental = Environment.variable("CEEUI_INCREMENTAL") != null;
     var damageStorage = Vector<u8>.create();
     for (i in 0..(if (incremental) 4194304 else 65536)) {
-        damageStorage.push(0)!;
+        damageStorage.push(0);
     }
     let damageMemory = FixedBufferAllocator.over(mut damageStorage.viewMut());
     var damage = match (Damage.create(damageMemory, if (incremental) 16384 else 1)) {

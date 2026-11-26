@@ -32,9 +32,9 @@ extern "C" {
 }
 
 fn zeros(count: usize) -> Vector<u8> {
-    var v = Vector<u8>.withCapacity(count)!;
+    var v = Vector<u8>.withCapacity(count);
     for (i in 0..count) {
-        v.push(0)!;
+        v.push(0);
     }
     return v;
 }
@@ -54,7 +54,7 @@ fn readFile(path: StringView) -> Vector<u8> {
                     break;
                 }
                 for (i in 0usize..n) {
-                    bytes.push(chunk[i])!;
+                    bytes.push(chunk[i]);
                 }
             }
         }
@@ -102,12 +102,12 @@ impl Backend for TextRuns {
         match (command) {
             Command.Text(_, run) => {
                 for (b in text) {
-                    this.bytes.push(b)!;
+                    this.bytes.push(b);
                 }
-                this.ends.push(this.bytes.length)!;
-                this.fonts.push(run.fontId)!;
-                this.sizes.push(if (run.fontSize > 0.0) run.fontSize else 16.0)!;
-                this.spacings.push(run.letterSpacing)!;
+                this.ends.push(this.bytes.length);
+                this.fonts.push(run.fontId);
+                this.sizes.push(if (run.fontSize > 0.0) run.fontSize else 16.0);
+                this.spacings.push(run.letterSpacing);
             }
             _ => {}
         }
@@ -417,7 +417,7 @@ fn settle(
         platform.beginFrame();
         ui.begin(mut platform);
         demoFrame(mut ui, mut app, gpu.raster);
-        ui.endFrame(mut platform, gpu.raster)!;
+        ui.endFrame(mut platform, gpu.raster);
         platform.endFrame();
     }
 }
@@ -449,9 +449,9 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
     var systemFonts = SystemFonts.create();
     reference.setPixelRatio(ratio);
     gpu.raster.setPixelRatio(ratio);
-    var pixels = Vector<u32>.withCapacity((width * height) as usize)!;
+    var pixels = Vector<u32>.withCapacity((width * height) as usize);
     for (i in 0..width * height) {
-        pixels.push(0)!;
+        pixels.push(0);
     }
     Console.writeLine("tab        instances  skipped  raster ms  gpu ms  mean diff  >8 %     >32 %    max");
     var worst: f64 = 0.0;
@@ -534,9 +534,9 @@ fn compare(ui: borrow mut Ui, gpu: borrow mut GpuBackend, dir: StringView) -> i3
             return 1;
         }
     };
-    var full = Vector<u32>.withCapacity((width * height) as usize)!;
+    var full = Vector<u32>.withCapacity((width * height) as usize);
     for (i in 0..width * height) {
-        full.push(0)!;
+        full.push(0);
     }
     var mismatched = false;
     for (tab in 0usize..NAV_COUNT) {
@@ -642,7 +642,7 @@ fn report(
     var over8: u64 = 0;
     var over32: u64 = 0;
     var largest: u32 = 0;
-    var diff = Vector<u32>.withCapacity(a.length)!;
+    var diff = Vector<u32>.withCapacity(a.length);
     for (k in 0..a.length) {
         let d = channelDiff(a[k], b[k]);
         sum += d as u64;
@@ -654,7 +654,7 @@ fn report(
         }
         largest = largest.max(d);
         let shade = (d * 4).min(255);
-        diff.push(0xff000000u32 | shade | shade << 8 | shade << 16)!;
+        diff.push(0xff000000u32 | shade | shade << 8 | shade << 16);
     }
     let count = round<f64>(a.length);
     Console.write(tabName(tab));
@@ -1086,16 +1086,16 @@ fn channelDiff(a: u32, b: u32) -> u32 {
 
 fn pushLe(out: borrow mut Vector<u8>, v: u32, bytes: u32) {
     for (i in 0..bytes) {
-        out.push(truncate<u8>(v >> (8 * i)))!;
+        out.push(truncate<u8>(v >> (8 * i)));
     }
 }
 
 /// `pixels` as a top-down 32-bit BMP in `dir`, named for the tab and the renderer.
 fn writeImage(dir: StringView, tab: usize, what: StringView, pixels: Slice<u32>, w: u32, h: u32) {
-    var out = Vector<u8>.withCapacity((w * h * 4 + 122) as usize)!;
+    var out = Vector<u8>.withCapacity((w * h * 4 + 122) as usize);
     let size = w * h * 4;
-    out.push('B')!;
-    out.push('M')!;
+    out.push('B');
+    out.push('M');
     pushLe(mut out, 122 + size, 4);
     pushLe(mut out, 0, 4);
     pushLe(mut out, 122, 4);
@@ -1116,13 +1116,13 @@ fn writeImage(dir: StringView, tab: usize, what: StringView, pixels: Slice<u32>,
     pushLe(mut out, 0xFF000000, 4);
     pushLe(mut out, 0x73524742, 4); // LCS_sRGB
     for (i in 0..48) {
-        out.push(0)!;
+        out.push(0);
     }
     for (p in pixels) {
-        out.push(truncate<u8>(p >> 16))!;
-        out.push(truncate<u8>(p >> 8))!;
-        out.push(truncate<u8>(p))!;
-        out.push(truncate<u8>(p >> 24))!;
+        out.push(truncate<u8>(p >> 16));
+        out.push(truncate<u8>(p >> 8));
+        out.push(truncate<u8>(p));
+        out.push(truncate<u8>(p >> 24));
     }
     var path = [0u8; 512];
     var writer = TextWriter.create(mut path[..]);
@@ -1170,7 +1170,7 @@ fn bench(ui: borrow mut Ui, gpu: borrow mut GpuBackend, frames: u64) -> i32 {
         platform.beginFrame();
         ui.begin(mut platform);
         demoFrame(mut ui, mut app, gpu.raster);
-        ui.endFrame(mut platform, gpu.raster)!;
+        ui.endFrame(mut platform, gpu.raster);
         platform.endFrame();
         let t1 = nanos();
         gpu.begin(width, height, ratio);
@@ -1215,7 +1215,7 @@ fn bench(ui: borrow mut Ui, gpu: borrow mut GpuBackend, frames: u64) -> i32 {
         platform.beginFrame();
         ui.begin(mut platform);
         demoFrame(mut ui, mut app, gpu.raster);
-        ui.endFrame(mut platform, gpu.raster)!;
+        ui.endFrame(mut platform, gpu.raster);
         platform.endFrame();
         let clear = Color.hex(pageBg(ui));
         let boxes = damage.plan(ui, gpu.raster, clear, width as usize, height as usize, ratio);

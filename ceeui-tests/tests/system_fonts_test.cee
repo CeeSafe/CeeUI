@@ -16,7 +16,7 @@ fn systemFontsSupplyWhatTheLoadedOnesLack() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(100, 40);
     c.imagePixels = 4;
     c.fontBytes = 100663296;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
     Check.isTrue(!ras.covers(0, 0x4E2D), "Arial alone has no 中")?;
     var fonts = SystemFonts.create();
@@ -44,7 +44,7 @@ fn emojiComeInColourFromTheSystemsEmojiFont() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(120, 60);
     c.imagePixels = 262144;
     c.fontBytes = 100663296;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
     var fonts = SystemFonts.create();
     let text = "a\u{1F600}";
@@ -94,7 +94,7 @@ fn emojiSequencesBecomeOneGlyph() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(120, 60);
     c.imagePixels = 262144;
     c.fontBytes = 100663296;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
     var fonts = SystemFonts.create();
     let loaded = fonts.supply(mut ras, "\u{1F600}".bytes(), 0);
@@ -141,7 +141,7 @@ fn colourGlyphsMakeRoomForNewOnes() -> Result<void, TestFailure> {
     // Room for the program's image and only a few emoji at a time.
     c.imagePixels = 2048;
     c.fontBytes = 100663296;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
     Check.isTrue(ras.addImage(5, 4, 4), "the program's image fits")?;
     for (y in 0usize..4) {

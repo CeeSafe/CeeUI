@@ -34,13 +34,13 @@ fn samePixels(a: Slice<u32>, b: Slice<u32>) -> bool {
 fn twoWindowsShareOneRaster() -> Result<void, TestFailure> {
     var storage = heap(33554432);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ras = Raster.create(memory, capacity())!;
-    var uiA = Ui.create(memory, UiCapacity.of(32))!;
-    var uiB = Ui.create(memory, UiCapacity.of(32))!;
-    var damageA = Damage.create(memory, 64)!;
-    var damageB = Damage.create(memory, 64)!;
-    var frameA = RasterFrame.create(memory, 240 * 120)!;
-    var frameB = RasterFrame.create(memory, 240 * 120)!;
+    var ras = Raster.create(memory, capacity());
+    var uiA = Ui.create(memory, UiCapacity.of(32));
+    var uiB = Ui.create(memory, UiCapacity.of(32));
+    var damageA = Damage.create(memory, 64);
+    var damageB = Damage.create(memory, 64);
+    var frameA = RasterFrame.create(memory, 240 * 120);
+    var frameB = RasterFrame.create(memory, 240 * 120);
     var whole = Vector<u32>.create();
     var pa = platformAt(120.0, 60.0, -1.0, -1.0);
     var pb = platformAt(120.0, 60.0, -1.0, -1.0);
@@ -66,7 +66,7 @@ fn twoWindowsShareOneRaster() -> Result<void, TestFailure> {
     Check.isTrue(ras.takeFrame(mut frameA), "A's frame comes back")?;
     damageA.draw(mut ras, uiA, clear);
     for (p in ras.pixels()) {
-        whole.push(p)!;
+        whole.push(p);
     }
     // The same frame of A drawn whole gives the same pixels.
     damageA.invalidate();
@@ -105,9 +105,9 @@ fn paintImage(ras: borrow mut Raster, handle: u32, rgba: u32) {
 fn aPictureWhosePixelsChangeIsRedrawn() -> Result<void, TestFailure> {
     var storage = heap(33554432);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ras = Raster.create(memory, capacity())!;
-    var ui = Ui.create(memory, UiCapacity.of(32))!;
-    var damage = Damage.create(memory, 64)!;
+    var ras = Raster.create(memory, capacity());
+    var ui = Ui.create(memory, UiCapacity.of(32));
+    var damage = Damage.create(memory, 64);
     var platform = platformAt(120.0, 60.0, -1.0, -1.0);
     let clear = Color.hex(0x000000FF);
     let handle: u32 = 7;

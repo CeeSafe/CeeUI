@@ -79,7 +79,7 @@ fn rowShown(ui: borrow Ui, i: usize) -> bool {
 fn aVirtualListDrawsOnlyTheRowsInView() -> Result<void, TestFailure> {
     var storage = heap(4194304);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var ui = Ui.create(memory, UiCapacity.of(256));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var s = ListState { count: 1000000, selected: null, first: 0, last: 0 };
     listFrame(mut ui, mut platform, mut s)?;
@@ -98,7 +98,7 @@ fn aVirtualListDrawsOnlyTheRowsInView() -> Result<void, TestFailure> {
 fn aVirtualListSelectsWithThePointerAndTheKeys() -> Result<void, TestFailure> {
     var storage = heap(4194304);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var ui = Ui.create(memory, UiCapacity.of(256));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var s = ListState { count: 1000000, selected: null, first: 0, last: 0 };
     listFrame(mut ui, mut platform, mut s)?;
@@ -132,7 +132,7 @@ fn aVirtualListSelectsWithThePointerAndTheKeys() -> Result<void, TestFailure> {
 fn aVirtualListStartsTheKeysAtAnEnd() -> Result<void, TestFailure> {
     var storage = heap(4194304);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var ui = Ui.create(memory, UiCapacity.of(256));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var s = ListState { count: 50, selected: null, first: 0, last: 0 };
     listFrame(mut ui, mut platform, mut s)?;
@@ -152,7 +152,7 @@ fn aVirtualListStartsTheKeysAtAnEnd() -> Result<void, TestFailure> {
 fn aVirtualListIsAListOfAllItsRowsToAScreenReader() -> Result<void, TestFailure> {
     var storage = heap(4194304);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var ui = Ui.create(memory, UiCapacity.of(256));
     var platform = platformAt(300.0, 200.0, -1.0, -1.0);
     var s = ListState { count: 1000000, selected: null, first: 0, last: 0 };
     listFrame(mut ui, mut platform, mut s)?;

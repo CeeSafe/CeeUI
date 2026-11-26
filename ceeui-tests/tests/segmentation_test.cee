@@ -284,7 +284,7 @@ fn layOut(t: borrow mut LayoutTree, width: f32, text: StringView, clamp: usize) 
 fn textWrapsAtUnicodeBreakOpportunities() -> Result<void, TestFailure> {
     var storage = [0u8; 524288];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     // CJK breaks between ideographs (30px each here), but not before the closing comma.
     layOut(mut t, 70.0, "中文字符，好", 0)?;
     Check.isTrue(linesAre(t, "中文|字|符，|好"), "ideographs wrap one by one; a comma stays with its ideograph")?;

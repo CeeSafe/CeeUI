@@ -71,7 +71,7 @@ fn capiFramesReplayAndReportControls() -> Result<void, TestFailure> {
     var storage = Vector<u8>.create();
     let _ = storage.resize(1048576, 0);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(800.0, 600.0, -1.0, -1.0);
     var f = Frame.create();
     var host = Host { count: 0, dark: false, added: false, flipped: false, flips: 0 };
@@ -150,7 +150,7 @@ fn capiTextFieldEditsTheHostsBuffer() -> Result<void, TestFailure> {
     var storage = Vector<u8>.create();
     let _ = storage.resize(1048576, 0);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(800.0, 600.0, -1.0, -1.0);
     var f = Frame.create();
     var host = FieldHost { text: [0u8; 8], length: 2, edits: 0, presses: 0 };

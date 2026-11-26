@@ -17,7 +17,7 @@ public fn readFile(path: StringView) -> Vector<u8> {
                     break;
                 }
                 for (i in 0usize..n) {
-                    bytes.push(chunk[i])!;
+                    bytes.push(chunk[i]);
                 }
             }
         }
@@ -28,9 +28,9 @@ public fn readFile(path: StringView) -> Vector<u8> {
 
 /// `count` zero bytes: memory for a FixedBufferAllocator (a Ui's, a Raster's, a Damage's).
 public fn zeros(count: usize) -> Vector<u8> {
-    var v = Vector<u8>.withCapacity(count)!;
+    var v = Vector<u8>.withCapacity(count);
     for (i in 0..count) {
-        v.push(0)!;
+        v.push(0);
     }
     return v;
 }

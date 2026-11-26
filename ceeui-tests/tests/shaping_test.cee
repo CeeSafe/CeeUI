@@ -74,7 +74,7 @@ fn shapingMatchesHarfBuzz() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(16, 16);
     c.imagePixels = 4;
     c.fontBytes = 67108864;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     var loaded = false;
     while (at < text.length) {
         var end = at;
@@ -100,11 +100,11 @@ fn shapingMatchesHarfBuzz() -> Result<void, TestFailure> {
             fontFailed = 0;
             currentFont.clear();
             for (b in fontPath) {
-                currentFont.push(b)!;
+                currentFont.push(b);
             }
             let bytes = readFile(StringView.fromUtf8(fontPath)!);
             memory = FixedBufferAllocator.over(mut storage.viewMut());
-            ras = Raster.create(memory, c)!;
+            ras = Raster.create(memory, c);
             let face = number(caseField(line, 1), 0)[0];
             loaded = ras.loadFontFace(0, bytes.view(), truncate<u32>(face));
             if (!loaded) {

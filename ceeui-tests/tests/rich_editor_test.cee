@@ -32,7 +32,7 @@ fn richEditor(
 fn typingTakesTheTypingMark() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var doc = richEditor(mut ui, mut platform, "")?;
     typeChars(mut platform, "ab");
@@ -57,7 +57,7 @@ fn typingTakesTheTypingMark() -> Result<void, TestFailure> {
 fn markingASelectionIsUndone() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var doc = richEditor(mut ui, mut platform, "plain words")?;
     // "words" selected and marked 1, then "ai" of "plain" marked 3.
@@ -83,7 +83,7 @@ fn markingASelectionIsUndone() -> Result<void, TestFailure> {
 fn undoingAnEditBringsBackItsMarks() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var doc = richEditor(mut ui, mut platform, "one two")?;
     doc.edit = TextEdit { caret: 7, anchor: 4 };
@@ -186,7 +186,7 @@ fn markedEditor(ui: borrow mut Ui, platform: borrow mut FakePlatform) -> Result<
 fn aRichEditorDrawsEachRunInItsLook() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var doc = markedEditor(mut ui, mut platform)?;
     // Three text commands: "aa" at 14, "BB" at 20, "cc" at 14, side by side.
@@ -231,7 +231,7 @@ fn editKeyRich(
 fn aRichEditorPlacesTheCaretByItsRuns() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var doc = markedEditor(mut ui, mut platform)?;
     // 26 across is 12 into "BB" (14 to 34, 10 a byte): the caret after its first B.
@@ -289,7 +289,7 @@ fn scrollFrame(
 fn theWheelScrollsALongDocument() -> Result<void, TestFailure> {
     var storage = heap(4194304);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var ui = Ui.create(memory, UiCapacity.of(256));
     var platform = platformAt(400.0, 300.0, 50.0, 50.0);
     var buf = [0u8; 1024];
     var len: usize = 0;
@@ -311,7 +311,7 @@ fn theWheelScrollsALongDocument() -> Result<void, TestFailure> {
 fn aDragInTheEditorSelectsRatherThanScrolls() -> Result<void, TestFailure> {
     var storage = heap(4194304);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var ui = Ui.create(memory, UiCapacity.of(256));
     var platform = platformAt(400.0, 300.0, 50.0, 30.0);
     var buf = [0u8; 1024];
     var len: usize = 0;

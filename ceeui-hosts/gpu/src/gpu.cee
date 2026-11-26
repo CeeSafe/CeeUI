@@ -254,17 +254,17 @@ public struct GpuBackend<region r> {
 }
 
 fn zeroFloats(count: usize) -> Vector<f32> {
-    var v = Vector<f32>.withCapacity(count)!;
+    var v = Vector<f32>.withCapacity(count);
     for (i in 0..count) {
-        v.push(0.0)!;
+        v.push(0.0);
     }
     return v;
 }
 
 fn zeroBytes(count: usize) -> Vector<u8> {
-    var v = Vector<u8>.withCapacity(count)!;
+    var v = Vector<u8>.withCapacity(count);
     for (i in 0..count) {
-        v.push(0)!;
+        v.push(0);
     }
     return v;
 }
@@ -353,29 +353,29 @@ fn column(x: f32, left: f32, columns: usize) -> usize {
 impl<region r> GpuBackend<r> {
     /// A backend over `raster`, whose fonts it uses; the raster needs a capacity of `CELL` × `CELL`.
     public fn create(raster: Raster<r>) -> GpuBackend<r> {
-        var shaped = Vector<ShapedGlyph>.withCapacity(4096)!;
+        var shaped = Vector<ShapedGlyph>.withCapacity(4096);
         for (i in 0..4096) {
-            shaped.push(ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 })!;
+            shaped.push(ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 });
         }
         return GpuBackend {
             raster: raster,
-            stream: Vector<f32>.withCapacity(FLOATS * 8192)!,
-            clipShapes: Vector<f32>.withCapacity(SHAPE * 256)!,
-            segments: Vector<f32>.withCapacity(4 * 16384)!,
+            stream: Vector<f32>.withCapacity(FLOATS * 8192),
+            clipShapes: Vector<f32>.withCapacity(SHAPE * 256),
+            segments: Vector<f32>.withCapacity(4 * 16384),
             flat: zeroFloats(4 * PATH_EDGES),
-            bandEdges: Vector<u32>.withCapacity(3 * 4096)!,
-            backdrops: Vector<f32>.withCapacity(TILE_ROWS * 256)!,
-            layerData: Vector<f32>.withCapacity(FLOATS * 1024)!,
-            records: Vector<f32>.withCapacity(RECORD * 64)!,
-            previous: Vector<f32>.withCapacity(FLOATS * 8192)!,
-            culled: Vector<f32>.withCapacity(FLOATS * 8192)!,
-            keep: Vector<bool>.withCapacity(8192)!,
-            occluders: Vector<Bounds>.withCapacity(64)!,
-            survivors: Vector<Bounds>.withCapacity(8192)!,
+            bandEdges: Vector<u32>.withCapacity(3 * 4096),
+            backdrops: Vector<f32>.withCapacity(TILE_ROWS * 256),
+            layerData: Vector<f32>.withCapacity(FLOATS * 1024),
+            records: Vector<f32>.withCapacity(RECORD * 64),
+            previous: Vector<f32>.withCapacity(FLOATS * 8192),
+            culled: Vector<f32>.withCapacity(FLOATS * 8192),
+            keep: Vector<bool>.withCapacity(8192),
+            occluders: Vector<Bounds>.withCapacity(64),
+            survivors: Vector<Bounds>.withCapacity(8192),
             dropped: 0,
-            clips: Vector<Clip>.withCapacity(64)!,
-            layers: Vector<OpenLayer>.withCapacity(32)!,
-            transforms: Vector<Affine2>.withCapacity(32)!,
+            clips: Vector<Clip>.withCapacity(64),
+            layers: Vector<OpenLayer>.withCapacity(32),
+            transforms: Vector<Affine2>.withCapacity(32),
             ratio: 1.0,
             width: 0.0,
             height: 0.0,
@@ -431,7 +431,7 @@ impl<region r> GpuBackend<r> {
         this.records.clear();
         this.layers.clear();
         this.transforms.clear();
-        this.transforms.push(Affine2.identity())!;
+        this.transforms.push(Affine2.identity());
         this.width = round<f32>(width);
         this.height = round<f32>(height);
         this.clips.clear();
@@ -487,14 +487,14 @@ impl<region r> GpuBackend<r> {
         putPremultiplied(mut v, C0, Color.rgb(clear.r, clear.g, clear.b));
         this.culled.clear();
         for (k in 0..FLOATS) {
-            this.culled.push(v[k])!;
+            this.culled.push(v[k]);
         }
         for (k in 0..this.stream.length) {
-            this.culled.push(this.stream[k])!;
+            this.culled.push(this.stream[k]);
         }
         this.stream.clear();
         for (k in 0..this.culled.length) {
-            this.stream.push(this.culled[k])!;
+            this.stream.push(this.culled[k]);
         }
     }
 
@@ -545,22 +545,22 @@ impl<region r> GpuBackend<r> {
         if (!same) {
             this.previous.clear();
             for (k in 0usize..5) {
-                this.previous.push(lengths[k])!;
+                this.previous.push(lengths[k]);
             }
             for (k in 0..this.stream.length) {
-                this.previous.push(this.stream[k])!;
+                this.previous.push(this.stream[k]);
             }
             for (k in 0..this.layerData.length) {
-                this.previous.push(this.layerData[k])!;
+                this.previous.push(this.layerData[k]);
             }
             for (k in 0..this.records.length) {
-                this.previous.push(this.records[k])!;
+                this.previous.push(this.records[k]);
             }
             for (k in 0..this.clipShapes.length) {
-                this.previous.push(this.clipShapes[k])!;
+                this.previous.push(this.clipShapes[k]);
             }
             for (k in 0..this.segments.length) {
-                this.previous.push(this.segments[k])!;
+                this.previous.push(this.segments[k]);
             }
         }
         return !same;
@@ -759,7 +759,7 @@ impl<region r> GpuBackend<r> {
         let n = this.stream.length / FLOATS;
         this.keep.clear();
         for (i in 0..n) {
-            this.keep.push(true)!;
+            this.keep.push(true);
         }
         this.occluders.clear();
         var i = n;
@@ -781,7 +781,7 @@ impl<region r> GpuBackend<r> {
                 Some(c) => {
                     // The largest are the ones worth testing against.
                     if (this.occluders.length < 64 && (c.x1 - c.x0) * (c.y1 - c.y0) >= 4096.0) {
-                        this.occluders.push(c)!;
+                        this.occluders.push(c);
                     }
                 }
                 null => {}
@@ -813,7 +813,7 @@ impl<region r> GpuBackend<r> {
                     continue;
                 }
             }
-            this.survivors.push(t)!;
+            this.survivors.push(t);
         }
         this.culled.clear();
         var dropped: u32 = 0;
@@ -823,12 +823,12 @@ impl<region r> GpuBackend<r> {
                 continue;
             }
             for (k in j * FLOATS..(j + 1) * FLOATS) {
-                this.culled.push(this.stream[k])!;
+                this.culled.push(this.stream[k]);
             }
         }
         this.stream.clear();
         for (k in 0..this.culled.length) {
-            this.stream.push(this.culled[k])!;
+            this.stream.push(this.culled[k]);
         }
         this.dropped = dropped;
     }
@@ -860,7 +860,7 @@ impl<region r> GpuBackend<r> {
 
     fn emit(borrow mut this, v: [f32; 52]) {
         for (k in 0..FLOATS) {
-            this.stream.push(v[k])!;
+            this.stream.push(v[k]);
         }
         // The pixels it may touch: its quad (as metal.c's vertex shader makes it), clipped.
         if (this.layers.length == 0) {
@@ -1267,7 +1267,7 @@ impl<region r> GpuBackend<r> {
         }
         if (x1 <= x0 || y1 <= y0) {
             let empty = MaskEntry { u: 0, v: 0, w: 0, h: 0, ox: 0, oy: 0 };
-            let stored = this.masks.put(key, empty)!;
+            let stored = this.masks.put(key, empty);
             return empty;
         }
         let bw = x1 - x0;
@@ -1302,7 +1302,7 @@ impl<region r> GpuBackend<r> {
             ox: ox + truncate<i32>(x0),
             oy: oy + truncate<i32>(y0),
         };
-        let stored = this.masks.put(key, entry)!;
+        let stored = this.masks.put(key, entry);
         return entry;
     }
 
@@ -1349,7 +1349,7 @@ impl<region r> GpuBackend<r> {
             this.bandEdges.clear();
             this.backdrops.clear();
             for (k in 0..(columns + 1) * TILE_ROWS) {
-                this.backdrops.push(0.0)!;
+                this.backdrops.push(0.0);
             }
             // Each edge crossing the band: the tile columns it reaches, and its winding, row by row, for every
             // column wholly right of it (added at the next column, then summed across).
@@ -1369,9 +1369,9 @@ impl<region r> GpuBackend<r> {
                 let xb = ax + (t1 - ay) * dxdy;
                 let first = column(xa.min(xb), left, columns);
                 let last = column(xa.max(xb), left, columns);
-                this.bandEdges.push(truncate<u32>(e))!;
-                this.bandEdges.push(truncate<u32>(first))!;
-                this.bandEdges.push(truncate<u32>(last))!;
+                this.bandEdges.push(truncate<u32>(e));
+                this.bandEdges.push(truncate<u32>(first));
+                this.bandEdges.push(truncate<u32>(last));
                 let dir: f32 = if (by > ay) 1.0 else -1.0;
                 for (r in 0..TILE_ROWS) {
                     let top = y0 + round<f32>(r);
@@ -1404,14 +1404,14 @@ impl<region r> GpuBackend<r> {
                 }
                 let first = this.segments.length / 4;
                 for (r in 0..TILE_ROWS) {
-                    this.segments.push(this.backdrops[c * TILE_ROWS + r])!;
+                    this.segments.push(this.backdrops[c * TILE_ROWS + r]);
                 }
                 b = 0;
                 while (b < this.bandEdges.length) {
                     if ((this.bandEdges[b + 1] as usize) <= c && (this.bandEdges[b + 2] as usize) >= c) {
                         let k = (this.bandEdges[b] as usize) * 4;
                         for (j in 0usize..4) {
-                            this.segments.push(this.flat[k + j])!;
+                            this.segments.push(this.flat[k + j]);
                         }
                     }
                     b += 3;
@@ -1483,7 +1483,7 @@ impl<region r> GpuBackend<r> {
                     Some(size) => {
                         if (size.w == (e.w as usize) && size.h == (e.h as usize)) {
                             let now = ImageEntry { u: e.u, v: e.v, w: e.w, h: e.h, version: version };
-                            let stored = this.images.put(handle, now)!;
+                            let stored = this.images.put(handle, now);
                             this.sendImage(handle, now);
                             return now;
                         }
@@ -1520,7 +1520,7 @@ impl<region r> GpuBackend<r> {
         };
         this.imageX += size.w;
         this.imageH = this.imageH.max(size.h);
-        let stored = this.images.put(handle, entry)!;
+        let stored = this.images.put(handle, entry);
         this.sendImage(handle, entry);
         return entry;
     }
@@ -1593,7 +1593,7 @@ impl<region r> GpuBackend<r> {
         }
         c.x1 = c.x1.max(c.x0);
         c.y1 = c.y1.max(c.y0);
-        this.clips.push(c)!;
+        this.clips.push(c);
     }
 
     /// A clip shape in `clipShapes`, nested in shape `parent` (0 for none); its index plus 1.
@@ -1630,7 +1630,7 @@ impl<region r> GpuBackend<r> {
             0.0,
         ];
         for (k in 0usize..SHAPE) {
-            this.clipShapes.push(entry[k])!;
+            this.clipShapes.push(entry[k]);
         }
         return truncate<u32>(index) + 1;
     }
@@ -1703,7 +1703,7 @@ impl<region r> GpuBackend<r> {
         let first = this.layerData.length / FLOATS;
         let count = (this.stream.length - top.start) / FLOATS;
         for (k in top.start..this.stream.length) {
-            this.layerData.push(this.stream[k])!;
+            this.layerData.push(this.stream[k]);
         }
         while (this.stream.length > top.start) {
             let gone = this.stream.pop();
@@ -1711,7 +1711,7 @@ impl<region r> GpuBackend<r> {
         let index = this.records.length / RECORD;
         let record = [round<f32>(first), round<f32>(count), x0, y0, x1, y1, top.k0, top.k1];
         for (k in 0usize..RECORD) {
-            this.records.push(record[k])!;
+            this.records.push(record[k]);
         }
         // ThorVG composites a group straight into a filter group normally, whatever its blend mode.
         var blend = top.blend;
@@ -1775,7 +1775,7 @@ impl<region r> GpuBackend<r> {
         let s = this.ratio;
         let inPixels = Affine2 { a: m.a, b: m.b, c: m.c, d: m.d, e: m.e * s, f: m.f * s };
         let current = this.transforms[this.transforms.length - 1];
-        this.transforms.push(current.after(inPixels))!;
+        this.transforms.push(current.after(inPixels));
     }
 }
 

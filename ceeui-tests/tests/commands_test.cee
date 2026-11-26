@@ -8,7 +8,7 @@ import ceeui;
 fn transformBracketsTheSubtree() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     t.open(hashId("troot"), fixedBox(200.0, 200.0));
     var c = fixedBox(100.0, 100.0);
@@ -40,7 +40,7 @@ fn transformBracketsTheSubtree() -> Result<void, TestFailure> {
 fn effectsPaintInOrder() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     var fx = fixedBox(100.0, 100.0);
     fx.background = Color.rgb(10, 10, 10);
@@ -63,7 +63,7 @@ fn effectsPaintInOrder() -> Result<void, TestFailure> {
 fn blendNestsInsideTransform() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     var b = fixedBox(80.0, 80.0);
     b.layout.blend = BlendMode.Multiply;
@@ -87,7 +87,7 @@ fn blendNestsInsideTransform() -> Result<void, TestFailure> {
 fn roundedClipGradientStopsAndBlendModes() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     var rc = fixedBox(100.0, 60.0);
     rc.layout.blend = BlendMode.Screen;
@@ -138,7 +138,7 @@ fn roundedClipGradientStopsAndBlendModes() -> Result<void, TestFailure> {
 fn opacityIsOutermost() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     var o = fixedBox(80.0, 80.0);
     o.layout.opacity = 0.5;
@@ -162,7 +162,7 @@ fn opacityIsOutermost() -> Result<void, TestFailure> {
 fn opacityBracketsNest() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     var outer = fixedBox(100.0, 40.0);
     outer.layout.opacity = 0.6;
@@ -193,7 +193,7 @@ fn opacityBracketsNest() -> Result<void, TestFailure> {
 fn filterBracketCarriesModeAndAmount() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     var f = fixedBox(90.0, 90.0);
     f.layout.filter = FilterMode.Blur;

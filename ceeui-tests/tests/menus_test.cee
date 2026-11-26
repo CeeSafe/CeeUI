@@ -9,7 +9,7 @@ import ceeui_demo;
 fn aMenuShowsTheActionsBinding() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(16))!;
+    var ui = Ui.create(memory, UiCapacity.of(16));
     Check.isTrue(ui.bind("secondary-shift-s", "save-as", ""), "binds")?;
     Check.isTrue(ui.bind("f5", "refresh", "editor"), "binds in a context")?;
     ui.setSecondaryIsCommand(true);
@@ -27,7 +27,7 @@ fn aMenuShowsTheActionsBinding() -> Result<void, TestFailure> {
 fn aChosenItemTriggersItsAction() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(16))!;
+    var ui = Ui.create(memory, UiCapacity.of(16));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     platform.chosen = hashId("save-as");
     ui.begin(mut platform);
@@ -91,7 +91,7 @@ fn demoStep(ui: borrow mut Ui, platform: borrow mut FakePlatform, app: borrow mu
 fn theDemoAnswersItsMenus() -> Result<void, TestFailure> {
     var storage = heap(8388608);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(2048))!;
+    var ui = Ui.create(memory, UiCapacity.of(2048));
     var platform = platformAt(1024.0, 640.0, -1.0, -1.0);
     var app = DemoApp.create();
     demoStep(mut ui, mut platform, mut app)?;
@@ -136,7 +136,7 @@ fn clickAt(ui: borrow mut Ui, platform: borrow mut FakePlatform, app: borrow mut
 fn aDrawnMenuBarTriggersItsItems() -> Result<void, TestFailure> {
     var storage = heap(8388608);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(2048))!;
+    var ui = Ui.create(memory, UiCapacity.of(2048));
     var platform = platformAt(1024.0, 640.0, -1.0, -1.0);
     var app = DemoApp.create();
     app.setDrawsMenuBar(true);

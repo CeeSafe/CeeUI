@@ -10,7 +10,7 @@ import ceeui_demo;
 fn runDemo(tab: usize, script: StringView, frames: u32, app: borrow mut DemoApp) -> bool {
     var storage = heap(8388608);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(2048))!;
+    var ui = Ui.create(memory, UiCapacity.of(2048));
     ui.setDarkMode(true);
     var platform = ScriptPlatform.create(script.bytes(), Dims { w: 1024.0, h: 640.0 });
     let metrics = MetricMeasure { unused: 0 };
@@ -56,7 +56,7 @@ fn scriptedInputReachesTheApp() -> Result<void, TestFailure> {
 fn runInspector(app: borrow mut DemoApp, frames: u32) -> bool {
     var storage = heap(4194304);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(512))!;
+    var ui = Ui.create(memory, UiCapacity.of(512));
     ui.setDarkMode(true);
     var platform = ScriptPlatform.create("".bytes(), Dims { w: 340.0, h: 600.0 });
     let metrics = MetricMeasure { unused: 0 };
@@ -86,7 +86,7 @@ fn theInspectorFitsItsWindow() -> Result<void, TestFailure> {
 fn offersWindow(opens: bool) -> bool {
     var storage = heap(8388608);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(2048))!;
+    var ui = Ui.create(memory, UiCapacity.of(2048));
     var platform = ScriptPlatform.create("".bytes(), Dims { w: 1024.0, h: 640.0 });
     let metrics = MetricMeasure { unused: 0 };
     var app = DemoApp.create();
@@ -96,7 +96,7 @@ fn offersWindow(opens: bool) -> bool {
         platform.beginFrame();
         ui.begin(mut platform);
         demoFrame(mut ui, mut app, metrics);
-        ui.endFrame(mut platform, metrics)!;
+        ui.endFrame(mut platform, metrics);
         platform.endFrame();
     }
     return ui.boxOfHash(hashId("ci-pop")) != null;
@@ -113,7 +113,7 @@ fn theDragTabLaysOut() -> Result<void, TestFailure> {
     for (takes in [false, true]) {
         var storage = heap(8388608);
         let memory = FixedBufferAllocator.over(mut storage.viewMut());
-        var ui = Ui.create(memory, UiCapacity.of(2048))!;
+        var ui = Ui.create(memory, UiCapacity.of(2048));
         var platform = ScriptPlatform.create("".bytes(), Dims { w: 1024.0, h: 640.0 });
         let metrics = MetricMeasure { unused: 0 };
         var app = DemoApp.create();

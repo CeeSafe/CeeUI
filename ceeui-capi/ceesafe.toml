@@ -4,7 +4,8 @@ version = "0.1.0"
 # CeeUI for C, and through C for Swift, Kotlin and Rust (roadmap P6): `ceesafec build` makes out/ceeui_capi.a
 # and its headers (CeeSafe ADR 0088; `--emit lib` before 0.80.2); include/ceeui.h is the API a host uses.
 kind = "library"
-ceesafec = ">=0.78.0"
+ceesafec = ">=0.95.18" # out-of-memory = "panic", with a Result kept where it is used as one (CeeSafe ADR 0261)
+out-of-memory = "panic" # an allocation that fails stops the program; `?` still passes it on
 
 [dependencies]
 ceeui = { path = "../ceeui" }

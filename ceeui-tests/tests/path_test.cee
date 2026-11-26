@@ -52,7 +52,7 @@ fn pathElementEmitsItsCommandAndBytes() -> Result<void, TestFailure> {
     square(mut p, 0.0, 0.0, 10.0, 10.0);
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     t.open(hashId("proot"), fixedBox(200.0, 200.0));
     t.open(hashId("pshape"), fixedBox(80.0, 60.0));
@@ -84,7 +84,7 @@ fn pathElementEmitsItsCommandAndBytes() -> Result<void, TestFailure> {
 fn rasterFillsAPathClippedToItsBox() -> Result<void, TestFailure> {
     var storage = heap(4194304);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ras = Raster.create(memory, smallCapacity())!;
+    var ras = Raster.create(memory, smallCapacity());
     ras.begin(rgba(0, 0, 0, 255));
     var encoded = heap(256);
     var p = PathBuilder.over(mut encoded.viewMut());
@@ -106,7 +106,7 @@ fn rasterFillsAPathClippedToItsBox() -> Result<void, TestFailure> {
 fn evenOddLeavesTheHoleNonzeroFills() -> Result<void, TestFailure> {
     var storage = heap(4194304);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ras = Raster.create(memory, smallCapacity())!;
+    var ras = Raster.create(memory, smallCapacity());
     ras.begin(rgba(0, 0, 0, 255));
     var encoded = heap(256);
     var p = PathBuilder.over(mut encoded.viewMut());
@@ -126,7 +126,7 @@ fn evenOddLeavesTheHoleNonzeroFills() -> Result<void, TestFailure> {
 fn strokesFollowTheOutlineInTheViewBox() -> Result<void, TestFailure> {
     var storage = heap(4194304);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ras = Raster.create(memory, smallCapacity())!;
+    var ras = Raster.create(memory, smallCapacity());
     ras.begin(rgba(0, 0, 0, 255));
     var encoded = heap(256);
     var p = PathBuilder.over(mut encoded.viewMut());

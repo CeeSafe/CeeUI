@@ -2,7 +2,8 @@
 name = "ceeui_tasks"
 version = "0.1.0"
 kind = "library"
-ceesafec = ">=0.50.0"
+ceesafec = ">=0.95.18" # out-of-memory = "panic", with a Result kept where it is used as one (CeeSafe ADR 0261)
+out-of-memory = "panic" # an allocation that fails stops the program; `?` still passes it on
 
 [dependencies]
 ceeui = { path = "../ceeui" }

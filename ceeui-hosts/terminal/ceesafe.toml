@@ -1,6 +1,8 @@
 [package]
 name = "terminal"
 version = "0.1.0"
+ceesafec = ">=0.95.18" # out-of-memory = "panic", with a Result kept where it is used as one (CeeSafe ADR 0261)
+out-of-memory = "panic" # an allocation that fails stops the program; `?` still passes it on
 kind = "executable"
 
 [dependencies]

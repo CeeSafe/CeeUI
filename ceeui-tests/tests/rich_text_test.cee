@@ -84,7 +84,7 @@ fn layOutRich(t: borrow mut LayoutTree) -> Result<void, TestFailure> {
 fn richTextDrawsEachRunInItsStyleOnOneBaseline() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     t.open(hashId("p"), sized(SizingAxis.fixed(400.0), SizingAxis.fit()));
     // "Big" at 20 points between text at 10: 2 + 3 + 4 bytes.
@@ -115,7 +115,7 @@ fn richTextDrawsEachRunInItsStyleOnOneBaseline() -> Result<void, TestFailure> {
 fn richTextWrapsAcrossItsRuns() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     t.open(hashId("p"), sized(SizingAxis.fixed(80.0), SizingAxis.fit()));
     // "aaaa bbbb cccc": "aaaa " is 25 wide, "bbbb " at 20 is 50 and "cccc" 20; 80 holds the first two words but
@@ -146,7 +146,7 @@ fn richTextWrapsAcrossItsRuns() -> Result<void, TestFailure> {
 fn richTextRunsGoFromTheRightInARightToLeftParagraph() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     t.open(hashId("p"), sized(SizingAxis.fixed(400.0), SizingAxis.fit()));
     // Hebrew: "שלום " (9 bytes) then "עולם" (8 bytes), the second in a bigger size.
@@ -167,7 +167,7 @@ fn richTextRunsGoFromTheRightInARightToLeftParagraph() -> Result<void, TestFailu
 fn aRichLabelTakesItsRunsLooks() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     ui.begin(mut platform);
     let styles = [

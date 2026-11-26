@@ -72,13 +72,13 @@ fn fail2(what: StringView, more: StringView) -> i32 {
     return 1;
 }
 
-fn text(s: StringView) -> String => String.from(s)!;
+fn text(s: StringView) -> String => String.from(s);
 
 /// The pieces joined.
 fn cat<const N: usize>(parts: [StringView; N]) -> String {
     var s = String.create();
     for (p in parts[..]) {
-        s.append(p)!;
+        s.append(p);
     }
     return s;
 }
@@ -99,9 +99,9 @@ fn readText(path: StringView) -> String {
                 if (n == 0) {
                     break;
                 }
-                bytes.extend(chunk[0..n])!;
+                bytes.extend(chunk[0..n]);
             }
-            let ok = s.appendUtf8(bytes.view())!;
+            let ok = s.appendUtf8(bytes.view());
         }
         Err(_) => {}
     }
@@ -124,7 +124,7 @@ fn writeText(path: StringView, content: StringView) -> bool {
 /// Runs `program` with `arguments`, its output shown; whether it ended with 0.
 fn run<const N: usize>(program: StringView, arguments: [StringView; N]) -> bool {
     var args = Vector<StringView>.create();
-    args.extend(arguments[..])!;
+    args.extend(arguments[..]);
     return match (Process.run(program, args)) {
         Ok(status) => status == 0,
         Err(_) => {
@@ -138,13 +138,13 @@ fn run<const N: usize>(program: StringView, arguments: [StringView; N]) -> bool 
 /// What `program` prints, trimmed; empty when it cannot run or fails.
 fn output<const N: usize>(program: StringView, arguments: [StringView; N]) -> String {
     var args = Vector<StringView>.create();
-    args.extend(arguments[..])!;
+    args.extend(arguments[..]);
     var s = String.create();
     match (Process.capture(program, args, "".bytes())) {
         Ok(result) => {
             if (result.status == 0) {
                 match (StringView.fromUtf8(result.stdout.view())) {
-                    Some(t) => { s.append(t.trim())!; }
+                    Some(t) => { s.append(t.trim()); }
                     null => {}
                 }
             }
@@ -193,8 +193,8 @@ fn xml(s: StringView) -> String {
             else if (b[i] == '"') "&quot;"
             else "";
         if (i == b.length || escape.length > 0) {
-            out.append(s[start..i])!;
-            out.append(escape)!;
+            out.append(s[start..i]);
+            out.append(escape);
             start = i + 1;
         }
     }
@@ -264,11 +264,11 @@ fn later(a: StringView, b: StringView) -> bool {
 /// An Apple bundle's Info.plist.
 fn infoPlist(o: borrow Options, phone: bool) -> String {
     var p = String.create();
-    p.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")!;
+    p.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     p.append(
         "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n",
     )!;
-    p.append("<plist version=\"1.0\">\n<dict>\n")!;
+    p.append("<plist version=\"1.0\">\n<dict>\n");
     let pairs: [StringView; 12] = [
         "CFBundleExecutable",
         o.binary.view(),
@@ -284,41 +284,41 @@ fn infoPlist(o: borrow Options, phone: bool) -> String {
         "APPL",
     ];
     for (k in 0usize..6) {
-        p.append("\t<key>")!;
-        p.append(pairs[k * 2])!;
-        p.append("</key><string>")!;
-        p.append(xml(pairs[k * 2 + 1]).view())!;
-        p.append("</string>\n")!;
+        p.append("\t<key>");
+        p.append(pairs[k * 2]);
+        p.append("</key><string>");
+        p.append(xml(pairs[k * 2 + 1]).view());
+        p.append("</string>\n");
     }
-    p.append("\t<key>CFBundleVersion</key><string>1</string>\n")!;
+    p.append("\t<key>CFBundleVersion</key><string>1</string>\n");
     if (o.bluetooth.view().length > 0) {
         // What iOS and macOS show when the app first uses Bluetooth; without it the system ends the app there.
-        p.append("\t<key>NSBluetoothAlwaysUsageDescription</key><string>")!;
-        p.append(xml(o.bluetooth.view()).view())!;
-        p.append("</string>\n")!;
+        p.append("\t<key>NSBluetoothAlwaysUsageDescription</key><string>");
+        p.append(xml(o.bluetooth.view()).view());
+        p.append("</string>\n");
     }
     if (phone) {
-        p.append("\t<key>LSRequiresIPhoneOS</key><true/>\n")!;
-        p.append("\t<key>MinimumOSVersion</key><string>17.0</string>\n")!;
-        p.append("\t<key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>\n")!;
-        p.append("\t<key>UILaunchScreen</key><dict/>\n")!;
+        p.append("\t<key>LSRequiresIPhoneOS</key><true/>\n");
+        p.append("\t<key>MinimumOSVersion</key><string>17.0</string>\n");
+        p.append("\t<key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>\n");
+        p.append("\t<key>UILaunchScreen</key><dict/>\n");
         if (o.network.view().length > 0) {
             // What iOS shows when the app first reaches a device on the local network.
-            p.append("\t<key>NSLocalNetworkUsageDescription</key><string>")!;
-            p.append(xml(o.network.view()).view())!;
-            p.append("</string>\n")!;
+            p.append("\t<key>NSLocalNetworkUsageDescription</key><string>");
+            p.append(xml(o.network.view()).view());
+            p.append("</string>\n");
         }
-        p.append("\t<key>CFBundleSupportedPlatforms</key><array><string>iPhoneOS</string></array>\n")!;
+        p.append("\t<key>CFBundleSupportedPlatforms</key><array><string>iPhoneOS</string></array>\n");
         // Every orientation: a CeeUI app lays out again at each size (its size classes).
-        p.append("\t<key>UISupportedInterfaceOrientations</key><array>")!;
-        p.append("<string>UIInterfaceOrientationPortrait</string>")!;
-        p.append("<string>UIInterfaceOrientationLandscapeLeft</string>")!;
-        p.append("<string>UIInterfaceOrientationLandscapeRight</string></array>\n")!;
+        p.append("\t<key>UISupportedInterfaceOrientations</key><array>");
+        p.append("<string>UIInterfaceOrientationPortrait</string>");
+        p.append("<string>UIInterfaceOrientationLandscapeLeft</string>");
+        p.append("<string>UIInterfaceOrientationLandscapeRight</string></array>\n");
     } else {
-        p.append("\t<key>LSMinimumSystemVersion</key><string>12.0</string>\n")!;
-        p.append("\t<key>NSHighResolutionCapable</key><true/>\n")!;
+        p.append("\t<key>LSMinimumSystemVersion</key><string>12.0</string>\n");
+        p.append("\t<key>NSHighResolutionCapable</key><true/>\n");
     }
-    p.append("</dict>\n</plist>\n")!;
+    p.append("</dict>\n</plist>\n");
     return p;
 }
 
@@ -337,16 +337,16 @@ fn mobileOpenssl(system: StringView) -> String {
 fn build(arguments: Slice<StringView>, target: StringView, variable: StringView) -> bool {
     var args = Vector<StringView>.create();
     if (variable.length > 0) {
-        args.push(variable)!;
-        args.push("ceesafec")!;
+        args.push(variable);
+        args.push("ceesafec");
     }
-    args.push("build")!;
-    args.push("--windowed")!;
+    args.push("build");
+    args.push("--windowed");
     if (target.length > 0) {
-        args.push("--target")!;
-        args.push(target)!;
+        args.push("--target");
+        args.push(target);
     }
-    args.extend(arguments)!;
+    args.extend(arguments);
     return match (Process.run(if (variable.length > 0) "env" else "ceesafec", args)) {
         Ok(status) => status == 0,
         Err(_) => {
@@ -371,9 +371,9 @@ fn bundle(
     }
     let exe = cat([inner.view(), "/", o.binary.view()]);
     var args = Vector<StringView>.create();
-    args.extend(flags)!;
-    args.push("-o")!;
-    args.push(exe.view())!;
+    args.extend(flags);
+    args.push("-o");
+    args.push(exe.view());
     if (!build(args.view(), target, variable)) {
         return false;
     }
@@ -478,49 +478,49 @@ fn extensionBundle(o: borrow Options, appex: StringView, flags: Slice<StringView
     }
     // The package is built in its own directory: a shell's `cd`, then ceesafec as for the app.
     var command = String.create();
-    command.append("cd '")!;
-    command.append(o.extension.view())!;
-    command.append("' && ")!;
+    command.append("cd '");
+    command.append(o.extension.view());
+    command.append("' && ");
     if (variable.length > 0) {
-        command.append("env '")!;
-        command.append(variable)!;
-        command.append("' ")!;
+        command.append("env '");
+        command.append(variable);
+        command.append("' ");
     }
-    command.append("ceesafec build --windowed --target ios")!;
+    command.append("ceesafec build --windowed --target ios");
     for (f in flags) {
-        command.append(" '")!;
-        command.append(f)!;
-        command.append("'")!;
+        command.append(" '");
+        command.append(f);
+        command.append("'");
     }
-    command.append(" -o '")!;
-    command.append(Directory.current()!.view())!;
-    command.append("/")!;
-    command.append(appex)!;
-    command.append("/")!;
-    command.append(binary.view())!;
-    command.append("'")!;
+    command.append(" -o '");
+    command.append(Directory.current()!.view());
+    command.append("/");
+    command.append(appex);
+    command.append("/");
+    command.append(binary.view());
+    command.append("'");
     if (!run("sh", ["-c", command.view()])) {
         return fail("the extension was not built");
     }
     var p = String.create();
-    p.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n")!;
-    p.append("\t<key>CFBundleExecutable</key><string>")!;
-    p.append(xml(binary.view()).view())!;
-    p.append("</string>\n\t<key>CFBundleIdentifier</key><string>")!;
-    p.append(xml(extensionId(o).view()).view())!;
-    p.append("</string>\n\t<key>CFBundleName</key><string>")!;
-    p.append(xml(binary.view()).view())!;
+    p.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n");
+    p.append("\t<key>CFBundleExecutable</key><string>");
+    p.append(xml(binary.view()).view());
+    p.append("</string>\n\t<key>CFBundleIdentifier</key><string>");
+    p.append(xml(extensionId(o).view()).view());
+    p.append("</string>\n\t<key>CFBundleName</key><string>");
+    p.append(xml(binary.view()).view());
     // Apple requires an extension's versions to be its app's.
-    p.append("</string>\n\t<key>CFBundleShortVersionString</key><string>")!;
-    p.append(xml(o.version.view()).view())!;
-    p.append("</string>\n\t<key>CFBundleVersion</key><string>1</string>\n")!;
-    p.append("\t<key>CFBundlePackageType</key><string>XPC!</string>\n")!;
-    p.append("\t<key>MinimumOSVersion</key><string>17.0</string>\n")!;
-    p.append("\t<key>CFBundleSupportedPlatforms</key><array><string>iPhoneOS</string></array>\n")!;
-    p.append("\t<key>NSExtension</key><dict>\n")!;
-    p.append("\t\t<key>NSExtensionPointIdentifier</key><string>com.apple.usernotifications.service</string>\n")!;
-    p.append("\t\t<key>NSExtensionPrincipalClass</key><string>CeeSafeNotificationService</string>\n")!;
-    p.append("\t</dict>\n</dict>\n</plist>\n")!;
+    p.append("</string>\n\t<key>CFBundleShortVersionString</key><string>");
+    p.append(xml(o.version.view()).view());
+    p.append("</string>\n\t<key>CFBundleVersion</key><string>1</string>\n");
+    p.append("\t<key>CFBundlePackageType</key><string>XPC!</string>\n");
+    p.append("\t<key>MinimumOSVersion</key><string>17.0</string>\n");
+    p.append("\t<key>CFBundleSupportedPlatforms</key><array><string>iPhoneOS</string></array>\n");
+    p.append("\t<key>NSExtension</key><dict>\n");
+    p.append("\t\t<key>NSExtensionPointIdentifier</key><string>com.apple.usernotifications.service</string>\n");
+    p.append("\t\t<key>NSExtensionPrincipalClass</key><string>CeeSafeNotificationService</string>\n");
+    p.append("\t</dict>\n</dict>\n</plist>\n");
     if (!writeText(cat([appex, "/Info.plist"]).view(), p.view())) {
         return fail("could not write the extension's Info.plist");
     }
@@ -585,8 +585,8 @@ fn findProfile(id: StringView) -> Profile {
     let now = output("date", ["-u", "+%Y-%m-%dT%H:%M:%SZ"]);
     let home = Environment.variable("HOME") ?? "";
     var places = Vector<String>.create();
-    places.push(cat([home, "/Library/Developer/Xcode/UserData/Provisioning Profiles"]))!;
-    places.push(cat([home, "/Library/MobileDevice/Provisioning Profiles"]))!;
+    places.push(cat([home, "/Library/Developer/Xcode/UserData/Provisioning Profiles"]));
+    places.push(cat([home, "/Library/MobileDevice/Provisioning Profiles"]));
     for (place in places.view()) {
         let names = match (Directory.list(place.view())) {
             Ok(n) => n,
@@ -690,27 +690,27 @@ fn signForDevice(o: borrow Options, app: StringView, id: StringView, push: bool)
     }
     let fullId = cat([team, ".", id]);
     var e = String.create();
-    e.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n")!;
-    e.append("\t<key>application-identifier</key><string>")!;
-    e.append(xml(fullId.view()).view())!;
-    e.append("</string>\n\t<key>com.apple.developer.team-identifier</key><string>")!;
-    e.append(team)!;
-    e.append("</string>\n\t<key>get-task-allow</key><true/>\n")!;
+    e.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n");
+    e.append("\t<key>application-identifier</key><string>");
+    e.append(xml(fullId.view()).view());
+    e.append("</string>\n\t<key>com.apple.developer.team-identifier</key><string>");
+    e.append(team);
+    e.append("</string>\n\t<key>get-task-allow</key><true/>\n");
     if (apsEnvironment.view().length > 0) {
-        e.append("\t<key>aps-environment</key><string>")!;
-        e.append(xml(apsEnvironment.view()).view())!;
-        e.append("</string>\n")!;
+        e.append("\t<key>aps-environment</key><string>");
+        e.append(xml(apsEnvironment.view()).view());
+        e.append("</string>\n");
     }
     if (o.group.view().length > 0) {
         // The App Group (--group): iOS also takes it as a keychain access group the app and its extension share
         // (CeeSafe ADR 0246), without its being listed in keychain-access-groups.
-        e.append("\t<key>com.apple.security.application-groups</key><array><string>")!;
-        e.append(xml(o.group.view()).view())!;
-        e.append("</string></array>\n")!;
+        e.append("\t<key>com.apple.security.application-groups</key><array><string>");
+        e.append(xml(o.group.view()).view());
+        e.append("</string></array>\n");
     }
-    e.append("\t<key>keychain-access-groups</key><array><string>")!;
-    e.append(xml(fullId.view()).view())!;
-    e.append("</string></array>\n</dict>\n</plist>\n")!;
+    e.append("\t<key>keychain-access-groups</key><array><string>");
+    e.append(xml(fullId.view()).view());
+    e.append("</string></array>\n</dict>\n</plist>\n");
     let entitlements = "out/pack/ios/entitlements.plist";
     if (!writeText(entitlements, e.view())) {
         return fail("could not write the entitlements");
@@ -739,62 +739,62 @@ fn androidArch(abi: StringView) -> StringView => if (abi == "arm64-v8a") "arm64"
 fn androidManifest(o: borrow Options) -> String {
     let gradle = o.firebase.view().length > 0;
     var m = String.create();
-    m.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")!;
+    m.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
     m.append("<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"")!;
     if (gradle) {
-        m.append(">\n")!;
+        m.append(">\n");
     } else {
         m.append(" package=\"")!;
-        m.append(xml(o.id.view()).view())!;
-        m.append("\"\n          android:versionCode=\"1\" android:versionName=\"")!;
-        m.append(xml(o.version.view()).view())!;
+        m.append(xml(o.id.view()).view());
+        m.append("\"\n          android:versionCode=\"1\" android:versionName=\"");
+        m.append(xml(o.version.view()).view());
         m.append("\">\n  <uses-sdk android:minSdkVersion=\"25\" android:targetSdkVersion=\"36\"/>\n")!;
     }
     if (o.network.view().length > 0) {
-        m.append("  <uses-permission android:name=\"android.permission.INTERNET\"/>\n")!;
+        m.append("  <uses-permission android:name=\"android.permission.INTERNET\"/>\n");
     }
     if (o.notifications) {
         // Android 13 and later ask for it at run time (CeeSafe ADR 0243); before them it is granted at install.
-        m.append("  <uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>\n")!;
+        m.append("  <uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>\n");
     }
     if (o.bluetooth.view().length > 0) {
         // Android 12 and later ask for these two at run time (CeeSafe ADR 0177 §2.2), the scan never for a location;
         // Android 9 to 11 grant the first two at install and ask for the location, which a scan needs there.
-        m.append("  <uses-permission android:name=\"android.permission.BLUETOOTH_CONNECT\"/>\n")!;
-        m.append("  <uses-permission android:name=\"android.permission.BLUETOOTH_SCAN\"")!;
-        m.append(" android:usesPermissionFlags=\"neverForLocation\"/>\n")!;
-        m.append("  <uses-permission android:name=\"android.permission.BLUETOOTH\" android:maxSdkVersion=\"30\"/>\n")!;
+        m.append("  <uses-permission android:name=\"android.permission.BLUETOOTH_CONNECT\"/>\n");
+        m.append("  <uses-permission android:name=\"android.permission.BLUETOOTH_SCAN\"");
+        m.append(" android:usesPermissionFlags=\"neverForLocation\"/>\n");
+        m.append("  <uses-permission android:name=\"android.permission.BLUETOOTH\" android:maxSdkVersion=\"30\"/>\n");
         m.append(
             "  <uses-permission android:name=\"android.permission.BLUETOOTH_ADMIN\" android:maxSdkVersion=\"30\"/>\n",
         )!;
-        m.append("  <uses-permission android:name=\"android.permission.ACCESS_FINE_LOCATION\"")!;
-        m.append(" android:maxSdkVersion=\"30\"/>\n")!;
+        m.append("  <uses-permission android:name=\"android.permission.ACCESS_FINE_LOCATION\"");
+        m.append(" android:maxSdkVersion=\"30\"/>\n");
     }
     m.append("  <application android:label=\"")!;
-    m.append(xml(o.name.view()).view())!;
-    m.append(if (gradle) "\" android:hasCode=\"true\"" else "\" android:hasCode=\"false\"")!;
-    m.append(" android:extractNativeLibs=\"true\">\n")!;
+    m.append(xml(o.name.view()).view());
+    m.append(if (gradle) "\" android:hasCode=\"true\"" else "\" android:hasCode=\"false\"");
+    m.append(" android:extractNativeLibs=\"true\">\n");
     // The activity is kept through a rotation, a new size and the keyboard (CeeSafe ADR 0156 §2.3): destroyed, the
     // program would end with it.
     // One activity, whoever starts it: a start by another app or a link while the program runs comes to the one
     // that is there (singleTask). A second NativeActivity over it would be a second window of a program that has
     // one, with no elements for a screen reader.
-    m.append("    <activity android:name=\"android.app.NativeActivity\" android:exported=\"true\"\n")!;
-    m.append("              android:launchMode=\"singleTask\"\n")!;
+    m.append("    <activity android:name=\"android.app.NativeActivity\" android:exported=\"true\"\n");
+    m.append("              android:launchMode=\"singleTask\"\n");
     m.append("              android:configChanges=\"orientation|screenSize|screenLayout|keyboardHidden|density|")!;
     m.append("smallestScreenSize\">\n")!;
-    m.append("      <meta-data android:name=\"android.app.lib_name\" android:value=\"main\"/>\n")!;
-    m.append("      <intent-filter>\n        <action android:name=\"android.intent.action.MAIN\"/>\n")!;
-    m.append("        <category android:name=\"android.intent.category.LAUNCHER\"/>\n      </intent-filter>\n")!;
-    m.append("    </activity>\n")!;
+    m.append("      <meta-data android:name=\"android.app.lib_name\" android:value=\"main\"/>\n");
+    m.append("      <intent-filter>\n        <action android:name=\"android.intent.action.MAIN\"/>\n");
+    m.append("        <category android:name=\"android.intent.category.LAUNCHER\"/>\n      </intent-filter>\n");
+    m.append("    </activity>\n");
     if (gradle) {
         // The push that comes while the app is not running (CeeSafe ADR 0249): src/PushService.java.
-        m.append("    <service android:name=\"org.ceeui.pack.PushService\" android:exported=\"false\">\n")!;
-        m.append("      <intent-filter>\n")!;
-        m.append("        <action android:name=\"com.google.firebase.MESSAGING_EVENT\"/>\n")!;
-        m.append("      </intent-filter>\n    </service>\n")!;
+        m.append("    <service android:name=\"org.ceeui.pack.PushService\" android:exported=\"false\">\n");
+        m.append("      <intent-filter>\n");
+        m.append("        <action android:name=\"com.google.firebase.MESSAGING_EVENT\"/>\n");
+        m.append("      </intent-filter>\n    </service>\n");
     }
-    m.append("  </application>\n</manifest>\n")!;
+    m.append("  </application>\n</manifest>\n");
     return m;
 }
 
@@ -838,25 +838,25 @@ fn gradleBuild(o: borrow Options, sdk: StringView, base: StringView) -> i32 {
         return fail("could not copy google-services.json");
     }
     var build = String.create();
-    build.append("// Written by ceeui-pack --firebase (CeeSafe ADR 0249); made again at every build.\n")!;
+    build.append("// Written by ceeui-pack --firebase (CeeSafe ADR 0249); made again at every build.\n");
     build.append("plugins {\n    id(\"com.android.application\") version \"")!;
-    build.append(ANDROID_PLUGIN_VERSION)!;
-    build.append("\"\n    id(\"com.google.gms.google-services\") version \"")!;
-    build.append(GOOGLE_SERVICES_VERSION)!;
-    build.append("\"\n}\nandroid {\n    namespace = \"")!;
-    build.append(o.id.view())!;
-    build.append("\"\n    compileSdk = 36\n    defaultConfig {\n        applicationId = \"")!;
-    build.append(o.id.view())!;
-    build.append("\"\n        minSdk = 25\n        targetSdk = 36\n        versionCode = 1\n        versionName = \"")!;
-    build.append(o.version.view())!;
+    build.append(ANDROID_PLUGIN_VERSION);
+    build.append("\"\n    id(\"com.google.gms.google-services\") version \"");
+    build.append(GOOGLE_SERVICES_VERSION);
+    build.append("\"\n}\nandroid {\n    namespace = \"");
+    build.append(o.id.view());
+    build.append("\"\n    compileSdk = 36\n    defaultConfig {\n        applicationId = \"");
+    build.append(o.id.view());
+    build.append("\"\n        minSdk = 25\n        targetSdk = 36\n        versionCode = 1\n        versionName = \"");
+    build.append(o.version.view());
     build.append("\"\n    }\n    buildTypes { getByName(\"release\") { isMinifyEnabled = false } }\n")!;
-    build.append("    packaging { jniLibs { useLegacyPackaging = true } }\n")!;
-    build.append("    sourceSets {\n        getByName(\"main\") {\n")!;
-    build.append("            manifest.srcFile(\"../android/AndroidManifest.xml\")\n")!;
-    build.append("            jniLibs.directories.add(\"../android/lib\")\n")!;
-    build.append("            java.directories.add(\"java\")\n        }\n    }\n}\n")!;
+    build.append("    packaging { jniLibs { useLegacyPackaging = true } }\n");
+    build.append("    sourceSets {\n        getByName(\"main\") {\n");
+    build.append("            manifest.srcFile(\"../android/AndroidManifest.xml\")\n");
+    build.append("            jniLibs.directories.add(\"../android/lib\")\n");
+    build.append("            java.directories.add(\"java\")\n        }\n    }\n}\n");
     build.append("dependencies {\n    implementation(\"com.google.firebase:firebase-messaging:")!;
-    build.append(FIREBASE_MESSAGING_VERSION)!;
+    build.append(FIREBASE_MESSAGING_VERSION);
     build.append("\")\n}\n")!;
     let settings = cat([
         "pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }\n",
@@ -1066,10 +1066,10 @@ fn webHostPath(toml: StringView) -> String {
 fn decimal(n: usize) -> String {
     var s = String.create();
     if (n >= 10) {
-        s.append(decimal(n / 10).view())!;
+        s.append(decimal(n / 10).view());
     }
     let digits = "0123456789";
-    s.append(digits[n % 10..n % 10 + 1])!;
+    s.append(digits[n % 10..n % 10 + 1]);
     return s;
 }
 
@@ -1087,7 +1087,7 @@ const WEB_COMPILE: StringView = "set -e\n" +
 /// Copies the font files named on the lines of `list` into out/pack/web/fonts as PREFIX0, PREFIX1, ..., and appends
 /// their names to `json` as an array; false when one cannot be copied.
 fn copyFonts(list: StringView, prefix: StringView, json: borrow mut String) -> bool {
-    json.append("[")!;
+    json.append("[");
     var fonts = list.split("\n");
     var count: usize = 0;
     loop {
@@ -1103,14 +1103,14 @@ fn copyFonts(list: StringView, prefix: StringView, json: borrow mut String) -> b
             return false;
         }
         if (count > 0) {
-            json.append(", ")!;
+            json.append(", ");
         }
         json.append("\"")!;
-        json.append(name.view())!;
+        json.append(name.view());
         json.append("\"")!;
         count += 1;
     }
-    json.append("]")!;
+    json.append("]");
     return true;
 }
 
@@ -1161,11 +1161,11 @@ fn packWeb(o: borrow Options, toml: StringView) -> i32 {
     if (!copyFonts(o.fonts.view(), "font-", mut json)) {
         return fail("cannot copy a font");
     }
-    json.append(", \"fallbacks\": ")!;
+    json.append(", \"fallbacks\": ");
     if (!copyFonts(o.fallbacks.view(), "fallback-", mut json)) {
         return fail("cannot copy a fallback font");
     }
-    json.append("}\n")!;
+    json.append("}\n");
     if (!writeText("out/pack/web/app.json", json.view())) {
         return fail("cannot write out/pack/web/app.json");
     }
@@ -1207,15 +1207,15 @@ fn replaced(text: StringView, from: StringView, to: StringView) -> String {
             }
         }
         if (same) {
-            out.appendUtf8(t[run..i])!;
-            out.append(to)!;
+            out.appendUtf8(t[run..i]);
+            out.append(to);
             i += f.length;
             run = i;
         } else {
             i += 1;
         }
     }
-    out.appendUtf8(t[run..t.length])!;
+    out.appendUtf8(t[run..t.length]);
     return out;
 }
 
@@ -1256,16 +1256,16 @@ fn newApp() -> i32 {
         ["ceeui_fonts", "ceeui-fonts"],
         ["ceeui_desktop", "ceeui-desktop"],
     ]) {
-        deps.append(dep[0])!;
+        deps.append(dep[0]);
         if (local.view().length > 0) {
             deps.append(" = { path = \"")!;
-            deps.append(local.view())!;
-            deps.append("/")!;
-            deps.append(dep[1])!;
+            deps.append(local.view());
+            deps.append("/");
+            deps.append(dep[1]);
             deps.append("\" }\n")!;
         } else {
             deps.append(" = { git = \"https://github.com/CeeSafe/CeeUI.git\", branch = \"main\", dir = \"")!;
-            deps.append(dep[1])!;
+            deps.append(dep[1]);
             deps.append("\" }\n")!;
         }
     }
@@ -1368,11 +1368,11 @@ fn main() -> i32 {
         } else if (flag == "--bluetooth") {
             o.bluetooth = text(value);
         } else if (flag == "--fallback") {
-            o.fallbacks.append(value)!;
-            o.fallbacks.append("\n")!;
+            o.fallbacks.append(value);
+            o.fallbacks.append("\n");
         } else if (flag == "--font") {
-            o.fonts.append(value)!;
-            o.fonts.append("\n")!;
+            o.fonts.append(value);
+            o.fonts.append("\n");
         } else {
             return usage();
         }

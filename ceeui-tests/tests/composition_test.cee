@@ -69,7 +69,7 @@ fn textIs(bytes: Slice<u8>, want: StringView) -> bool {
 fn aComposedWordStaysInTheFieldItWasTypedIn() -> Result<void, TestFailure> {
     var storage = [0u8; 1048576];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(600.0, 400.0, -1.0, -1.0);
     var f = Form {
         name: [0u8; 64],

@@ -60,7 +60,7 @@ fn compositeAndAccentedGlyphsDraw() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(120, 60);
     c.imagePixels = 4;
     c.fontBytes = 1048576;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     Check.isTrue(ras.loadFont(0, font.view()), "loads")?;
     ras.begin(rgba(255, 255, 255, 255));
     let text = "ÁÉ";
@@ -106,11 +106,11 @@ fn uiLaysOutAndRendersWithTheRasterFonts() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(200, 60);
     c.imagePixels = 4;
     c.fontBytes = 1048576;
-    var ras = Raster.create(rasterMemory, c)!;
+    var ras = Raster.create(rasterMemory, c);
     Check.isTrue(ras.loadFont(0, font.view()), "loads")?;
     var uiStorage = [0u8; 524288];
     let uiMemory = FixedBufferAllocator.over(mut uiStorage);
-    var ui = Ui.create(uiMemory, UiCapacity.of(32))!;
+    var ui = Ui.create(uiMemory, UiCapacity.of(32));
     var platform = StillPlatform { size: Dims { w: 200.0, h: 60.0 } };
     ui.begin(mut platform);
     ui.open(Style.row().id("label").p(4.0).bg(SLATE_900));

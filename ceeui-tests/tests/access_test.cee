@@ -90,7 +90,7 @@ fn newAccessApp() -> AccessApp => AccessApp {
 fn aFramesElementsAreListedForAScreenReader() -> Result<void, TestFailure> {
     var storage = [0u8; 1048576];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(800.0, 600.0, -1.0, -1.0);
     var app = newAccessApp();
     app.name[0] = 'A';
@@ -146,7 +146,7 @@ fn aFramesElementsAreListedForAScreenReader() -> Result<void, TestFailure> {
 fn aScreenReadersActionsReachTheControls() -> Result<void, TestFailure> {
     var storage = [0u8; 1048576];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(800.0, 600.0, -1.0, -1.0);
     var app = newAccessApp();
     accessStep(mut ui, mut platform, mut app)?;
@@ -186,7 +186,7 @@ fn aScreenReadersActionsReachTheControls() -> Result<void, TestFailure> {
 fn tabsAreReachedByTheKeysAndReportTheirFocus() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(800.0, 600.0, -1.0, -1.0);
     var app = newAccessApp();
     accessStep(mut ui, mut platform, mut app)?;

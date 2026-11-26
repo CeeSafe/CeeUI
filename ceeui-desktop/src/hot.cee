@@ -30,9 +30,9 @@ public fn hotDirectory() -> StringView? {
 /// `dir/name`.
 public fn hotPath(dir: StringView, name: StringView) -> String {
     var s = String.create();
-    s.append(dir)!;
-    s.append("/")!;
-    s.append(name)!;
+    s.append(dir);
+    s.append("/");
+    s.append(name);
     return s;
 }
 

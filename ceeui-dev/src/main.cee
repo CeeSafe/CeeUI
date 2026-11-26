@@ -31,7 +31,7 @@ fn readText(path: StringView) -> Vector<u8> {
                     break;
                 }
                 for (i in 0usize..n) {
-                    bytes.push(chunk[i])!;
+                    bytes.push(chunk[i]);
                 }
             }
         }
@@ -43,9 +43,9 @@ fn readText(path: StringView) -> Vector<u8> {
 /// `a/b`.
 fn joined(a: StringView, b: StringView) -> String {
     var s = String.create();
-    s.append(a)!;
-    s.append("/")!;
-    s.append(b)!;
+    s.append(a);
+    s.append("/");
+    s.append(b);
     return s;
 }
 
@@ -63,7 +63,7 @@ fn normalized(path: StringView) -> String {
             } else if (part == ".." && parts.length > 0 && parts[parts.length - 1] != "..") {
                 let dropped = parts.pop();
             } else {
-                parts.push(part)!;
+                parts.push(part);
             }
             start = i + 1;
         }
@@ -71,12 +71,12 @@ fn normalized(path: StringView) -> String {
     var s = String.create();
     for (k in 0..parts.length) {
         if (k > 0) {
-            s.append("/")!;
+            s.append("/");
         }
-        s.append(parts[k])!;
+        s.append(parts[k]);
     }
     if (s.view().length == 0) {
-        s.append(".")!;
+        s.append(".");
     }
     return s;
 }
@@ -112,7 +112,7 @@ fn quotedAfter(toml: Slice<u8>, key: StringView, into: borrow mut Vector<String>
                 }
                 if (q < end && e < end) {
                     match (StringView.fromUtf8(toml[q + 1..e])) {
-                        Some(v) => { into.push(String.from(v)!)!; }
+                        Some(v) => { into.push(String.from(v)); }
                         null => {}
                     }
                 }
@@ -137,7 +137,7 @@ fn packagesFrom(path: StringView, into: borrow mut Vector<String>) {
     if (into.length >= MAX_PACKAGES) {
         return;
     }
-    into.push(String.from(dir)!)!;
+    into.push(String.from(dir));
     let manifest = joined(dir, "ceesafe.toml");
     let toml = readText(manifest.view());
     var paths = Vector<String>.create();
@@ -193,9 +193,9 @@ fn sourcesSum(packages: borrow Vector<String>) -> u64 {
 /// Builds the package here into `out`; whether it built.
 fn build(out: StringView) -> bool {
     var args = Vector<StringView>.create();
-    args.push("build")!;
-    args.push("-o")!;
-    args.push(out)!;
+    args.push("build");
+    args.push("-o");
+    args.push(out);
     return match (Process.run("ceesafec", args)) {
         Ok(status) => status == 0,
         Err(_) => {
@@ -227,7 +227,7 @@ fn executable(name: StringView, n: u32) -> String {
     w.text(name);
     w.text("-hot-");
     w.decimal(n as u64);
-    return String.from(StringView.fromUtf8(w.written())!)!;
+    return String.from(StringView.fromUtf8(w.written())!);
 }
 
 /// Waits `ms` milliseconds (the loop below is no task: it builds, reads files and joins threads, which block).
@@ -242,7 +242,7 @@ fn sleep(ms: u64) {
 
 /// Watches, rebuilds and restarts the app until it ends by itself.
 fn devLoop(name: String, packages: Vector<String>) -> i32 {
-    let hot = String.from("out/hot")!;
+    let hot = String.from("out/hot");
     let reload = joined(hot.view(), "reload");
     let ignored = Directory.create(hot.view());
     let stale = File.remove(joined(hot.view(), "state").view()); // a fresh start: no state from an earlier session
@@ -256,7 +256,7 @@ fn devLoop(name: String, packages: Vector<String>) -> i32 {
         Ok(c) => c,
         Err(_) => { return 1; }
     };
-    var app = match (launch(exe.clone()!, hot.clone()!, done.clone())) {
+    var app = match (launch(exe.clone(), hot.clone(), done.clone())) {
         Ok(t) => t,
         Err(_) => { return 1; }
     };
@@ -298,7 +298,7 @@ fn devLoop(name: String, packages: Vector<String>) -> i32 {
         let old = File.remove(exe.view());
         n += 1;
         exe = next;
-        app = match (launch(exe.clone()!, hot.clone()!, done.clone())) {
+        app = match (launch(exe.clone(), hot.clone(), done.clone())) {
             Ok(t) => t,
             Err(_) => { return 1; }
         };
@@ -321,5 +321,5 @@ fn main() -> i32 {
     Console.write("ceeui-dev: watching ");
     Console.write(packages.length);
     Console.writeLine(" packages' sources");
-    return devLoop(names[0].clone()!, packages);
+    return devLoop(names[0].clone(), packages);
 }

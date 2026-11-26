@@ -107,7 +107,7 @@ fn sortedBy(s: borrow GridState, column: usize, descending: bool) -> bool => mat
 fn aDataGridsTitlesSortByTheirColumn() -> Result<void, TestFailure> {
     var storage = heap(16777216);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(1024))!;
+    var ui = Ui.create(memory, UiCapacity.of(1024));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var s = gridState();
     gridFrame(mut ui, mut platform, mut s)?;
@@ -130,7 +130,7 @@ fn aDataGridsTitlesSortByTheirColumn() -> Result<void, TestFailure> {
 fn aDataGridsColumnsAreResizedByTheirEdge() -> Result<void, TestFailure> {
     var storage = heap(16777216);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(1024))!;
+    var ui = Ui.create(memory, UiCapacity.of(1024));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var s = gridState();
     gridFrame(mut ui, mut platform, mut s)?;
@@ -152,7 +152,7 @@ fn aDataGridsColumnsAreResizedByTheirEdge() -> Result<void, TestFailure> {
 fn aDataGridsHeaderFollowsItsRowsSideways() -> Result<void, TestFailure> {
     var storage = heap(16777216);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(1024))!;
+    var ui = Ui.create(memory, UiCapacity.of(1024));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var s = gridState();
     gridFrame(mut ui, mut platform, mut s)?;
@@ -171,7 +171,7 @@ fn aDataGridsHeaderFollowsItsRowsSideways() -> Result<void, TestFailure> {
 fn aDataGridSelectsRowsAndDrawsOnlyThoseInView() -> Result<void, TestFailure> {
     var storage = heap(16777216);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(1024))!;
+    var ui = Ui.create(memory, UiCapacity.of(1024));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var s = gridState();
     gridFrame(mut ui, mut platform, mut s)?;
@@ -193,7 +193,7 @@ fn aDataGridSelectsRowsAndDrawsOnlyThoseInView() -> Result<void, TestFailure> {
 fn aDataGridsCellsAreTheirRowsByColumn() -> Result<void, TestFailure> {
     var storage = heap(16777216);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(1024))!;
+    var ui = Ui.create(memory, UiCapacity.of(1024));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var s = gridState();
     gridFrame(mut ui, mut platform, mut s)?;
@@ -237,7 +237,7 @@ fn aDataGridsCellsAreTheirRowsByColumn() -> Result<void, TestFailure> {
 fn aScreenReadersPressOnARowSelectsIt() -> Result<void, TestFailure> {
     var storage = heap(16777216);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(1024))!;
+    var ui = Ui.create(memory, UiCapacity.of(1024));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var s = gridState();
     gridFrame(mut ui, mut platform, mut s)?;

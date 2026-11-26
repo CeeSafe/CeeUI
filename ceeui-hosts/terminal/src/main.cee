@@ -154,14 +154,14 @@ fn main() -> i32 {
     var app = App { tab: 0, clicks: 0, lastKey: 0 };
 
     if (Environment.variable("CEEUI_ONCE") != null) {
-        var screen = Screen.create(80, 24)!;
+        var screen = Screen.create(80, 24);
         var term = Terminal.create(screen.size());
         if (!frame(mut ui, mut term, mut screen, mut app)) {
             Console.writeErrorLine("ceeui: the frame does not fit the UI capacity");
             return 1;
         }
         term.endFrame();
-        let text = screen.plain()!;
+        let text = screen.plain();
         Console.writeBytes(text.view());
         return 0;
     }
@@ -170,7 +170,7 @@ fn main() -> i32 {
         Some(d) => d,
         null => Dims { w: 80.0, h: 24.0 },
     };
-    var screen = Screen.create(truncate<usize>(size.w), truncate<usize>(size.h))!;
+    var screen = Screen.create(truncate<usize>(size.w), truncate<usize>(size.h));
     var term = Terminal.create(screen.size());
     let raw = RawMode.enter();
     if (!raw.isActive()) {
@@ -220,7 +220,7 @@ fn main() -> i32 {
     // CEEUI_DUMP=<path>: the last frame as plain text, for scripted tests over a pseudo-terminal.
     match (Environment.variable("CEEUI_DUMP")) {
         Some(path) => {
-            let text = screen.plain()!;
+            let text = screen.plain();
             match (File.create(path)) {
                 Ok(f) => {
                     var file = f;

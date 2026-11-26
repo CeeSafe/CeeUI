@@ -20,7 +20,7 @@ fn inspectFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform) -> Result<
 fn theInspectorDescribesTheElementUnderThePointer() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     inspectFrame(mut ui, mut platform)?;
     let card = ui.boxOf("card")!;

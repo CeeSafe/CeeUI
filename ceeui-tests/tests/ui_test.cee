@@ -200,7 +200,7 @@ fn tailwindOptionsMapToTheEngine() -> Result<void, TestFailure> {
 fn hoverActiveAndCursor() -> Result<void, TestFailure> {
     var storage = [0u8; 524288];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 300.0, 50.0, 50.0);
     // Frame 1: nothing laid out yet, so nothing is hovered.
     ui.begin(mut platform);
@@ -253,7 +253,7 @@ fn hoverActiveAndCursor() -> Result<void, TestFailure> {
 fn disabledAndGroupVariants() -> Result<void, TestFailure> {
     var storage = [0u8; 524288];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 300.0, 20.0, 20.0);
     for (frame in 0..2) {
         ui.begin(mut platform);
@@ -287,7 +287,7 @@ fn scrollList(ui: borrow mut Ui) {
 fn wheelAndDragScrolling() -> Result<void, TestFailure> {
     var storage = [0u8; 524288];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 300.0, 10.0, 10.0);
     // Frames 1-2 learn the container's size (50) and content (200).
     for (f in 0..2) {
@@ -357,7 +357,7 @@ fn rowsList(ui: borrow mut Ui, rows: usize) {
 fn scrollingToTheBottomReachesWhatTheSameFrameAdded() -> Result<void, TestFailure> {
     var storage = [0u8; 524288];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 300.0, 300.0, 300.0);
     for (f in 0..2) {
         ui.begin(mut platform);
@@ -382,7 +382,7 @@ fn scrollingToTheBottomReachesWhatTheSameFrameAdded() -> Result<void, TestFailur
 fn breakpointsThemeAndContainers() -> Result<void, TestFailure> {
     var storage = [0u8; 524288];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(1100.0, 600.0, -1.0, -1.0);
     ui.begin(mut platform);
     let lg = match (ui.breakpoint()) {
@@ -407,7 +407,7 @@ fn breakpointsThemeAndContainers() -> Result<void, TestFailure> {
 fn responsiveFrame(width: f32) -> Result<[f32; 3], TestFailure> {
     var storage = [0u8; 524288];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(width, 600.0, -1.0, -1.0);
     ui.begin(mut platform);
     ui.open(Style.column().id("box").w(Size.fixed(100.0)).md(Style.of().w(Size.fixed(200.0)))
@@ -440,7 +440,7 @@ fn responsiveVariantsAreMobileFirst() -> Result<void, TestFailure> {
         expect("the pair's height", got[2], if (rows[k]) 50.0 else 100.0)?;
         var storage = [0u8; 262144];
         let memory = FixedBufferAllocator.over(mut storage);
-        var ui = Ui.create(memory, UiCapacity.of(16))!;
+        var ui = Ui.create(memory, UiCapacity.of(16));
         var platform = platformAt(widths[k], 600.0, -1.0, -1.0);
         ui.begin(mut platform);
         Check.isTrue(ui.breakpoint() == named[k], "the breakpoint of the width")?;
@@ -462,7 +462,7 @@ fn isCompact(c: SizeClass) -> bool => match (c) {
 fn safeAreaAndSizeClasses() -> Result<void, TestFailure> {
     var storage = [0u8; 524288];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(402.0, 874.0, -1.0, -1.0);
     platform.safe = Insets { left: 0.0, top: 62.0, right: 0.0, bottom: 34.0 };
     for (frame in 0..2) {
@@ -507,7 +507,7 @@ fn safeAreaAndSizeClasses() -> Result<void, TestFailure> {
 fn softKeyboardAndTextKind() -> Result<void, TestFailure> {
     var storage = [0u8; 524288];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(402.0, 874.0, -1.0, -1.0);
     platform.safe = Insets { left: 0.0, top: 62.0, right: 0.0, bottom: 34.0 };
     ui.begin(mut platform);
@@ -559,7 +559,7 @@ fn blue(d: Decl) -> f32 => round<f32>(d.background.b as u32);
 fn transitionsEaseAndSettle() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = Transitions.create(memory, 64)!;
+    var t = Transitions.create(memory, 64);
     let RED: u32 = 0xFF0000FF;
     let BLUE: u32 = 0x0000FFFF;
     let colLin = TransitionSpec.colorsOnly().durationMs(1000.0).easing(Ease.Linear);
@@ -629,7 +629,7 @@ fn transitionsEaseAndSettle() -> Result<void, TestFailure> {
 fn hoverTransitionsThroughTheUi() -> Result<void, TestFailure> {
     var storage = [0u8; 524288];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 300.0, 10.0, 10.0);
     platform.dt = 0.05;
     let RED: u32 = 0xFF0000FF;
@@ -655,7 +655,7 @@ fn hoverTransitionsThroughTheUi() -> Result<void, TestFailure> {
 fn runningOutOfRoomIsReported() -> Result<void, TestFailure> {
     var storage = [0u8; 524288];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(4))!;
+    var ui = Ui.create(memory, UiCapacity.of(4));
     var platform = platformAt(100.0, 100.0, -1.0, -1.0);
     ui.begin(mut platform);
     for (i in 0..10) {
@@ -695,7 +695,7 @@ fn aHundredThousandLinesCostAScreenful() -> Result<void, TestFailure> {
     Check.equalU64(50000, lineAt(starts.view(), count, (starts[50000] as usize) + 3) as u64)?;
     var storage = heap(4194304);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var ui = Ui.create(memory, UiCapacity.of(256));
     var platform = platformAt(400.0, 300.0, 10.0, 10.0);
     for (f in 0..2) {
         ui.begin(mut platform);
@@ -774,7 +774,7 @@ fn fieldFrame(
 fn textFieldSelectsCopiesCutsAndPastes() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 300.0, 20.0, 15.0);
     var buf = [0u8; 64];
     var len: usize = 0;
@@ -828,7 +828,7 @@ fn textFieldSelectsCopiesCutsAndPastes() -> Result<void, TestFailure> {
 fn doubleClickSelectsAWordAndTripleClickEverything() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 300.0, 20.0, 15.0);
     var buf = [0u8; 64];
     let start = "hello world";
@@ -895,7 +895,7 @@ fn counterFrame(
 fn framesRunOnlyWhenSomethingChanges() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 300.0, 10.0, 10.0);
     var counter = Model<Counter>.of(Counter { clicks: 0 });
     // The first frame sees the pointer arrive; the next has nothing new and the window can sleep.
@@ -923,7 +923,7 @@ fn framesRunOnlyWhenSomethingChanges() -> Result<void, TestFailure> {
 fn aFocusedFieldWakesForItsCaret() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 300.0, 20.0, 15.0);
     var buf = [0u8; 16];
     var len: usize = 0;
@@ -961,7 +961,7 @@ fn laterFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, a: f64, b: f
 fn aFrameAskedForLaterSetsTheDelay() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 300.0, 10.0, 10.0);
     laterFrame(mut ui, mut platform, -1.0, -1.0)?;
     laterFrame(mut ui, mut platform, -1.0, -1.0)?;
@@ -1013,7 +1013,7 @@ fn keymapFrame(
 fn keystrokesTriggerTheirActionsInContext() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 300.0, 10.0, 10.0);
     ui.setSecondaryIsCommand(true);
     Check.isTrue(ui.bind("secondary-shift-p", "palette", ""), "a global binding")?;
@@ -1073,7 +1073,7 @@ fn passwordFrame(
 fn aPasswordFieldShowsDotsAndCopiesNothing() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 300.0, 20.0, 15.0);
     var buf = [0u8; 64];
     var len: usize = 0;
@@ -1141,7 +1141,7 @@ fn aFrameOutOfRoomForItsCommandsHasNone() -> Result<void, TestFailure> {
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
     var capacity = UiCapacity.of(32);
     capacity.layout.commands = 3;
-    var ui = Ui.create(memory, capacity)!;
+    var ui = Ui.create(memory, capacity);
     var platform = platformAt(100.0, 100.0, -1.0, -1.0);
     ui.begin(mut platform);
     ui.open(Style.column().w(Size.fixed(80.0)).h(Size.fixed(80.0)).clip());

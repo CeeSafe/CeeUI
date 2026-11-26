@@ -86,7 +86,7 @@ fn phaseIs(p: GesturePhase, want: u32) -> bool => match (p) {
 fn tapsClickAndCount() -> Result<void, TestFailure> {
     var storage = [0u8; 524288];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     setUp(mut ui, mut platform)?;
     touch(mut platform, 1, TouchPhase.Began, 50.0, 50.0);
@@ -136,7 +136,7 @@ fn tapsClickAndCount() -> Result<void, TestFailure> {
 fn longPressIsASecondaryPress() -> Result<void, TestFailure> {
     var storage = [0u8; 524288];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     setUp(mut ui, mut platform)?;
     touch(mut platform, 1, TouchPhase.Began, 50.0, 50.0);
@@ -162,7 +162,7 @@ fn longPressIsASecondaryPress() -> Result<void, TestFailure> {
 fn panPhasesAndNoClick() -> Result<void, TestFailure> {
     var storage = [0u8; 524288];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     setUp(mut ui, mut platform)?;
     touch(mut platform, 1, TouchPhase.Began, 20.0, 50.0);
@@ -203,7 +203,7 @@ fn panPhasesAndNoClick() -> Result<void, TestFailure> {
 fn panScrollsAndFlings() -> Result<void, TestFailure> {
     var storage = [0u8; 524288];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     setUp(mut ui, mut platform)?;
     // A slow drag up the list: the content follows the finger, and its rest before the lift means no fling.
@@ -247,7 +247,7 @@ fn panScrollsAndFlings() -> Result<void, TestFailure> {
 fn fingerStopsFlingAndAxesChoose() -> Result<void, TestFailure> {
     var storage = [0u8; 524288];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     setUp(mut ui, mut platform)?;
     // A flick up the content: a fling that would run for a while.
@@ -281,7 +281,7 @@ fn fingerStopsFlingAndAxesChoose() -> Result<void, TestFailure> {
 fn pinchScalesAndCancelsTheTap() -> Result<void, TestFailure> {
     var storage = [0u8; 524288];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     setUp(mut ui, mut platform)?;
     touch(mut platform, 1, TouchPhase.Began, 40.0, 50.0);

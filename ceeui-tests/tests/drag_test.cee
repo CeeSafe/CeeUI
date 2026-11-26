@@ -38,7 +38,7 @@ fn moveTo(platform: borrow mut FakePlatform, x: f32, y: f32) {
 fn aDragDropsOnATarget() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(32))!;
+    var ui = Ui.create(memory, UiCapacity.of(32));
     var platform = platformAt(400.0, 100.0, 50.0, 50.0);
     dragFrame(mut ui, mut platform, CARD)?;
     // Press on the source, move a little: not yet a drag.
@@ -77,7 +77,7 @@ fn aDragDropsOnATarget() -> Result<void, TestFailure> {
 fn aTargetIgnoresOtherKinds() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(32))!;
+    var ui = Ui.create(memory, UiCapacity.of(32));
     var platform = platformAt(400.0, 100.0, 50.0, 50.0);
     dragFrame(mut ui, mut platform, 99)?;
     platform.pointerState.pressed = true;
@@ -95,7 +95,7 @@ fn aTargetIgnoresOtherKinds() -> Result<void, TestFailure> {
 fn filesFromTheSystemDropLikeADrag() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(32))!;
+    var ui = Ui.create(memory, UiCapacity.of(32));
     var platform = platformAt(400.0, 100.0, -1.0, -1.0);
     dragFrame(mut ui, mut platform, DRAG_FILES)?;
     // Files over the target (the pointer elsewhere: the system's drag has its own position).

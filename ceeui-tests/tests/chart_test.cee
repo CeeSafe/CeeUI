@@ -61,7 +61,7 @@ fn pathCount(ui: borrow Ui) -> usize {
 fn aChartsAxisRunsOverRoundValues() -> Result<void, TestFailure> {
     var storage = heap(4194304);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var ui = Ui.create(memory, UiCapacity.of(256));
     var platform = platformAt(500.0, 400.0, -1.0, -1.0);
     // 12 to 87: a step of 20 (the range over five, rounded up to 1, 2 or 5 of a power of ten), 0 to 100.
     let values = [12.0f32, 87.0, 40.0, 63.0];
@@ -88,7 +88,7 @@ fn aChartsAxisRunsOverRoundValues() -> Result<void, TestFailure> {
 fn aChartDrawsEachSeries() -> Result<void, TestFailure> {
     var storage = heap(4194304);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var ui = Ui.create(memory, UiCapacity.of(256));
     var platform = platformAt(500.0, 400.0, -1.0, -1.0);
     let two = [10.0f32, 20.0, 30.0, 40.0, 5.0, 15.0, 25.0, 35.0];
     chartFrame(mut ui, mut platform, ChartKind.Bar, two[..], 2)?;
@@ -104,7 +104,7 @@ fn aChartDrawsEachSeries() -> Result<void, TestFailure> {
 fn aChartShowsTheValuesUnderThePointer() -> Result<void, TestFailure> {
     var storage = heap(4194304);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var ui = Ui.create(memory, UiCapacity.of(256));
     var platform = platformAt(500.0, 400.0, -1.0, -1.0);
     let two = [10.0f32, 20.5, 30.0, 40.0, 5.0, 15.25, 25.0, 35.0];
     chartFrame(mut ui, mut platform, ChartKind.Line, two[..], 2)?;

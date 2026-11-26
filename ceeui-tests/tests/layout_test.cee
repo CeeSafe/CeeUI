@@ -9,7 +9,7 @@ import ceeui;
 fn justifySpaceModes() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     // Three 100px boxes in a 600px row: between 0/250/500, around 50/250/450, evenly 75/250/425.
     for (m in 0..3) {
         t.begin(1000.0, 1000.0);
@@ -34,7 +34,7 @@ fn justifySpaceModes() -> Result<void, TestFailure> {
 fn reverseRowAndColumn() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     var row = fixedBox(500.0, 100.0);
     row.layout.childGap = 20.0;
@@ -67,7 +67,7 @@ fn reverseRowAndColumn() -> Result<void, TestFailure> {
 fn defaultRowAndStretch() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     var row = fixedBox(500.0, 100.0);
     row.layout.childGap = 20.0;
@@ -96,7 +96,7 @@ fn defaultRowAndStretch() -> Result<void, TestFailure> {
 fn marginsShiftAndShrinkGrowSpace() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     t.open(hashId("mrow"), fixedBox(500.0, 100.0));
     var a = fixedBox(100.0, 100.0);
@@ -136,7 +136,7 @@ fn marginsShiftAndShrinkGrowSpace() -> Result<void, TestFailure> {
 fn translateIsVisualOnly() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     t.open(hashId("trow"), fixedBox(500.0, 100.0));
     var a = fixedBox(100.0, 100.0);
@@ -159,7 +159,7 @@ fn translateIsVisualOnly() -> Result<void, TestFailure> {
 fn flexWrapBasics() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     var w = sized(SizingAxis.fixed(250.0), SizingAxis.fit());
     w.layout.childGap = 10.0;
@@ -188,7 +188,7 @@ fn flexWrapBasics() -> Result<void, TestFailure> {
 fn flexWrapJustifyPerLine() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     for (m in 0..3) {
         t.begin(1000.0, 1000.0);
         var w = sized(SizingAxis.fixed(250.0), SizingAxis.fit());
@@ -215,7 +215,7 @@ fn flexWrapJustifyPerLine() -> Result<void, TestFailure> {
 fn flexWrapCrossAlignWithinLine() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     for (m in 0..2) {
         t.begin(1000.0, 1000.0);
         var w = fixedBox(250.0, 300.0);
@@ -240,7 +240,7 @@ fn flexWrapCrossAlignWithinLine() -> Result<void, TestFailure> {
 fn flexWrapReverseAndMargins() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     var w = sized(SizingAxis.fixed(250.0), SizingAxis.fit());
     w.layout.childGap = 10.0;
@@ -283,7 +283,7 @@ fn flexWrapReverseAndMargins() -> Result<void, TestFailure> {
 fn flexWrapColumn() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     var c = column(SizingAxis.fit(), SizingAxis.fixed(100.0));
     c.layout.childGap = 10.0;
@@ -306,7 +306,7 @@ fn flexWrapColumn() -> Result<void, TestFailure> {
 fn flexWrapNotSqueezed() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     t.open(hashId("sq"), column(SizingAxis.fixed(300.0), SizingAxis.fixed(100.0)));
     var c = column(SizingAxis.grow(), SizingAxis.fit());
@@ -347,7 +347,7 @@ fn flexWrapNotSqueezed() -> Result<void, TestFailure> {
 fn flexWrapSizing() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     var g = fixedBox(250.0, 200.0);
     g.layout.childGap = 10.0;
@@ -383,7 +383,7 @@ fn flexWrapSizing() -> Result<void, TestFailure> {
 fn alignContentModes() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     // start, center, end, between, around, evenly, stretch: y of line 1 and line 2.
     let want1 = [0, 650, 1300, 0, 325, 433, 0];
     let want2 = [400, 1050, 1700, 1700, 1375, 1267, 1050];
@@ -448,7 +448,7 @@ fn alignContentModes() -> Result<void, TestFailure> {
 fn relayoutColumnEstimate() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     t.open(hashId("ra"), sized(SizingAxis.fit(), SizingAxis.fit()));
     var c = column(SizingAxis.fit(), SizingAxis.fixed(100.0));
@@ -473,7 +473,7 @@ fn relayoutColumnEstimate() -> Result<void, TestFailure> {
 fn relayoutGrowColumn() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     t.open(hashId("rb"), fixedBox(400.0, 100.0));
     var c = column(SizingAxis.fit(), SizingAxis.grow());
@@ -498,7 +498,7 @@ fn relayoutGrowColumn() -> Result<void, TestFailure> {
 fn relayoutColumnCrossGrow() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     var c = column(SizingAxis.fit(), SizingAxis.fixed(100.0));
     c.layout.childGap = 10.0;
@@ -519,7 +519,7 @@ fn relayoutColumnCrossGrow() -> Result<void, TestFailure> {
 fn relayoutTextHeights() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     t.open(hashId("rt"), sized(SizingAxis.fit(), SizingAxis.fit()));
     var c = column(SizingAxis.fit(), SizingAxis.fixed(100.0));
@@ -546,7 +546,7 @@ fn relayoutTextHeights() -> Result<void, TestFailure> {
 fn relayoutAspect() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     t.open(hashId("rs"), fixedBox(400.0, 100.0));
     var a = sized(SizingAxis.grow(), SizingAxis.grow());
@@ -566,7 +566,7 @@ fn relayoutAspect() -> Result<void, TestFailure> {
 fn basisAndShrink() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     t.open(hashId("bs"), fixedBox(200.0, 50.0));
     var b0 = Decl.of();
@@ -641,7 +641,7 @@ fn basisAndShrink() -> Result<void, TestFailure> {
 fn insetAnchorsViaFloating() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     t.open(hashId("ip"), fixedBox(200.0, 100.0));
     var br = fixedBox(20.0, 10.0);
@@ -669,7 +669,7 @@ fn insetAnchorsViaFloating() -> Result<void, TestFailure> {
 fn textSitsAtThePadding() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     var p = Decl.of();
     p.layout.padding = Sides { top: 4.0, right: 12.0, bottom: 4.0, left: 12.0 };
@@ -720,7 +720,7 @@ fn textSitsAtThePadding() -> Result<void, TestFailure> {
 fn lineClampEllipsizes() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     t.open(hashId("clampbox"), sized(SizingAxis.fixed(100.0), SizingAxis.fit()));
     var config = TextConfig.of(16.0);
@@ -751,7 +751,7 @@ fn aClampedTextBeforeOneWithLineBreaksIsPlaced() -> Result<void, TestFailure> {
     // line break ended the slice before it began (a panic on the demo's Data page in a wide window).
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     t.open(hashId("clampbox"), sized(SizingAxis.fixed(100.0), SizingAxis.fit()));
     var config = TextConfig.of(16.0);
@@ -769,7 +769,7 @@ fn aClampedTextBeforeOneWithLineBreaksIsPlaced() -> Result<void, TestFailure> {
 fn containerQueriesReadThePreviousFrame() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     Check.isTrue(t.boxOf(hashId("cq_never")) == null, "unknown container is not found")?;
     t.begin(1000.0, 1000.0);
     leaf(mut t, "cq", fixedBox(300.0, 120.0));
@@ -787,7 +787,7 @@ fn containerQueriesReadThePreviousFrame() -> Result<void, TestFailure> {
 fn itemsBaseline() -> Result<void, TestFailure> {
     var storage = [0u8; 262144];
     let memory = FixedBufferAllocator.over(mut storage);
-    var t = LayoutTree.create(memory, LayoutCapacity.of(64))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(64));
     t.begin(1000.0, 1000.0);
     var row = fixedBox(400.0, 80.0);
     row.layout.alignY = AxisAlign.Baseline;

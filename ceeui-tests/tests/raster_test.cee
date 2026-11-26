@@ -32,9 +32,9 @@ fn checkRGB(ras: borrow Raster, x: usize, y: usize, r: i32, g: i32, b: i32, tol:
 fn box(x: f32, y: f32, w: f32, h: f32) -> Rect => Rect { x: x, y: y, w: w, h: h };
 
 fn heap(bytes: usize) -> Vector<u8> {
-    var v = Vector<u8>.withCapacity(bytes)!;
+    var v = Vector<u8>.withCapacity(bytes);
     for (i in 0..bytes) {
-        v.push(0)!;
+        v.push(0);
     }
     return v;
 }
@@ -130,7 +130,7 @@ fn drawScene(ras: borrow mut Raster) {
 fn matchesTheThorvgPixelTests() -> Result<void, TestFailure> {
     var storage = heap(12582912);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ras = Raster.create(memory, capacity())!;
+    var ras = Raster.create(memory, capacity());
     // The checker image: R,G,B,A bytes, red / green / green / red.
     Check.isTrue(ras.addImage(9, 2, 2), "image fits")?;
     ras.setImagePixel(9, 0, 0, 0xff0000ff);
@@ -236,7 +236,7 @@ fn blendModesMatchThorvgOperators() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(64, 8);
     c.imagePixels = 4;
     c.fontBytes = 16;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     let nothing = [0u8; 1];
     let empty = nothing[0..0];
     // backdrop 200,100,50 ; source 100,150,250, each mode on its own 4x4 cell.
@@ -286,7 +286,7 @@ fn rotatedEdgesCrossingTheTopOfTheFrame() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(320, 200);
     c.imagePixels = 4;
     c.fontBytes = 16;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     let nothing = [0u8; 1];
     let empty = nothing[0..0];
     ras.begin(rgba(240, 240, 240, 255));
@@ -318,7 +318,7 @@ fn degenerateRingsAreSolid() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(64, 32);
     c.imagePixels = 4;
     c.fontBytes = 16;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     let nothing = [0u8; 1];
     let empty = nothing[0..0];
     ras.begin(rgba(240, 240, 240, 255));
@@ -335,7 +335,7 @@ fn shadowsUseThorvgsBoxBlur() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(200, 100);
     c.imagePixels = 4;
     c.fontBytes = 16;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     let nothing = [0u8; 1];
     let empty = nothing[0..0];
     ras.begin(rgba(255, 255, 255, 255));
@@ -375,7 +375,7 @@ fn textMatchesTheThorvgTextChecks() -> Result<void, TestFailure> {
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
     var c = capacity();
     c.fontBytes = 1048576;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     Check.isTrue(ras.loadFont(0, font.view()), "Arial parses and loads")?;
     let nothing = [0u8; 1];
     let empty = nothing[0..0];

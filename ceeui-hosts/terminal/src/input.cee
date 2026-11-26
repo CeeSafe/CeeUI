@@ -241,8 +241,8 @@ public struct RawMode {
 
     public fn enter() -> RawMode {
         var args = Vector<StringView>.create();
-        args.push("raw")!;
-        args.push("-echo")!;
+        args.push("raw");
+        args.push("-echo");
         let ok = match (Process.run("stty", args)) {
             Ok(status) => status == 0,
             Err(_) => false,
@@ -258,7 +258,7 @@ public struct RawMode {
         Console.write("\u{1b}[?1006l\u{1b}[?1003l\u{1b}[0m\u{1b}[?25h\u{1b}[?1049l");
         if (this.active) {
             var args = Vector<StringView>.create();
-            args.push("sane")!;
+            args.push("sane");
             let ignored = Process.run("stty", args);
         }
     }
@@ -276,9 +276,9 @@ public fn terminalSize() -> Dims? {
 
 fn sizeWith(flag: StringView) -> Dims? {
     var args = Vector<StringView>.create();
-    args.push(flag)!;
-    args.push("/dev/tty")!;
-    args.push("size")!;
+    args.push(flag);
+    args.push("/dev/tty");
+    args.push("size");
     let output = match (Process.capture("stty", args, null)) {
         Ok(o) => o,
         Err(_) => { return null; }

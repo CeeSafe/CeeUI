@@ -54,7 +54,7 @@ fn fallbackGlyphsAreShapedMeasuredAndDrawn() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(200, 60);
     c.imagePixels = 4;
     c.fontBytes = 33554432;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
     Check.isTrue(ras.loadFont(16, wide.view()), "Arial Unicode loads")?;
     let chain = [16u32];
@@ -124,11 +124,11 @@ fn writeGray(ras: borrow Raster, w: usize, h: usize, path: StringView) {
     hw.decimal(h as u64);
     hw.text("\n255\n");
     for (b in hw.written()) {
-        out.push(b)!;
+        out.push(b);
     }
     for (y in 0..h) {
         for (x in 0..w) {
-            out.push(ras.pixelAt(x, y).r)!;
+            out.push(ras.pixelAt(x, y).r);
         }
     }
     match (File.create(path)) {
@@ -155,7 +155,7 @@ fn cffOutlinesDraw() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(320, 64);
     c.imagePixels = 4;
     c.fontBytes = 33554432;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     Check.isTrue(ras.loadFontFace(0, d, 0), "a CID-keyed CFF face loads")?;
     ras.begin(Color.rgb(0, 0, 0));
     let text = "永中AB的あ鬱";
@@ -205,7 +205,7 @@ fn marksSitOnTheirBases() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(64, 64);
     c.imagePixels = 4;
     c.fontBytes = 2097152;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
     var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 8];
     // e + COMBINING ACUTE: Arial's GPOS 'mark' puts the accent over the e, not after it.
@@ -230,7 +230,7 @@ fn rightToLeftRunsReadRightToLeft() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(64, 64);
     c.imagePixels = 4;
     c.fontBytes = 2097152;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
     var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 8];
     // "a", a space, then Hebrew alef bet: the a on the left, then bet, then alef at the right end.
@@ -270,7 +270,7 @@ fn arabicLettersJoin() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(64, 64);
     c.imagePixels = 4;
     c.fontBytes = 2097152;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
     if (!ras.covers(0, 0x628)) {
         Console.writeLine("  (this Arial has no Arabic: skipped)");
@@ -305,7 +305,7 @@ fn nastaliqHangsLettersByCursiveAttachment() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(64, 64);
     c.imagePixels = 4;
     c.fontBytes = 2097152;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     Check.isTrue(ras.loadFont(0, nastaliq.view()), "Noto Nastaliq loads")?;
     // "pakistan": its letters join, and Nastaliq sets each joined letter higher than the next.
     var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 16];
@@ -334,7 +334,7 @@ fn devanagariAndTamilShapeAsHarfBuzzDoes() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(16, 16);
     c.imagePixels = 4;
     c.fontBytes = 33554432;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     Check.isTrue(ras.loadFont(0, kohinoor.view()), "Kohinoor loads")?;
     Check.isTrue(ras.loadFont(1, tamil.view()), "Tamil Sangam MN loads")?;
     var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 16];
@@ -367,7 +367,7 @@ fn caretsFollowTheGlyphsAsDrawn() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(64, 64);
     c.imagePixels = 4;
     c.fontBytes = 2097152;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
     let config = TextConfig.of(40.0);
     // Left to right, a caret goes after the text before it.
@@ -401,7 +401,7 @@ fn aGlyphsAdvanceMovesThePenAndAMarksIsOffItsPlace() -> Result<void, TestFailure
     var c = RasterCapacity.of(64, 64);
     c.imagePixels = 4;
     c.fontBytes = 2097152;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
     var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 8];
     // Shaped at Arial's 2048 units an em: one pixel a unit, so every sum is exact.

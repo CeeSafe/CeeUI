@@ -34,7 +34,7 @@ fn readFile(path: Slice<u8>) -> Vector<u8> {
                     break;
                 }
                 for (i in 0usize..n) {
-                    bytes.push(chunk[i])!;
+                    bytes.push(chunk[i]);
                 }
             }
         }
@@ -211,21 +211,21 @@ async fn sendFrame(
     var header = [0u8; 10];
     let n = frameHeader(mut header[..], 2, payload);
     for (i in 0..n) {
-        out.push(header[i])!;
+        out.push(header[i]);
     }
     for (v in [x0, y0, w, h]) {
-        out.push(truncate<u8>(v))!;
-        out.push(truncate<u8>(v >> 8))!;
+        out.push(truncate<u8>(v));
+        out.push(truncate<u8>(v >> 8));
     }
     for (y in y0..y1) {
         for (x in x0..x1) {
             let p = px[y * WIDTH + x];
             prev[y * WIDTH + x] = p;
             // 0xAABBGGRR is R, G, B, A in memory order: canvas ImageData's.
-            out.push(truncate<u8>(p))!;
-            out.push(truncate<u8>(p >> 8))!;
-            out.push(truncate<u8>(p >> 16))!;
-            out.push(truncate<u8>(p >> 24))!;
+            out.push(truncate<u8>(p));
+            out.push(truncate<u8>(p >> 8));
+            out.push(truncate<u8>(p >> 16));
+            out.push(truncate<u8>(p >> 24));
         }
     }
     await stream.write(out.view())?;
@@ -248,7 +248,7 @@ async fn session(stream: borrow mut AsyncTcpStream, host: borrow mut Host) -> Re
     var platform = BrowserPlatform.create(Dims { w: round<f32>(WIDTH), h: round<f32>(HEIGHT) });
     var input = [0u8; 65536];
     var have: usize = 0;
-    var out = Vector<u8>.withCapacity(WIDTH * HEIGHT * 4 + 32)!;
+    var out = Vector<u8>.withCapacity(WIDTH * HEIGHT * 4 + 32);
     host.synced = false;
     host.lastCursor = 255;
     var last = Timer.now();
@@ -436,10 +436,10 @@ fn main() -> i32 {
     var uiStorage = Vector<u8>.create();
     var rasterStorage = Vector<u8>.create();
     for (i in 0..8388608) {
-        uiStorage.push(0)!;
+        uiStorage.push(0);
     }
     for (i in 0..67108864) {
-        rasterStorage.push(0)!;
+        rasterStorage.push(0);
     }
     let uiMemory = FixedBufferAllocator.over(mut uiStorage.viewMut());
     let rasterMemory = FixedBufferAllocator.over(mut rasterStorage.viewMut());
@@ -470,9 +470,9 @@ fn main() -> i32 {
         !loadFontFile(mut raster, FONT_MONO, dir.bytes(), "Courier New.ttf")) {
         return 1;
     }
-    var previous = Vector<u32>.withCapacity(WIDTH * HEIGHT)!;
+    var previous = Vector<u32>.withCapacity(WIDTH * HEIGHT);
     for (i in 0..WIDTH * HEIGHT) {
-        previous.push(0)!;
+        previous.push(0);
     }
     var host = Host {
         ui: ui,
@@ -484,7 +484,7 @@ fn main() -> i32 {
     };
     host.ui.setDarkMode(true);
     var page = Vector<u8>.create();
-    writePage(mut page)!;
+    writePage(mut page);
     match (Async.run(serve(port, mut host, page.view()))) {
         Ok() => { return 0; }
         Err(_) => {

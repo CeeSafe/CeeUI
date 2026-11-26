@@ -3,7 +3,8 @@ name = "desktop"
 version = "0.1.0"
 kind = "executable"
 windowed = true # a GUI program: no console window on Windows (CeeSafe ADR 0151)
-ceesafec = ">=0.93.5" # Window.openStyled (CeeSafe ADR 0206)
+ceesafec = ">=0.95.18" # out-of-memory = "panic", with a Result kept where it is used as one (CeeSafe ADR 0261)
+out-of-memory = "panic" # an allocation that fails stops the program; `?` still passes it on
 
 [dependencies]
 ceeui = { path = "../../ceeui" }

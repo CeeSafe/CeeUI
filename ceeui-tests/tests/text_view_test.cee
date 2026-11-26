@@ -16,7 +16,7 @@ struct Doc {
 fn docOf(text: StringView) -> Doc {
     var d = Doc { text: Vector<u8>.create(), starts: [0u32; 1100], count: 0, edit: TextEdit.at(0), command: null };
     for (b in text.bytes()) {
-        d.text.push(b)!;
+        d.text.push(b);
     }
     d.count = indexLines(d.text.view(), mut d.starts[..]) ?? 0;
     return d;
@@ -84,7 +84,7 @@ fn key(
 fn aTextViewIsSelectedWithThePointer() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     // Lines start at bytes 0 ("first line"), 11 ("second") and 18 ("third one").
     var doc = docOf("first line\nsecond\nthird one");
@@ -121,7 +121,7 @@ fn aTextViewIsSelectedWithThePointer() -> Result<void, TestFailure> {
 fn aTextViewsCaretMovesWithTheKeys() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var doc = docOf("first line\nsecond\nthird one");
     viewFrame(mut ui, mut platform, mut doc)?;
@@ -147,13 +147,13 @@ fn aTextViewsCaretMovesWithTheKeys() -> Result<void, TestFailure> {
 fn aTextViewScrollsToItsCaret() -> Result<void, TestFailure> {
     var storage = heap(4194304);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(256))!;
+    var ui = Ui.create(memory, UiCapacity.of(256));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     // 1000 lines of "line"; the view shows ten (200 points of 20).
     var text = String.create();
     for (k in 0..1000) {
         let _ = k;
-        text.append("line\n")!;
+        text.append("line\n");
     }
     var doc = docOf(text.view());
     viewFrame(mut ui, mut platform, mut doc)?;
@@ -336,7 +336,7 @@ fn editKey(
 fn anEditorTypesAndBreaksLines() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var doc = focusedEditor(mut ui, mut platform, "")?;
     Check.equalU64(1, doc.count as u64)?;
@@ -368,7 +368,7 @@ fn anEditorTypesAndBreaksLines() -> Result<void, TestFailure> {
 fn anEditorPastesAndCutsAcrossLines() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var doc = focusedEditor(mut ui, mut platform, "one\ntwo")?;
     // Paste "x\ny" over "ne\ntw": "ox\nyo", two lines.
@@ -389,7 +389,7 @@ fn anEditorPastesAndCutsAcrossLines() -> Result<void, TestFailure> {
 fn anEditorRefusesWhatHasNoRoom() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     // Seven line breaks: eight lines, as many as the index holds. One more Enter has no room.
     var doc = focusedEditor(mut ui, mut platform, "a\nb\nc\nd\ne\nf\ng\nh")?;
@@ -410,7 +410,7 @@ fn anEditorRefusesWhatHasNoRoom() -> Result<void, TestFailure> {
 fn anEditorShowsTheInputMethodsComposition() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var doc = focusedEditor(mut ui, mut platform, "abcd\nef")?;
     doc.edit = TextEdit.at(2);
@@ -452,7 +452,7 @@ fn command(
 fn anEditorUndoesAWordAtATime() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var doc = focusedEditor(mut ui, mut platform, "")?;
     typeChars(mut platform, "hello ");
@@ -493,7 +493,7 @@ fn anEditorUndoesAWordAtATime() -> Result<void, TestFailure> {
 fn anEditorUndoesDeletesAndPastesWithTheirSelection() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var doc = focusedEditor(mut ui, mut platform, "one\ntwo")?;
     // Backspace at the second line's start joins the lines; Undo splits them again, the caret where it was.
@@ -518,7 +518,7 @@ fn anEditorUndoesDeletesAndPastesWithTheirSelection() -> Result<void, TestFailur
 fn aSmallHistoryKeepsTheLatestEdits() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var doc = focusedEditor(mut ui, mut platform, "")?;
     // Twelve words, each its own record of 33 bytes (28 of head and trail, "abcd " typed into it): 256 bytes keep
@@ -549,7 +549,7 @@ fn rowsStarting(ui: borrow Ui, first: u8, out: borrow mut Vector<f32>) {
             Command.Text(r, _) => {
                 let t = ui.textOf(command);
                 if (t.length > 0 && t[0] == first) {
-                    out.push(r.y)!;
+                    out.push(r.y);
                 }
             }
             _ => {}
@@ -564,7 +564,7 @@ fn longLine() -> StringView => "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjj
 fn anEditorWrapsLongLinesIntoRows() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var doc = focusedEditor(mut ui, mut platform, longLine())?;
     editorFrame(mut ui, mut platform, mut doc)?;
@@ -610,7 +610,7 @@ fn anEditorWrapsLongLinesIntoRows() -> Result<void, TestFailure> {
 fn anEditorWithoutWrappingKeepsALineOneRow() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     var doc = editorOf(longLine());
     doc.nowrap = true;
@@ -636,7 +636,7 @@ fn editCaret(
 fn anEditorInAClippingParentWrapsAtItsWidth() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     // A clipping parent leaves an overflowing child as it is: the editor's unwrapped first frame must not make it as
     // wide as its longest line, or it would wrap at that width ever after.
@@ -654,7 +654,7 @@ fn anEditorInAClippingParentWrapsAtItsWidth() -> Result<void, TestFailure> {
 fn upAndDownKeepTheCaretsPlaceThroughShortLines() -> Result<void, TestFailure> {
     var storage = heap(2097152);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(400.0, 300.0, -1.0, -1.0);
     // Lines at 0 ("long line here"), 15 ("ab") and 18 ("another longer").
     var doc = focusedEditor(mut ui, mut platform, "long line here\nab\nanother longer")?;

@@ -114,7 +114,7 @@ fn click(ui: borrow mut Ui, platform: borrow mut FakePlatform, app: borrow mut A
 fn controlsDrivenByAScriptedPlatform() -> Result<void, TestFailure> {
     var storage = [0u8; 1048576];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(800.0, 600.0, -1.0, -1.0);
     var app = App { saveHit: false, name: [0u8; 32], nameLen: 0, nameCaret: 0, volume: 0.25, qty: 3 };
 
@@ -245,7 +245,7 @@ fn controlsDrivenByAScriptedPlatform() -> Result<void, TestFailure> {
 fn choiceControlsSelectAndClose() -> Result<void, TestFailure> {
     var storage = [0u8; 1048576];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var p = platformAt(800.0, 600.0, -1.0, -1.0);
     let metrics = FixedAdvance { unused: 0 };
     let sizes: [StringView; 3] = ["Small", "Medium", "Large"];
@@ -330,7 +330,7 @@ fn dropdownOverRow(
 fn anOpenDropdownTakesTheClickFromWhatItCovers() -> Result<void, TestFailure> {
     var storage = [0u8; 1048576];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var p = platformAt(800.0, 600.0, -1.0, -1.0);
     var picked: usize = 0;
     var open = false;
@@ -427,7 +427,7 @@ fn stepKeeping(
 fn aTapElsewhereLeavesATextFieldWhenItEnds() -> Result<void, TestFailure> {
     var storage = [0u8; 1048576];
     let memory = FixedBufferAllocator.over(mut storage);
-    var ui = Ui.create(memory, UiCapacity.of(128))!;
+    var ui = Ui.create(memory, UiCapacity.of(128));
     var platform = platformAt(800.0, 600.0, -1.0, -1.0);
     var app = App { saveHit: false, name: [0u8; 32], nameLen: 0, nameCaret: 0, volume: 0.25, qty: 3 };
     step(mut ui, mut platform, mut app)?;
@@ -499,7 +499,7 @@ fn controlsTakeTheTheme() -> Result<void, TestFailure> {
     var storage = Vector<u8>.create();
     let _ = storage.resize(1048576, 0);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(800.0, 600.0, -1.0, -1.0);
 
     themedFrame(mut ui, mut platform, true)?;
@@ -561,7 +561,7 @@ fn wrappedTextHasItsHeightOnTheFirstFrame() -> Result<void, TestFailure> {
     var storage = Vector<u8>.create();
     let _ = storage.resize(1048576, 0);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(520.0, 520.0, -1.0, -1.0);
     wrapFrame(mut ui, mut platform)?;
     let first = ui.boxOf("panel")!.y;
@@ -608,7 +608,7 @@ fn theKeyboardAloneReachesAndWorksEveryControl() -> Result<void, TestFailure> {
     var storage = Vector<u8>.create();
     let _ = storage.resize(1048576, 0);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(800.0, 600.0, -1.0, -1.0);
     var app = KeyApp { text: [0u8; 16], length: 0, edit: TextEdit.at(0), presses: 0, on: false };
     keyFrame(mut ui, mut platform, mut app)?;
@@ -654,7 +654,7 @@ fn aTextFieldsMenuOpensOnASecondaryPressAndActs() -> Result<void, TestFailure> {
     var storage = Vector<u8>.create();
     let _ = storage.resize(1048576, 0);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(800.0, 600.0, -1.0, -1.0);
     var app = KeyApp { text: [0u8; 16], length: 0, edit: TextEdit.at(0), presses: 0, on: false };
     for (i in 0..11) {

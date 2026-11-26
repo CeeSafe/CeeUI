@@ -278,7 +278,7 @@ fn readFile(path: StringView) -> Vector<u8> {
                     break;
                 }
                 for (i in 0..n) {
-                    bytes.push(chunk[i])!;
+                    bytes.push(chunk[i]);
                 }
             }
         }
@@ -308,7 +308,7 @@ fn build(
         let line = bytes[lineStart..i];
         let base = lineStart;
         lineStart = i + 1;
-        split(line, mut parts)!;
+        split(line, mut parts);
         if (parts.length == 0) {
             continue;
         }
@@ -321,7 +321,7 @@ fn build(
             let name = line[parts[1].start..parts[1].start + parts[1].length];
             var id: u32 = 0;
             if (!same(name, "-")) {
-                names.push(Span { start: base + parts[1].start, length: parts[1].length })!;
+                names.push(Span { start: base + parts[1].start, length: parts[1].length });
                 id = hashBytes(name);
             }
             var d = Decl.of();
@@ -361,7 +361,7 @@ fn build(
             textBuffer.clear();
             let words = line[parts[7].start..line.length];
             for (b in words) {
-                textBuffer.push(if (b == '_') ' ' else if (b == '|') '\n' else b)!;
+                textBuffer.push(if (b == '_') ' ' else if (b == '|') '\n' else b);
             }
             t.text(textBuffer.view(), config);
         }
@@ -382,7 +382,7 @@ fn main() -> i32 {
             break;
         }
         for (i in 0..n) {
-            input.push(chunk[i])!;
+            input.push(chunk[i]);
         }
     }
     if (input.length == 0) {
@@ -391,12 +391,12 @@ fn main() -> i32 {
     }
 
     // Room for 8192 elements, Clay's default maximum, in one heap block the layout carves up.
-    var storage = Vector<u8>.withCapacity(33554432)!;
+    var storage = Vector<u8>.withCapacity(33554432);
     for (k in 0..33554432usize) {
-        storage.push(0)!;
+        storage.push(0);
     }
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var t = LayoutTree.create(memory, LayoutCapacity.of(8192))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(8192));
     var names = Vector<Span>.create();
     var parts = Vector<Span>.create();
     var textBuffer = Vector<u8>.create();
@@ -411,7 +411,7 @@ fn main() -> i32 {
             for (f in 0..frames) {
                 names.clear();
                 let ignored = build(mut t, bytes, mut names, mut parts, mut textBuffer, mut renderTo);
-                t.endLayout(measure)!;
+                t.endLayout(measure);
             }
             let elapsed = Timer.now() - started;
             Console.write("frames ");
@@ -438,7 +438,7 @@ fn main() -> i32 {
         let line = bytes[scanStart..i];
         let base = scanStart;
         scanStart = i + 1;
-        split(line, mut parts)!;
+        split(line, mut parts);
         if (parts.length == 0) {
             continue;
         }
@@ -447,25 +447,25 @@ fn main() -> i32 {
             screenW = truncate<usize>(parseNumber(line[parts[1].start..parts[1].start + parts[1].length]));
             screenH = truncate<usize>(parseNumber(line[parts[2].start..parts[2].start + parts[2].length]));
         } else if (same(head, "font") && parts.length >= 3) {
-            fontLines.push(Span { start: base, length: line.length })!;
+            fontLines.push(Span { start: base, length: line.length });
             wantsRaster = true;
         } else if (same(head, "render")) {
             wantsRaster = true;
         }
     }
     let rasterBytes = if (wantsRaster) screenW * screenH * 48 + 4194304 + 2097152 else 1048576;
-    var rasterMemory = Vector<u8>.withCapacity(rasterBytes)!;
+    var rasterMemory = Vector<u8>.withCapacity(rasterBytes);
     for (k in 0..rasterBytes) {
-        rasterMemory.push(0)!;
+        rasterMemory.push(0);
     }
     let rm = FixedBufferAllocator.over(mut rasterMemory.viewMut());
     var cap = RasterCapacity.of(if (wantsRaster) screenW else 1, if (wantsRaster) screenH else 1);
     cap.imagePixels = 16;
     cap.fontBytes = if (wantsRaster) 4194304 else 16;
-    var raster = Raster.create(rm, cap)!;
+    var raster = Raster.create(rm, cap);
     for (k in 0..fontLines.length) {
         let line = bytes[fontLines[k].start..fontLines[k].start + fontLines[k].length];
-        split(line, mut parts)!;
+        split(line, mut parts);
         let id = truncate<u32>(parseNumber(line[parts[1].start..parts[1].start + parts[1].length]));
         let path = StringView.fromUtf8(line[parts[2].start..line.length])!;
         let font = readFile(path);
@@ -476,7 +476,7 @@ fn main() -> i32 {
 
     let pointer = build(mut t, bytes, mut names, mut parts, mut textBuffer, mut renderTo);
     let measure = DiffMeasure { unused: 0 };
-    let laidOut = if (fontLines.length > 0) t.endLayout(raster) else t.endLayout(measure);
+    let laidOut: Result<void, AllocError> = if (fontLines.length > 0) t.endLayout(raster) else t.endLayout(measure);
     match (laidOut) {
         Ok() => {}
         Err(_) => {
@@ -549,12 +549,12 @@ fn main() -> i32 {
             Console.write(" total-ms ");
             Console.writeLine(Timer.now() - started);
         }
-        var raw = Vector<u8>.withCapacity(w * h * 4)!;
+        var raw = Vector<u8>.withCapacity(w * h * 4);
         for (p in raster.pixels()) {
-            raw.push(truncate<u8>(p))!;
-            raw.push(truncate<u8>(p >> 8))!;
-            raw.push(truncate<u8>(p >> 16))!;
-            raw.push(truncate<u8>(p >> 24))!;
+            raw.push(truncate<u8>(p));
+            raw.push(truncate<u8>(p >> 8));
+            raw.push(truncate<u8>(p >> 16));
+            raw.push(truncate<u8>(p >> 24));
         }
         match (File.create(path)) {
             Ok(f) => {

@@ -19,9 +19,9 @@ fn readFixture(name: Slice<u8>, suffix: StringView) -> Vector<u8> {
 }
 
 fn u32s(n: usize) -> Vector<u32> {
-    var v = Vector<u32>.withCapacity(n)!;
+    var v = Vector<u32>.withCapacity(n);
     for (i in 0..n) {
-        v.push(0)!;
+        v.push(0);
     }
     return v;
 }
@@ -177,7 +177,7 @@ fn loadedImagesDrawThroughTheRaster() -> Result<void, TestFailure> {
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
     var c = RasterCapacity.of(13, 11);
     c.fontBytes = 16;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     var scratch = heap(16);
     let info = match (loadImage(mut ras, 7, bytes.view(), mut scratch.viewMut())) {
         Ok(i) => i,
@@ -185,7 +185,7 @@ fn loadedImagesDrawThroughTheRaster() -> Result<void, TestFailure> {
     };
     Check.equalU64(13, info.w as u64)?;
     // Draw it 1:1 over the whole frame; pixel (5, 3) is the fixture's (5*17, 3*21, (5+3)*9).
-    var t = LayoutTree.create(memory, LayoutCapacity.of(8))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(8));
     t.begin(13.0, 11.0);
     var d = fixedBox(13.0, 11.0);
     d.image = 7;
@@ -207,7 +207,7 @@ fn aRemovedImageGivesItsMemoryBack() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(4, 4);
     c.imagePixels = 300;
     c.fontBytes = 16;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     // Three images fill the pool; the middle one goes, and the last keeps its pixels as it moves down.
     Check.isTrue(ras.addImage(1, 10, 10), "image 1 fits")?;
     Check.isTrue(ras.addImage(2, 10, 10), "image 2 fits")?;
@@ -236,10 +236,10 @@ fn anImagesBackgroundAndShadowLieUnderIt() -> Result<void, TestFailure> {
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
     var c = RasterCapacity.of(13, 11);
     c.fontBytes = 16;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     var scratch = heap(16);
     let _ = loadImage(mut ras, 7, bytes.view(), mut scratch.viewMut());
-    var t = LayoutTree.create(memory, LayoutCapacity.of(8))!;
+    var t = LayoutTree.create(memory, LayoutCapacity.of(8));
     t.begin(13.0, 11.0);
     var d = fixedBox(13.0, 11.0);
     d.image = 7;

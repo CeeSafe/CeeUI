@@ -112,7 +112,7 @@ fn mixedArrow(ui: borrow mut Ui, platform: borrow mut FakePlatform, field: borro
 fn arrowsMoveTheCaretAsTheTextIsDrawn() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 120.0, -1.0, -1.0);
     // "abCDEfg": a b, then C D E right to left (drawn E D C), then f g. The carets by offset: 0 at 0, 1 at 10, 2 at
     // 50 (C's right edge), 3 at 40, 4 at 30, 5 at 50 (f's left edge), 6 at 60, 7 at 70.
@@ -133,7 +133,7 @@ fn arrowsMoveTheCaretAsTheTextIsDrawn() -> Result<void, TestFailure> {
 fn anArrowEndsASelectionAtItsEdgeOnThatSide() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 120.0, -1.0, -1.0);
     // "CDE" alone, right to left: offset 0 is drawn at the right (30), 3 at the left (0).
     var field = focusedMixedField(mut ui, mut platform, "CDE", 0)?;
@@ -189,7 +189,7 @@ fn rasterSpansFollowTheShapedGlyphs() -> Result<void, TestFailure> {
     var c = RasterCapacity.of(64, 64);
     c.imagePixels = 4;
     c.fontBytes = 33554432;
-    var ras = Raster.create(memory, c)!;
+    var ras = Raster.create(memory, c);
     Check.isTrue(ras.loadFont(0, wide.view()), "Arial Unicode loads")?;
     let config = TextConfig.of(20.0);
     // "ab" then three Arabic letters (two bytes each) then "cd": the Arabic is drawn right to left between them.
@@ -224,7 +224,7 @@ fn textXs(ui: borrow Ui, out: borrow mut Vector<f32>) {
     out.clear();
     for (k in 0..ui.commandCount()) {
         match (ui.commandAt(k)) {
-            Command.Text(r, _) => { out.push(r.x)!; }
+            Command.Text(r, _) => { out.push(r.x); }
             _ => {}
         }
     }
@@ -234,7 +234,7 @@ fn textXs(ui: borrow Ui, out: borrow mut Vector<f32>) {
 fn aRightToLeftParagraphsLinesSitAtTheRight() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(16))!;
+    var ui = Ui.create(memory, UiCapacity.of(16));
     var platform = platformAt(400.0, 200.0, -1.0, -1.0);
     var xs = Vector<f32>.create();
     // A paragraph that wraps in a box 120 wide: its last line is shorter than the first. Right to left, the lines'
@@ -268,7 +268,7 @@ fn aRightToLeftParagraphsLinesSitAtTheRight() -> Result<void, TestFailure> {
 fn aRightToLeftFieldShowsItsTextAtTheRight() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 120.0, -1.0, -1.0);
     // Two Arabic letters, four bytes: 40 points in the fake font, at the right of the field's text area. A click a
     // little right of where they start puts the caret at their start (byte 0); without the shift, that place would
@@ -291,7 +291,7 @@ fn aRightToLeftFieldShowsItsTextAtTheRight() -> Result<void, TestFailure> {
 fn theWordModifierMovesTheCaretByWords() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 120.0, -1.0, -1.0);
     var field = focusedMixedField(mut ui, mut platform, "can't stop now", 0)?;
     // Control (the word modifier off macOS) with the arrows: to the end of each word forward, its start back;
@@ -324,7 +324,7 @@ fn theWordModifierMovesTheCaretByWords() -> Result<void, TestFailure> {
 fn aDoubleClickSelectsAWordAsUnicodeSegmentsIt() -> Result<void, TestFailure> {
     var storage = heap(1048576);
     let memory = FixedBufferAllocator.over(mut storage.viewMut());
-    var ui = Ui.create(memory, UiCapacity.of(64))!;
+    var ui = Ui.create(memory, UiCapacity.of(64));
     var platform = platformAt(400.0, 120.0, -1.0, -1.0);
     var field = focusedMixedField(mut ui, mut platform, "say can't now", 0)?;
     // Double-click inside "can't" (bytes 4 to 9, 40 to 90 points in the fake font): the apostrophe stays inside.
