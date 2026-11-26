@@ -19,6 +19,10 @@
 //
 // `--network WHY` is for an app that uses the network: Android's INTERNET permission, and on iOS the sentence shown
 // when the app first reaches a device on the local network.
+// `--camera WHY`, `--microphone WHY` and `--save-photos WHY` are for an app that captures with the camera (CeeSafe ADR
+// 0265, MediaPicker.capture): iOS's sentences for the camera, the microphone (a video records sound) and adding the
+// capture to Photos; on Android, --camera declares the storage permission up to Android 9, where the gallery's item
+// needs it. Picking from the photo library needs none of them.
 // `--bluetooth WHY` is for an app that prints to Bluetooth printers (CeeSafe ADR 0177): Android's Bluetooth
 // permissions, and on iOS and macOS the sentence shown when the app first uses Bluetooth.
 // `--notifications` is for an app that shows notifications (CeeSafe ADR 0243): Android's POST_NOTIFICATIONS, which
@@ -48,6 +52,9 @@ struct Options {
     storePass: String;
     network: String; // --network, why the app uses the network: Android's INTERNET permission and iOS's local
     // network description; empty for an app that uses none
+    camera: String;     // --camera, why the app uses the camera (CeeSafe ADR 0265); empty for none
+    microphone: String; // --microphone, why it records sound (a captured video)
+    savePhotos: String; // --save-photos, why it adds its captures to Photos (iOS)
     bluetooth: String; // --bluetooth, why the app uses Bluetooth (CeeSafe ADR 0177 §2.2): Android's permissions and
     // Apple's NSBluetoothAlwaysUsageDescription; empty for an app that uses none
     notifications: bool; // --notifications: Android's POST_NOTIFICATIONS (CeeSafe ADR 0243)
@@ -308,6 +315,10 @@ fn infoPlist(o: borrow Options, phone: bool) -> String {
             p.append(xml(o.network.view()).view());
             p.append("</string>\n");
         }
+        // The camera, the microphone and Photos (CeeSafe ADR 0265): without them iOS ends an app at their first use.
+        usageText(mut p, "NSCameraUsageDescription", o.camera.view());
+        usageText(mut p, "NSMicrophoneUsageDescription", o.microphone.view());
+        usageText(mut p, "NSPhotoLibraryAddUsageDescription", o.savePhotos.view());
         p.append("\t<key>CFBundleSupportedPlatforms</key><array><string>iPhoneOS</string></array>\n");
         // Every orientation: a CeeUI app lays out again at each size (its size classes).
         p.append("\t<key>UISupportedInterfaceOrientations</key><array>");
@@ -480,6 +491,17 @@ fn packIos(o: borrow Options, simulator: bool) -> i32 {
     Console.write("packed ");
     Console.writeLine(app.view());
     return 0;
+}
+
+/// A usage description in an Info.plist, when the app gave one.
+fn usageText(p: borrow mut String, key: StringView, why: StringView) {
+    if (why.length > 0) {
+        p.append("\t<key>");
+        p.append(key);
+        p.append("</key><string>");
+        p.append(xml(why).view());
+        p.append("</string>\n");
+    }
 }
 
 /// The extension's identifier: the app's and `.NotificationService`.
@@ -773,6 +795,11 @@ fn androidManifest(o: borrow Options) -> String {
     }
     if (o.network.view().length > 0) {
         m.append("  <uses-permission android:name=\"android.permission.INTERNET\"/>\n");
+    }
+    if (o.camera.view().length > 0) {
+        // The camera's app writes to an item of the gallery, which needs this before Android 10 (CeeSafe ADR 0265).
+        m.append("  <uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\"");
+        m.append(" android:maxSdkVersion=\"28\"/>\n");
     }
     if (o.notifications) {
         // Android 13 and later ask for it at run time (CeeSafe ADR 0243); before them it is granted at install.
@@ -1230,6 +1257,7 @@ fn usage() -> i32 {
     Console.writeErrorLine(
         "           [--keystore FILE] [--keystore-pass PASSWORD] [--network WHY] [--bluetooth WHY]",
     );
+    Console.writeErrorLine("           [--camera WHY] [--microphone WHY] [--save-photos WHY]");
     Console.writeErrorLine("           [--notifications] [--push] [--group ID] [--extension DIR] [--firebase FILE]");
     Console.writeErrorLine("           [--font FILE]... [--fallback FILE]...");
     Console.writeErrorLine("run in the app's package directory; the result is under out/pack");
@@ -1366,6 +1394,9 @@ fn main() -> i32 {
         keystore: String.create(),
         storePass: text("android"),
         network: String.create(),
+        camera: String.create(),
+        microphone: String.create(),
+        savePhotos: String.create(),
         bluetooth: String.create(),
         notifications: false,
         push: false,
@@ -1410,6 +1441,12 @@ fn main() -> i32 {
             o.storePass = text(value);
         } else if (flag == "--network") {
             o.network = text(value);
+        } else if (flag == "--camera") {
+            o.camera = text(value);
+        } else if (flag == "--microphone") {
+            o.microphone = text(value);
+        } else if (flag == "--save-photos") {
+            o.savePhotos = text(value);
         } else if (flag == "--group") {
             o.group = text(value);
         } else if (flag == "--extension") {
