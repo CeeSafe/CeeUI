@@ -283,6 +283,9 @@ fn drawImage(r: borrow mut Raster, b: Rect, tint: Color, radius: Corners, handle
     if (b.w <= 0.0 || b.h <= 0.0) {
         return;
     }
+    if (!r.useImage(handle)) {
+        return;
+    }
     let image = match (r.imageIndex(handle)) {
         Some(k) => k,
         null => { return; }

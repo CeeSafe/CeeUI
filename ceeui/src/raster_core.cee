@@ -17,8 +17,11 @@ public struct RasterCapacity {
     public maskBytes: usize;
     /// Points for one flattened path.
     public pathPoints: usize;
-    /// Pixels for all registered images.
+    /// Pixels for the images held at once (default: one frame's, at least 512 by 512). Images are held on demand:
+    /// when there is no room, `addImage` lets go of those drawn longest ago, and `missingImages` names the ones a
+    /// frame then draws without pixels.
     public imagePixels: usize;
+    /// Images held at once (default 64).
     public images: usize;
     /// Colour glyphs (emoji) kept, each also an image: its pixels count in `imagePixels`.
     public colorGlyphs: usize;
@@ -30,9 +33,9 @@ public struct RasterCapacity {
     public fn bytes(this) -> usize {
         let frame = this.width * this.height;
         let side = this.width.max(this.height);
-        let arrays: usize = 12 * 16; // alignment
+        let arrays: usize = 13 * 16; // alignment
         return (frame + this.layerPixels) * 4 + (this.width + 3) * (this.height + 1) * 4 + side * 4 + this.maskBytes +
-            this.pathPoints * 8 + (this.pathPoints / 2 + 1) * 8 + 32 * 64 + 64 * 64 + 64 * 24 + this.images * 40 +
+            this.pathPoints * 8 + (this.pathPoints / 2 + 1) * 8 + 32 * 64 + 64 * 64 + 64 * 24 + this.images * 56 +
             this.imagePixels * 4 + this.fontBytes + 262144 + arrays;
     }
 
@@ -42,8 +45,8 @@ public struct RasterCapacity {
         layerPixels: width * height * 4,
         maskBytes: width * height * 4,
         pathPoints: 8192,
-        imagePixels: 262144,
-        images: 32,
+        imagePixels: (width * height).max(262144),
+        images: 64,
         colorGlyphs: 256,
         fontBytes: 4194304,
     };
@@ -93,6 +96,9 @@ struct ImageRecord {
     h: usize;
     /// The raster's image clock when the image was added or its pixels last handed out (imageVersion).
     version: u64;
+    /// The last frame (Raster.frames) that drew it, or the frame it was added in: the image drawn longest ago goes
+    /// first when there is no room for another.
+    drawn: u64;
 }
 
 /// A loaded font: bytes [offset, offset + size) of the font pool, parsed.
@@ -132,6 +138,10 @@ public struct Raster<region r> {
     imageTop: usize;
     /// Counts the changes to images, so that each gets a version no image of this raster had before.
     imageClock: u64;
+    /// Frames begun (begin, beginRegion): ImageRecord.drawn's clock.
+    frames: u64;
+    /// The program's images drawn while no pixels were held for them, each once, until they are added again.
+    missing: FixedList<r, u32>;
     fontPool: SliceMut<r, u8>;
     fontTop: usize;
     fonts: FixedList<r, FontSlot>;
@@ -177,7 +187,11 @@ public struct Raster<region r> {
         let clip = ClipState { x0: 0, y0: 0, x1: 0, y1: 0, hasMask: false, maskOffset: 0, maskTop: 0 };
         let clips = memory.allocArray(64, clip)?;
         let transforms = memory.allocArray(64, Affine2.identity())?;
-        let images = memory.allocArray(capacity.images, ImageRecord { handle: 0, offset: 0, w: 0, h: 0, version: 0 })?;
+        let images = memory.allocArray(
+            capacity.images,
+            ImageRecord { handle: 0, offset: 0, w: 0, h: 0, version: 0, drawn: 0 },
+        )?;
+        let missing = memory.allocArray(capacity.images, 0u32)?;
         let imagePool = memory.allocArray(capacity.imagePixels, 0u32)?;
         let fontPool = memory.allocArray(capacity.fontBytes, 0u8)?;
         // The two text buffers are 120 KiB together: in the memory, not in the Raster, which is moved about by value.
@@ -230,6 +244,8 @@ public struct Raster<region r> {
             imagePool: imagePool,
             imageTop: 0,
             imageClock: 0,
+            frames: 0,
+            missing: FixedList<u32>.over(missing),
             fontPool: fontPool,
             fontTop: 0,
             fonts: FixedList<FontSlot>.over(fonts),
@@ -283,6 +299,7 @@ public struct Raster<region r> {
         this.poolTop = frame;
         this.maskTop = 0;
         this.overflowed = false;
+        this.countFrame();
         this.layers.clear();
         this.layers.push(
             Layer {
@@ -349,19 +366,107 @@ public struct Raster<region r> {
     // ---- images ----------------------------------------------------------------------------------------------------
 
     /// Registers a `w` x `h` image under `handle` (the value `Style.image(handle)` carries) and returns whether
-    /// it fit. Fill its pixels (straight RGBA8, bytes R, G, B, A) with `setImagePixel`.
+    /// it fit. Fill its pixels (straight RGBA8, bytes R, G, B, A) with `setImagePixel` or `imagePixelsMut`. An image
+    /// already under `handle` is replaced. When there is no room, the program's images drawn longest ago are let go
+    /// (never one the last two frames drew), and then the colour glyphs, until it fits; a frame that draws an image
+    /// let go names it in `missingImages`, for the program to add it again. False when it does not fit even so.
     public fn addImage(borrow mut this, handle: u32, w: usize, h: usize) -> bool {
-        if (handle == 0 || this.imageTop + w * h > this.imagePool.length) {
+        if (handle == 0 || w * h > this.imagePool.length) {
+            return false;
+        }
+        let _ = this.removeImage(handle);
+        for (k in 0..this.missing.length()) {
+            if (this.missing.get(k) == handle) {
+                this.missing.set(k, this.missing.last());
+                this.missing.pop();
+                break;
+            }
+        }
+        if (!this.makeRoom(w * h, handle < COLOR_HANDLE_BASE)) {
             return false;
         }
         this.imageClock += 1;
-        let record = ImageRecord { handle: handle, offset: this.imageTop, w: w, h: h, version: this.imageClock };
+        let record = ImageRecord {
+            handle: handle,
+            offset: this.imageTop,
+            w: w,
+            h: h,
+            version: this.imageClock,
+            drawn: this.frames,
+        };
         if (!this.images.push(record)) {
             return false;
         }
         this.imageTop += w * h;
         return true;
     }
+
+    /// Room for `pixels` more and one more image: the program's images drawn longest ago go first (not one the last
+    /// two frames drew, which may be on the screen), then, for a program's image (`glyphsToo`), the colour glyphs,
+    /// which a frame draws again. Whether there is room.
+    fn makeRoom(borrow mut this, pixels: usize, glyphsToo: bool) -> bool {
+        var glyphsCleared = false;
+        loop {
+            if (this.imageTop + pixels <= this.imagePool.length && this.images.length() < this.images.items.length) {
+                return true;
+            }
+            var oldest: u32 = 0;
+            var oldestDrawn: u64 = 0;
+            for (k in 0..this.images.length()) {
+                let rec = this.images.get(k);
+                if (rec.handle < COLOR_HANDLE_BASE && rec.drawn + 1 < this.frames && (oldest == 0 || rec.drawn < oldestDrawn)) {
+                    oldest = rec.handle;
+                    oldestDrawn = rec.drawn;
+                }
+            }
+            if (oldest != 0) {
+                let _ = this.removeImage(oldest);
+            } else if (glyphsToo && !glyphsCleared && this.colorBitmaps.length() > 0) {
+                this.clearColorGlyphs();
+                glyphsCleared = true;
+            } else {
+                return false;
+            }
+        }
+    }
+
+    /// A frame begins, for the images' clock (which are drawn longest ago): `begin` and `beginRegion` count one, and
+    /// a renderer that draws a frame without them (a GPU's) calls this at its own start.
+    public fn countFrame(borrow mut this) {
+        this.frames += 1;
+    }
+
+    /// A frame draws image `handle`: it counts as drawn now (so it is let go last), or, when no pixels are held for
+    /// it, it is named in missingImages. Whether its pixels are held. The renderers (this raster's, a GPU's) call it
+    /// for each picture they draw.
+    public fn useImage(borrow mut this, handle: u32) -> bool {
+        match (this.imageIndex(handle)) {
+            Some(k) => {
+                var rec = this.images.get(k);
+                rec.drawn = this.frames;
+                this.images.set(k, rec);
+                return true;
+            }
+            null => {
+                if (handle != 0 && handle < COLOR_HANDLE_BASE) {
+                    for (m in this.missing.view()) {
+                        if (m == handle) {
+                            return false;
+                        }
+                    }
+                    if (!this.missing.push(handle)) {
+                        this.missing.set(0, handle); // full of handles no frame has drawn since: one gives way
+                    }
+                }
+                return false;
+            }
+        }
+    }
+
+    /// The program's images frames drew with no pixels held (never added, or let go for room by addImage), each
+    /// until it is added again: add them under their handles and draw another frame. Empty when every picture had
+    /// its pixels.
+    public fn missingImages(borrow this) -> Slice<u32> => this.missing.view();
 
     /// The pixels of image `handle` (row-major, 0xAABBGGRR, straight alpha), to fill in place. The image counts as
     /// changed (imageVersion), whether or not they are written.

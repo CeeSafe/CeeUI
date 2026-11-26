@@ -1,0 +1,94 @@
+// SPDX-License-Identifier: MIT
+// Images on demand: when the raster has no room for another image, it lets go of the program's images drawn
+// longest ago (never one the last two frames drew), and names those a frame then draws in missingImages.
+
+import ceeui;
+
+fn roomHeap(bytes: usize) -> Vector<u8> {
+    var v = Vector<u8>.withCapacity(bytes);
+    for (i in 0..bytes) {
+        v.push(0);
+    }
+    return v;
+}
+
+fn roomBox(x: f32, y: f32) -> Rect => Rect { x: x, y: y, w: 10.0, h: 10.0 };
+
+/// A frame that draws the pictures `handles`, side by side.
+fn drawPictures(ras: borrow mut Raster, handles: Slice<u32>) {
+    let nothing = [0u8; 1];
+    ras.begin(Color.rgba(255, 255, 255, 255));
+    for (k in 0..handles.length) {
+        let x = round<f32>(truncate<u32>(k)) * 12.0;
+        ras.draw(Command.Picture(roomBox(x, 0.0), Color.rgba(0, 0, 0, 0), Corners.all(0.0), handles[k]), nothing[0..0]);
+    }
+    ras.finish();
+}
+
+fn holds(ras: borrow Raster, handle: u32) -> bool => ras.imageVersion(handle) != 0;
+
+@test
+fn imagesDrawnLongestAgoMakeRoomAndComeBackWhenDrawn() -> Result<void, TestFailure> {
+    var c = RasterCapacity.of(64, 64);
+    c.imagePixels = 300; // three images of 10 by 10
+    c.images = 8;
+    c.fontBytes = 0;
+    var storage = roomHeap(c.bytes());
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ras = Raster.create(memory, c);
+    Check.isTrue(ras.addImage(1, 10, 10) && ras.addImage(2, 10, 10) && ras.addImage(3, 10, 10), "three fit")?;
+    // Three frames draw image 3 alone: 1 and 2 are drawn longest ago.
+    for (n in 0..3) {
+        drawPictures(mut ras, [3u32][0..1]);
+    }
+    Check.isTrue(ras.addImage(4, 10, 10), "a fourth fits, in the room of one not drawn")?;
+    Check.isTrue(!holds(ras, 1) && holds(ras, 2) && holds(ras, 3) && holds(ras, 4), "the first added went")?;
+    Check.isTrue(ras.missingImages().length == 0, "nothing missing before a frame draws it")?;
+    // A frame draws 1 again (it scrolled back): it is missing, drawn as nothing, and named once.
+    drawPictures(mut ras, [1u32, 3u32, 1u32][0..3]);
+    Check.isTrue(ras.pixelAt(5, 5).r == 255 && ras.pixelAt(5, 5).g == 255, "a missing image draws nothing")?;
+    Check.isTrue(ras.missingImages().length == 1 && ras.missingImages()[0] == 1, "1 is named, once")?;
+    // Added again under its handle: 2, drawn longest ago, gives way, and 1 is no longer missing.
+    Check.isTrue(ras.addImage(1, 10, 10), "1 is added again")?;
+    Check.isTrue(holds(ras, 1) && !holds(ras, 2) && holds(ras, 3) && holds(ras, 4), "2 went")?;
+    Check.isTrue(ras.missingImages().length == 0, "1 is no longer missing")?;
+    // Every image the last two frames drew stays: a fifth does not fit.
+    drawPictures(mut ras, [1u32, 3u32, 4u32][0..3]);
+    Check.isTrue(!ras.addImage(5, 10, 10), "no image on the screen is let go")?;
+    Check.isTrue(holds(ras, 1) && holds(ras, 3) && holds(ras, 4), "the three on the screen are held")?;
+    // An image larger than all the room never fits; one added again under its handle replaces it.
+    Check.isTrue(!ras.addImage(6, 20, 20), "larger than the room")?;
+    let before = ras.imageVersion(3);
+    Check.isTrue(ras.addImage(3, 5, 5), "3 replaced by a smaller one")?;
+    Check.isTrue(ras.imageVersion(3) != before && ras.imagePixels(3)!.length == 25, "3 is the new one")?;
+    return Ok();
+}
+
+@test
+fn aRendererWithoutBeginCountsItsFrames() -> Result<void, TestFailure> {
+    var c = RasterCapacity.of(16, 16);
+    c.imagePixels = 200;
+    c.images = 8;
+    c.fontBytes = 0;
+    var storage = roomHeap(c.bytes());
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ras = Raster.create(memory, c);
+    Check.isTrue(ras.addImage(1, 10, 10) && ras.addImage(2, 10, 10), "two fit")?;
+    // A GPU's frames: countFrame, and useImage for each picture.
+    for (n in 0..3) {
+        ras.countFrame();
+        Check.isTrue(ras.useImage(2), "2 is held")?;
+    }
+    Check.isTrue(!ras.useImage(7), "7 is not held")?;
+    Check.isTrue(ras.missingImages().length == 1 && ras.missingImages()[0] == 7, "7 is missing")?;
+    Check.isTrue(ras.addImage(3, 10, 10) && !holds(ras, 1) && holds(ras, 2), "1, not drawn, made room")?;
+    return Ok();
+}
+
+@test
+fn theDefaultRoomIsAFrameOfPixels() -> Result<void, TestFailure> {
+    let phone = RasterCapacity.of(1080, 2400);
+    Check.isTrue(phone.imagePixels == 1080 * 2400 && phone.images == 64, "a phone's screen of pixels")?;
+    Check.isTrue(RasterCapacity.of(100, 100).imagePixels == 262144, "at least 512 by 512")?;
+    return Ok();
+}

@@ -37,6 +37,9 @@ public struct FixedList<region r, T: Copy> {
 
     public fn length(borrow this) -> usize => this.count;
 
+    /// The values in the list, in order.
+    public fn view(borrow this) -> Slice<T> => this.items[0..this.count];
+
     /// Element `i`; an index at or past `length()` stops the program, like any out-of-bounds index.
     public fn get(borrow this, i: usize) -> T {
         if (i >= this.count) {

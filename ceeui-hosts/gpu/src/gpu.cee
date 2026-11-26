@@ -408,6 +408,7 @@ impl<region r> GpuBackend<r> {
     public fn begin(borrow mut this, width: u32, height: u32, ratio: f32) {
         // The Raster shapes and measures for this backend: at the frame's ratio it names the emoji strikes drawn.
         this.raster.setPixelRatio(ratio);
+        this.raster.countFrame(); // the images' clock: which were drawn longest ago (Raster.addImage)
         // An atlas that filled last frame starts over: this frame packs what it draws (a frame's instances refer
         // to atlas places, so it is never emptied mid-frame).
         if (this.atlasFull) {
@@ -1441,8 +1442,8 @@ impl<region r> GpuBackend<r> {
     /// raster_backend.cee's drawImage: image `handle` stretched over the box (bilinear, edges clamped), tinted and
     /// at the tint's opacity, cut to the rounded box. Nothing when no image is registered under the handle.
     fn picture(borrow mut this, area: Rect, tint: Color, radius: Corners, handle: u32) {
-        if (area.w <= 0.0 || area.h <= 0.0) {
-            return;
+        if (area.w <= 0.0 || area.h <= 0.0 || !this.raster.useImage(handle)) {
+            return; // an image with no pixels held is named in Raster.missingImages, for the program to add again
         }
         let e = match (this.imageEntry(handle)) {
             Some(e) => e,
