@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 // The Firebase messaging service of an APK that ceeui-pack builds with --firebase (CeeSafe ADR 0249): it is compiled
 // into the APK itself, since the system starts it for a push while the app is not running, before any of the
-// program's code is loaded. A push is data only (the server's title and body); it is shown here, on the channel
-// CeeSafe's Notifications use ("ceesafe", named after the app), and a tap opens the app. While the program runs in
-// this process (the system property ceesafe.program, which CeeSafe's runtime sets), the push is left to it: the
-// program has the message over its own connection and shows it itself, decrypted. The token is the program's to ask
-// for (CeeSafe's Push.register), so a new one is sent at the app's next start.
+// program's code is loaded. It runs in a process of its own (":push", CeeSafe ADR 0263). A push is data only (the
+// server's title and body). While the app's program runs (it holds files/ceesafe-program.lock; in this process, the
+// system property ceesafe.program), the push is left to it: the program has the message over its own connection and
+// shows it itself, decrypted. Otherwise the app's notification extension, when the APK has one (--extension), is
+// given it to show its real content, decrypted (8 seconds); failing that it is shown as it came, on the channel
+// CeeSafe's Notifications use ("ceesafe", named after the app), and a tap opens the app. The token is the program's
+// to ask for (CeeSafe's Push.register), so a new one is sent at the app's next start.
 package org.ceeui.pack;
 
 import android.app.Notification;
@@ -19,14 +21,26 @@ import android.os.Build;
 import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
 
+import org.ceesafe.Extension;
+import org.json.JSONObject;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.OverlappingFileLockException;
 import java.util.Map;
 
 public final class PushService extends FirebaseMessagingService {
     private static final String CHANNEL = "ceesafe";
 
+    /** How long the extension has to show a push before it is shown as it came (CeeSafe ADR 0263 §6.2). */
+    private static final int EXTENSION_MILLISECONDS = 8000;
+
     @Override
     public void onMessageReceived(RemoteMessage message) {
-        if ("running".equals(System.getProperty("ceesafe.program"))) {
+        if ("running".equals(System.getProperty("ceesafe.program")) || programRunning(this)) {
             return;
         }
         Map<String, String> data = message.getData();
@@ -42,8 +56,38 @@ public final class PushService extends FirebaseMessagingService {
         if (title == null && body == null) {
             return;
         }
-        String tag = data.get("conversationId");
-        show(this, tag != null ? "push:" + tag : "push", title != null ? title : "", body != null ? body : "");
+        String conversation = data.get("conversationId");
+        String tag = conversation != null ? "push:" + conversation : "push";
+        String shownTitle = title != null ? title : "";
+        String shownBody = body != null ? body : "";
+        if (Extension.deliver(this, shownTitle, shownBody, new JSONObject(data).toString(), tag,
+                EXTENSION_MILLISECONDS)) {
+            return;
+        }
+        show(this, tag, shownTitle, shownBody);
+    }
+
+    /**
+     * Whether the app's program runs, in its own process: CeeSafe's runtime holds a lock on files/ceesafe-program.lock
+     * from its start until its process ends (CeeSafe ADR 0263 §2.4). A lock taken here for a moment says it is free.
+     */
+    private static boolean programRunning(Context context) {
+        File file = new File(context.getFilesDir(), "ceesafe-program.lock");
+        if (!file.exists()) {
+            return false;
+        }
+        try (RandomAccessFile access = new RandomAccessFile(file, "rw"); FileChannel channel = access.getChannel()) {
+            FileLock lock = channel.tryLock();
+            if (lock == null) {
+                return true;
+            }
+            lock.release();
+            return false;
+        } catch (OverlappingFileLockException e) {
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     @Override

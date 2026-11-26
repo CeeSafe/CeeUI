@@ -356,6 +356,27 @@ fn build(arguments: Slice<StringView>, target: StringView, variable: StringView)
     };
 }
 
+/// `build`, in the package at `directory` (a notification extension's) rather than the current one.
+fn buildIn(directory: StringView, arguments: Slice<StringView>, target: StringView, variable: StringView) -> bool {
+    var command = String.create();
+    command.append("cd '");
+    command.append(directory);
+    command.append("' && ");
+    if (variable.length > 0) {
+        command.append("env '");
+        command.append(variable);
+        command.append("' ");
+    }
+    command.append("ceesafec build --windowed --target ");
+    command.append(target);
+    for (a in arguments) {
+        command.append(" '");
+        command.append(a);
+        command.append("'");
+    }
+    return run("sh", ["-c", command.view()]);
+}
+
 /// The .app at `app` for a Mac or a phone: the directory, the executable built into it, and its Info.plist.
 fn bundle(
     o: borrow Options,
@@ -788,8 +809,10 @@ fn androidManifest(o: borrow Options) -> String {
     m.append("        <category android:name=\"android.intent.category.LAUNCHER\"/>\n      </intent-filter>\n");
     m.append("    </activity>\n");
     if (gradle) {
-        // The push that comes while the app is not running (CeeSafe ADR 0249): src/PushService.java.
-        m.append("    <service android:name=\"org.ceeui.pack.PushService\" android:exported=\"false\">\n");
+        // The push that comes while the app is not running (CeeSafe ADR 0249): src/PushService.java, in a process of
+        // its own, where it may start the app's notification extension (CeeSafe ADR 0263).
+        m.append("    <service android:name=\"org.ceeui.pack.PushService\" android:exported=\"false\"");
+        m.append(" android:process=\":push\">\n");
         m.append("      <intent-filter>\n");
         m.append("        <action android:name=\"com.google.firebase.MESSAGING_EVENT\"/>\n");
         m.append("      </intent-filter>\n    </service>\n");
@@ -798,8 +821,10 @@ fn androidManifest(o: borrow Options) -> String {
     return m;
 }
 
-/// The messaging service an APK with Firebase carries (CeeSafe ADR 0249).
+/// The messaging service an APK with Firebase carries (CeeSafe ADR 0249), and the class through which it starts the
+/// app's notification extension (CeeSafe ADR 0263), whose natives the extension's runtime registers.
 const PUSH_SERVICE: StringView = embedText("PushService.java");
+const EXTENSION_CLASS: StringView = embedText("Extension.java");
 
 /// The Gradle that builds an APK with Firebase, and the Android Gradle plugin and Firebase Messaging it uses: the
 /// wrapper pins the Gradle (fetched once into ~/.gradle), so a build does not depend on the one a machine has.
@@ -828,7 +853,8 @@ fn someGradle() -> String {
 fn gradleBuild(o: borrow Options, sdk: StringView, base: StringView) -> i32 {
     let project = "out/pack/android-gradle";
     let java = cat([project, "/java/org/ceeui/pack"]);
-    if (!run("mkdir", ["-p", java.view()])) {
+    let ceesafeJava = cat([project, "/java/org/ceesafe"]);
+    if (!run("mkdir", ["-p", java.view(), ceesafeJava.view()])) {
         return fail("could not make out/pack/android-gradle");
     }
     if (!(File.kind(o.firebase.view()) is Ok(Some(PathKind.File)))) {
@@ -870,7 +896,8 @@ fn gradleBuild(o: borrow Options, sdk: StringView, base: StringView) -> i32 {
             "android.useAndroidX=true\norg.gradle.jvmargs=-Xmx2g\n",
         ) ||
         !writeText(cat([project, "/local.properties"]).view(), cat(["sdk.dir=", sdk, "\n"]).view()) ||
-        !writeText(cat([java.view(), "/PushService.java"]).view(), PUSH_SERVICE)) {
+        !writeText(cat([java.view(), "/PushService.java"]).view(), PUSH_SERVICE) ||
+        !writeText(cat([ceesafeJava.view(), "/Extension.java"]).view(), EXTENSION_CLASS)) {
         return fail("could not write the Gradle project");
     }
     let wrapperProperties = cat([project, "/gradle/wrapper/gradle-wrapper.properties"]);
@@ -901,6 +928,10 @@ fn gradleBuild(o: borrow Options, sdk: StringView, base: StringView) -> i32 {
 }
 
 fn packAndroid(o: borrow Options) -> i32 {
+    if (o.extension.view().length > 0 && o.firebase.view().length == 0) {
+        // The extension runs for a push (CeeSafe ADR 0263): only an APK with Firebase Messaging gets one.
+        return fail("--extension on Android needs --firebase");
+    }
     let home = Environment.variable("HOME") ?? "";
     let sdk = match (Environment.variable("ANDROID_HOME")) {
         Some(s) => text(s),
@@ -984,6 +1015,20 @@ fn packAndroid(o: borrow Options) -> i32 {
         }
         if (!build(flags[..], "android", variable.view())) {
             return fail2("the app was not built for ", abi);
+        }
+        if (o.extension.view().length > 0) {
+            // The notification extension (CeeSafe ADR 0263): the package in --extension's directory, built as the app
+            // is, into lib/<abi>/libextension.so, which the push service loads in its own process.
+            let extension = cat([Directory.current()!.view(), "/", lib.view(), "/libextension.so"]);
+            var extensionFlags = Vector<StringView>.create();
+            for (f in flags[0..14]) {
+                extensionFlags.push(f);
+            }
+            extensionFlags.push("-o");
+            extensionFlags.push(extension.view());
+            if (!buildIn(o.extension.view(), extensionFlags.view(), "android", variable.view())) {
+                return fail2("the notification extension was not built for ", abi);
+            }
         }
     }
     let manifest = cat([stage, "/AndroidManifest.xml"]);
