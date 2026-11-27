@@ -183,6 +183,10 @@ fn wrapText<M: TextMetrics>(l: borrow mut LayoutTree, index: usize, metrics: bor
     }
     l.nodes.items[index].linesCount = count;
     l.nodes.items[index].dims.h = lineHeight * usizeF(count);
+    // At this width it is never shorter: its lines are its minimum too. Measured before widths were known, the
+    // minimum was one line, and a column short of room squeezed a label to it, the next element drawn over its
+    // second line (Marivil's safety panel above a long chat).
+    l.nodes.items[index].minDims.h = l.nodes.items[index].minDims.h.max(l.nodes.items[index].dims.h);
     return true;
 }
 
@@ -210,12 +214,15 @@ fn propagateHeights(l: borrow mut LayoutTree, index: usize) {
         }
     } else if (layout.isRow()) {
         // Children's margins are part of the room they take, as in the sizing passes (layout_engine.cee's fit sizes).
+        var least = tb;
         for (k in 0..node.childCount) {
             let child = childOf(l, index, k);
             let m = marginOf(l, child);
             let withPadding = (l.nodes.items[child].dims.h + m.top + m.bottom + tb).max(l.nodes.items[index].dims.h);
             l.nodes.items[index].dims.h = withPadding.max(hmin).min(hmax);
+            least = least.max(l.nodes.items[child].minDims.h + m.top + m.bottom + tb);
         }
+        raiseMinHeight(mut l, index, least);
     } else {
         var content = tb;
         for (k in 0..node.childCount) {
@@ -226,7 +233,28 @@ fn propagateHeights(l: borrow mut LayoutTree, index: usize) {
         }
         content += usizeF(node.childCount - 1) * layout.childGap;
         l.nodes.items[index].dims.h = content.max(hmin).min(hmax);
+        // A column's children stack: their minimums add up. A wrapping column moves what does not fit to another
+        // column, so it needs only its tallest child.
+        var least = if (layout.wrap) tb else tb + usizeF(node.childCount - 1) * layout.childGap;
+        for (k in 0..node.childCount) {
+            let child = childOf(l, index, k);
+            let m = marginOf(l, child);
+            let need = l.nodes.items[child].minDims.h + m.top + m.bottom;
+            least = if (layout.wrap) least.max(tb + need) else least + need;
+        }
+        raiseMinHeight(mut l, index, least);
     }
+}
+
+/// A container's minimum height raised to what its children's minimums (wrapped text's lines among them) need,
+/// within its own maximum; one that scrolls or clips vertically keeps its own, its children overflowing it.
+fn raiseMinHeight(l: borrow mut LayoutTree, index: usize, least: f32) {
+    let node = l.nodes.items[index];
+    if (node.decl.clip.vertical) {
+        return;
+    }
+    let capped = least.min(node.decl.layout.height.max);
+    l.nodes.items[index].minDims.h = node.minDims.h.max(capped);
 }
 
 /// Clay__SnapshotSizes: every element root-first, breadth-first, with the sizes sizing overwrites.

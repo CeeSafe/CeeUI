@@ -696,3 +696,63 @@ fn aTextFieldsMenuOpensOnASecondaryPressAndActs() -> Result<void, TestFailure> {
     keyFrame(mut ui, mut platform, mut app)?;
     return Check.isTrue(ui.boxOf("ceeui-field-menu") == null, "and the menu closed");
 }
+
+/// A page `height` tall: a panel of a wrapped caption and a box, a scrolling list far taller than the page, a bar.
+fn squeezedFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, height: f32) -> Result<void, TestFailure> {
+    ui.begin(mut platform);
+    ui.open(Style.column().w(Size.fixed(240.0)).h(Size.fixed(height)));
+    ui.open(Style.column().id("squeezedPanel").w(Size.grow()).gap(4.0));
+    ui.label("Compare these numbers with the ones on the other phone, all of them.", Text.of().wrap(TextWrap.Words));
+    ui.open(Style.box().id("squeezedBox").w(Size.fixed(100.0)).h(Size.fixed(100.0)));
+    ui.close();
+    ui.close();
+    ui.open(Style.column().id("squeezedList").w(Size.grow()).h(Size.grow()).scroll(ScrollAxis.Vertical));
+    ui.open(Style.box().w(Size.fixed(200.0)).h(Size.fixed(2000.0)));
+    ui.close();
+    ui.close();
+    ui.open(Style.box().w(Size.grow()).h(Size.fixed(40.0)));
+    ui.close();
+    ui.close();
+    let metrics = FixedAdvance { unused: 0 };
+    return Check.isTrue(ui.endFrame(mut platform, metrics).isOk(), "frame fits");
+}
+
+@test
+fn aScrollingListGivesWayBeforeWrappedText() -> Result<void, TestFailure> {
+    // The list's content makes the page overflow: Clay's compression shrinks the largest child first, then the list
+    // and the panel together. The caption's lines are its minimum, so the panel stops there and the list gives way;
+    // before, the caption shrank to one line and the box was drawn over its second.
+    var storage = Vector<u8>.create();
+    let _ = storage.resize(1048576, 0);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var ui = Ui.create(memory, UiCapacity.of(64));
+    var platform = platformAt(400.0, 900.0, -1.0, -1.0);
+    for (height in [800.0f32, 400.0, 300.0, 260.0]) {
+        for (f in 0..3) {
+            squeezedFrame(mut ui, mut platform, height)?;
+        }
+        let caption = textBottomOf(ui, "Compare");
+        Check.isTrue(caption > 20.0, "the caption wraps")?;
+        Check.isTrue(ui.boxOf("squeezedBox")!.y >= caption - 0.5, "the box below the caption's last line")?;
+    }
+    return Ok();
+}
+
+/// The bottom of the lines of the text whose first bytes are `start` (to the next text that is not its own).
+fn textBottomOf(ui: borrow Ui, start: StringView) -> f32 {
+    var bottom: f32 = 0.0;
+    for (k in 0..ui.commandCount()) {
+        let command = ui.commandAt(k);
+        match (command) {
+            Command.Text(r, _) => {
+                let t = ui.textOf(command);
+                let first = t.length >= start.length && t[0..start.length] == start.bytes();
+                if (first || (bottom > 0.0 && r.y < bottom + 30.0 && r.y >= bottom - 0.5)) {
+                    bottom = bottom.max(r.y + r.h);
+                }
+            }
+            _ => {}
+        }
+    }
+    return bottom;
+}
