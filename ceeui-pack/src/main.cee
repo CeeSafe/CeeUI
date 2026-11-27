@@ -19,6 +19,8 @@
 //
 // `--network WHY` is for an app that uses the network: Android's INTERNET permission, and on iOS the sentence shown
 // when the app first reaches a device on the local network.
+// `--contacts WHY` is for an app that reads the address book (CeeSafe ADR 0271): iOS's and the Mac's sentence, and
+// Android's READ_CONTACTS.
 // `--camera WHY`, `--microphone WHY` and `--save-photos WHY` are for an app that captures with the camera (CeeSafe ADR
 // 0265, MediaPicker.capture): iOS's sentences for the camera, the microphone (a video records sound) and adding the
 // capture to Photos; on Android, --camera declares the storage permission up to Android 9, where the gallery's item
@@ -53,6 +55,7 @@ struct Options {
     network: String; // --network, why the app uses the network: Android's INTERNET permission and iOS's local
     // network description; empty for an app that uses none
     camera: String;     // --camera, why the app uses the camera (CeeSafe ADR 0265); empty for none
+    contacts: String;   // --contacts, why the app reads the address book (CeeSafe ADR 0271); empty for none
     microphone: String; // --microphone, why it records sound (a captured video)
     savePhotos: String; // --save-photos, why it adds its captures to Photos (iOS)
     bluetooth: String; // --bluetooth, why the app uses Bluetooth (CeeSafe ADR 0177 §2.2): Android's permissions and
@@ -329,6 +332,8 @@ fn infoPlist(o: borrow Options, phone: bool) -> String {
         p.append("\t<key>LSMinimumSystemVersion</key><string>12.0</string>\n");
         p.append("\t<key>NSHighResolutionCapable</key><true/>\n");
     }
+    // The address book (CeeSafe ADR 0271), on the phones and the Mac: without it iOS ends an app that asks.
+    usageText(mut p, "NSContactsUsageDescription", o.contacts.view());
     p.append("</dict>\n</plist>\n");
     return p;
 }
@@ -800,6 +805,10 @@ fn androidManifest(o: borrow Options) -> String {
         // The camera's app writes to an item of the gallery, which needs this before Android 10 (CeeSafe ADR 0265).
         m.append("  <uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\"");
         m.append(" android:maxSdkVersion=\"28\"/>\n");
+    }
+    if (o.contacts.view().length > 0) {
+        // The address book (CeeSafe ADR 0271), asked at run time by Contacts.read.
+        m.append("  <uses-permission android:name=\"android.permission.READ_CONTACTS\"/>\n");
     }
     if (o.notifications) {
         // Android 13 and later ask for it at run time (CeeSafe ADR 0243); before them it is granted at install.
@@ -1295,7 +1304,7 @@ fn usage() -> i32 {
     Console.writeErrorLine(
         "           [--keystore FILE] [--keystore-pass PASSWORD] [--network WHY] [--bluetooth WHY]",
     );
-    Console.writeErrorLine("           [--camera WHY] [--microphone WHY] [--save-photos WHY]");
+    Console.writeErrorLine("           [--camera WHY] [--microphone WHY] [--save-photos WHY] [--contacts WHY]");
     Console.writeErrorLine("           [--notifications] [--push] [--group ID] [--extension DIR] [--firebase FILE]");
     Console.writeErrorLine("           [--font FILE]... [--fallback FILE]...");
     Console.writeErrorLine("run in the app's package directory; the result is under out/pack");
@@ -1433,6 +1442,7 @@ fn main() -> i32 {
         storePass: text("android"),
         network: String.create(),
         camera: String.create(),
+        contacts: String.create(),
         microphone: String.create(),
         savePhotos: String.create(),
         bluetooth: String.create(),
@@ -1481,6 +1491,8 @@ fn main() -> i32 {
             o.network = text(value);
         } else if (flag == "--camera") {
             o.camera = text(value);
+        } else if (flag == "--contacts") {
+            o.contacts = text(value);
         } else if (flag == "--microphone") {
             o.microphone = text(value);
         } else if (flag == "--save-photos") {
