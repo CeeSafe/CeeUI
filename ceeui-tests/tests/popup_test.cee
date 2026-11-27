@@ -79,11 +79,17 @@ fn aMenuIsChosenOrClosed() -> Result<void, TestFailure> {
     platform.pointerState.down = true;
     platform.pointerState.pressed = true;
     Check.isTrue(menuFrame(mut ui, mut platform, mut open, 100.0, 60.0)? is null, "a disabled item is not chosen")?;
+    platform.pointerState = Pointer.at(Vec2 { x: copy.x + 4.0, y: copy.y + 4.0 });
+    platform.pointerState.released = true;
+    Check.isTrue(menuFrame(mut ui, mut platform, mut open, 100.0, 60.0)? is null, "nor when released on")?;
     Check.isTrue(open, "and the menu stays")?;
     // The destructive item is chosen, and the menu closes.
     platform.pointerState = Pointer.at(Vec2 { x: delete.x + 4.0, y: delete.y + 4.0 });
     platform.pointerState.down = true;
     platform.pointerState.pressed = true;
+    Check.isTrue(menuFrame(mut ui, mut platform, mut open, 100.0, 60.0)? is null, "the press alone chooses nothing")?;
+    platform.pointerState = Pointer.at(Vec2 { x: delete.x + 4.0, y: delete.y + 4.0 });
+    platform.pointerState.released = true;
     match (menuFrame(mut ui, mut platform, mut open, 100.0, 60.0)?) {
         Some(k) => { Check.equalU64(2, k as u64)?; }
         null => { return Check.isTrue(false, "Delete is chosen"); }

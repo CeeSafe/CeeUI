@@ -691,5 +691,8 @@ fn aTextFieldsMenuOpensOnASecondaryPressAndActs() -> Result<void, TestFailure> {
     keyFrame(mut ui, mut platform, mut app)?;
     Check.isTrue(app.edit.from() == 0 && app.edit.to() == 11, "Select All selected the field's text")?;
     Check.isTrue(ui.hasFocusNamed("name"), "and the field kept the focus")?;
+    // The choice is made at the release (as a button's click), and the menu closes then: boxOf still gives its box
+    // for the frame after, as it gives any element's from the frame before.
+    keyFrame(mut ui, mut platform, mut app)?;
     return Check.isTrue(ui.boxOf("ceeui-field-menu") == null, "and the menu closed");
 }

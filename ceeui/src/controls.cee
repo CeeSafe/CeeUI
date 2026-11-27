@@ -511,7 +511,9 @@ public struct Controls {
             if (enabled) look.cursor(Cursor.Pointer).hover(Style.of().bg(if (destructive) RED_600 else BLUE_600))
             else look,
         );
-        let chosen = enabled && ui.pressedOn(row);
+        // Chosen as a button is clicked: down and up over it (a finger lifted after a long press that opened the menu
+        // chooses nothing, and one slid off cancels), so what the choice focuses keeps the focus after the release.
+        let chosen = enabled && (ui.clickedHash(row) || ui.activatedByKey(row));
         let node = ui.access(row, AccessRole.MenuItem, label.bytes());
         ui.accessFlag(node, ACCESS_DISABLED, !enabled);
         let color = if (!enabled) ui.tone(SLATE_500) else if (destructive) RED_400 else ui.tone(SLATE_100);
