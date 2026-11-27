@@ -1099,19 +1099,21 @@ fn computeIntrinsicSize(l: borrow mut LayoutTree, index: usize) {
             let child = childOf(l, index, k);
             applyFlexBasis(mut l, child, true);
             let c = l.nodes.items[child];
-            dims.w += c.dims.w;
-            dims.h = dims.h.max(c.dims.h + tb);
+            // A child's margins are part of the room it takes, as the later passes (layout_size.cee) count them: a
+            // fit parent holds them (a menu's separator with my(4) left the popup short of its last item).
+            let m = marginOf(l, child);
+            dims.w += c.dims.w + m.left + m.right;
+            dims.h = dims.h.max(c.dims.h + m.top + m.bottom + tb);
             if (!clipH) {
                 let childMin = flexMinMain(l, child, true);
                 if (layout.wrap) {
-                    let m = marginOf(l, child);
                     mins.w = mins.w.max(lr + childMin + m.left + m.right);
                 } else {
-                    mins.w += childMin;
+                    mins.w += childMin + m.left + m.right;
                 }
             }
             if (!clipV) {
-                mins.h = mins.h.max(c.minDims.h + tb);
+                mins.h = mins.h.max(c.minDims.h + m.top + m.bottom + tb);
             }
         }
         dims.w += gaps;
@@ -1126,19 +1128,19 @@ fn computeIntrinsicSize(l: borrow mut LayoutTree, index: usize) {
             let child = childOf(l, index, k);
             applyFlexBasis(mut l, child, false);
             let c = l.nodes.items[child];
-            dims.h += c.dims.h;
-            dims.w = dims.w.max(c.dims.w + lr);
+            let m = marginOf(l, child);
+            dims.h += c.dims.h + m.top + m.bottom;
+            dims.w = dims.w.max(c.dims.w + m.left + m.right + lr);
             if (!clipV) {
                 let childMin = flexMinMain(l, child, false);
                 if (growWrap) {
-                    let m = marginOf(l, child);
                     mins.h = mins.h.max(tb + childMin + m.top + m.bottom);
                 } else {
-                    mins.h += childMin;
+                    mins.h += childMin + m.top + m.bottom;
                 }
             }
             if (!clipH) {
-                mins.w = mins.w.max(c.minDims.w + lr);
+                mins.w = mins.w.max(c.minDims.w + m.left + m.right + lr);
             }
         }
         dims.h += gaps;

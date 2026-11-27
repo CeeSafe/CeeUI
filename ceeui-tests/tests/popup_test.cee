@@ -52,6 +52,20 @@ fn aPopupStaysInsideTheWindow() -> Result<void, TestFailure> {
     Check.isTrue(b.y + b.h <= 280.0 + 0.5, "above the point")?;
     Check.isTrue(b.x >= 8.0 - 0.5 && b.y >= 8.0 - 0.5, "inside the top left margin")?;
     Check.isTrue(b.w >= 120.0, "at least as wide as asked")?;
+    for (k in 0usize..3) {
+        let item = ui.boxOfHash(menuItemId("menu", k))!;
+        Console.write("  item ");
+        Console.write(k as u64);
+        Console.write(" y ");
+        Console.write(truncate<u64>(item.y));
+        Console.write(" bottom ");
+        Console.write(truncate<u64>(item.y + item.h));
+        Console.write(" popup ");
+        Console.write(truncate<u64>(b.y));
+        Console.write("..");
+        Console.writeLine(truncate<u64>(b.y + b.h));
+        Check.isTrue(item.y >= b.y && item.y + item.h <= b.y + b.h + 0.5, "each item inside the popup")?;
+    }
     // Asked for in the middle: where it was asked.
     open = false;
     let _ = menuFrame(mut ui, mut platform, mut open, 0.0, 0.0)?;
@@ -116,3 +130,29 @@ fn aMenuIsChosenOrClosed() -> Result<void, TestFailure> {
 
 /// The id of item `k` of the menu `menu`, as Controls.menuItem makes it.
 fn subIdOf(menu: StringView, k: usize) -> u32 => menuItemId(menu, k);
+
+@test
+fn aFitParentHoldsItsChildrensMargins() -> Result<void, TestFailure> {
+    var storage = [0u8; 262144];
+    let memory = FixedBufferAllocator.over(mut storage);
+    var ui = Ui.create(memory, UiCapacity.of(16));
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    ui.begin(mut platform);
+    ui.open(Style.column().id("fitColumn"));
+    ui.open(Style.box().w(Size.fixed(50.0)).h(Size.fixed(10.0)));
+    ui.close();
+    ui.open(Style.box().w(Size.fixed(50.0)).h(Size.fixed(1.0)).my(4.0).mx(3.0));
+    ui.close();
+    ui.close();
+    ui.open(Style.row().id("fitRow"));
+    ui.open(Style.box().w(Size.fixed(20.0)).h(Size.fixed(10.0)).mx(5.0).my(2.0));
+    ui.close();
+    ui.close();
+    finish(mut ui, mut platform)?;
+    let column = ui.boxOf("fitColumn")!;
+    Check.isTrue(column.h > 18.5 && column.h < 19.5, "the column holds its child's top and bottom margins: 10 + 1 + 8")?;
+    Check.isTrue(column.w > 55.5 && column.w < 56.5, "and its left and right: 50 + 6")?;
+    let row = ui.boxOf("fitRow")!;
+    Check.isTrue(row.w > 29.5 && row.w < 30.5 && row.h > 13.5 && row.h < 14.5, "a row too: 20 + 10 by 10 + 4")?;
+    return Ok();
+}
