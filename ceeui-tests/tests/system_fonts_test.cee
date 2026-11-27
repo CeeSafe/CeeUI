@@ -172,3 +172,150 @@ fn colourGlyphsMakeRoomForNewOnes() -> Result<void, TestFailure> {
     }
     return Check.isTrue(same, "the program's image is untouched");
 }
+
+@test
+fn aHeartWithItsSelectorIsAsWideAsAnyEmoji() -> Result<void, TestFailure> {
+    let arial = readFile(arialPath());
+    if (arial.length == 0) {
+        Console.writeLine("  (Arial not found: skipped)");
+        return Ok();
+    }
+    var storage = heap(134217728);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(120, 60);
+    c.imagePixels = 262144;
+    c.fontBytes = 100663296;
+    var ras = Raster.create(memory, c);
+    Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
+    var fonts = SystemFonts.create();
+    let _ = fonts.supply(mut ras, "\u{1F600}".bytes(), 0);
+    if (!ras.coversInColor(0, 0x1F600)) {
+        Console.writeLine("  (no colour emoji font on this system: skipped)");
+        return Ok();
+    }
+    // Marivil's reactions: the heart alone carries VS16, and was drawn in a button three times as wide.
+    let reactions: [StringView; 6] = ["\u{1F44D}", "\u{2764}\u{FE0F}", "\u{1F602}", "\u{1F62E}", "\u{1F622}", "\u{1F64F}"];
+    var out = [ShapedGlyph { font: 0, glyph: 0, x: 0.0, y: 0.0, cluster: 0, advance: 0.0 }; 8];
+    var widths = [0.0f32; 6];
+    for (k in 0usize..6) {
+        let _ = fonts.supply(mut ras, reactions[k].bytes(), 0);
+        let m = ras.measure(reactions[k].bytes(), TextConfig.of(16.0));
+        widths[k] = m.w;
+        let run = ras.shapeRun(reactions[k].bytes(), 0, 16.0, 0.0, mut out[..])!;
+        Console.write("  reaction ");
+        Console.write(k as u64);
+        Console.write(" measures ");
+        Console.write(truncate<u64>(m.w * 100.0));
+        Console.write("/100, glyphs ");
+        Console.writeLine(run.count as u64);
+    }
+    for (k in 0usize..6) {
+        Check.isTrue(widths[k] > widths[0] * 0.8 && widths[k] < widths[0] * 1.25, "as wide as a thumbs-up")?;
+    }
+    return Ok();
+}
+
+@test
+fn aHeartButtonIsAsWideAsTheOthers() -> Result<void, TestFailure> {
+    let arial = readFile(arialPath());
+    if (arial.length == 0) {
+        Console.writeLine("  (Arial not found: skipped)");
+        return Ok();
+    }
+    var storage = heap(134217728);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(400, 100);
+    c.imagePixels = 262144;
+    c.fontBytes = 100663296;
+    var ras = Raster.create(memory, c);
+    Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
+    var fonts = SystemFonts.create();
+    let reactions: [StringView; 6] = ["\u{1F44D}", "\u{2764}\u{FE0F}", "\u{1F602}", "\u{1F62E}", "\u{1F622}", "\u{1F64F}"];
+    for (k in 0usize..6) {
+        let _ = fonts.supply(mut ras, reactions[k].bytes(), 0);
+    }
+    if (!ras.coversInColor(0, 0x1F600)) {
+        Console.writeLine("  (no colour emoji font on this system: skipped)");
+        return Ok();
+    }
+    var ui = Ui.create(memory, UiCapacity.of(64));
+    var platform = platformAt(400.0, 100.0, -1.0, -1.0);
+    let names: [StringView; 6] = ["rx0", "rx1", "rx2", "rx3", "rx4", "rx5"];
+    ui.begin(mut platform);
+    ui.open(Style.row().w(Size.fixed(400.0)).gap(4.0));
+    for (k in 0usize..6) {
+        let _ = Controls.button(mut ui, names[k], reactions[k]);
+    }
+    ui.close();
+    Check.isTrue(ui.endFrame(mut platform, ras) is Ok(_), "frame fits")?;
+    let thumb = ui.boxOf("rx0")!.w;
+    for (k in 0usize..6) {
+        let w = ui.boxOf(names[k])!.w;
+        Console.write("  button ");
+        Console.write(k as u64);
+        Console.write(" is ");
+        Console.writeLine(truncate<u64>(w));
+        Check.isTrue(w > thumb * 0.8 && w < thumb * 1.25, "as wide as the thumbs-up's")?;
+    }
+    return Ok();
+}
+
+/// Marivil's action bar for a text message with a link, at the Moto's width: the reactions, then its words.
+fn actionBarFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform, ras: borrow Raster) -> Result<void, TestFailure> {
+    let reactions: [StringView; 6] = ["\u{1F44D}", "\u{2764}\u{FE0F}", "\u{1F602}", "\u{1F62E}", "\u{1F622}", "\u{1F64F}"];
+    let names: [StringView; 6] = ["rx0", "rx1", "rx2", "rx3", "rx4", "rx5"];
+    ui.begin(mut platform);
+    ui.open(Style.column().w(Size.fixed(411.0)).h(Size.fixed(300.0)));
+    ui.open(Style.row().id("actions").w(Size.grow()).px(space(3.0)).pt(space(3.0)).gap(space(2.0)).wrap()
+        .alignXY(AxisAlign.Start, AxisAlign.Center));
+    for (k in 0usize..6) {
+        let _ = Controls.button(mut ui, names[k], reactions[k]);
+    }
+    let _ = Controls.button(mut ui, "reply", "Reply");
+    let _ = Controls.button(mut ui, "star", "Star");
+    let _ = Controls.button(mut ui, "share", "Share");
+    let _ = Controls.button(mut ui, "openLink", "Open link");
+    let _ = Controls.button(mut ui, "forward", "Forward");
+    let _ = Controls.button(mut ui, "deleteMine", "Delete for me");
+    let _ = Controls.button(mut ui, "letGo", "Close");
+    ui.close();
+    ui.close();
+    return Check.isTrue(ui.endFrame(mut platform, ras) is Ok(_), "frame fits");
+}
+
+@test
+fn aWrappedRowGivesEachButtonItsOwnWidth() -> Result<void, TestFailure> {
+    let arial = readFile(arialPath());
+    if (arial.length == 0) {
+        Console.writeLine("  (Arial not found: skipped)");
+        return Ok();
+    }
+    var storage = heap(134217728);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(411, 300);
+    c.imagePixels = 262144;
+    c.fontBytes = 100663296;
+    var ras = Raster.create(memory, c);
+    Check.isTrue(ras.loadFont(0, arial.view()), "Arial loads")?;
+    var fonts = SystemFonts.create();
+    let _ = fonts.supply(mut ras, "\u{1F44D}\u{2764}\u{FE0F}\u{1F602}\u{1F62E}\u{1F622}\u{1F64F}".bytes(), 0);
+    var ui = Ui.create(memory, UiCapacity.of(128));
+    var platform = platformAt(411.0, 300.0, -1.0, -1.0);
+    actionBarFrame(mut ui, mut platform, ras)?;
+    actionBarFrame(mut ui, mut platform, ras)?;
+    let names: [StringView; 8] = ["rx0", "rx1", "rx2", "rx3", "rx4", "rx5", "reply", "openLink"];
+    for (k in 0usize..8) {
+        let b = ui.boxOf(names[k])!;
+        Console.write("  ");
+        Console.write(names[k]);
+        Console.write(" x ");
+        Console.write(truncate<u64>(b.x));
+        Console.write(" y ");
+        Console.write(truncate<u64>(b.y));
+        Console.write(" w ");
+        Console.writeLine(truncate<u64>(b.w));
+    }
+    let thumb = ui.boxOf("rx0")!.w;
+    Check.isTrue(ui.boxOf("rx1")!.w < thumb * 1.25, "the heart's button is as wide as the thumbs-up's")?;
+    return Ok();
+}
