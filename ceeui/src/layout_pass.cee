@@ -209,9 +209,11 @@ fn propagateHeights(l: borrow mut LayoutTree, index: usize) {
             l.nodes.items[index].minDims.h = l.nodes.items[index].minDims.h.max(height);
         }
     } else if (layout.isRow()) {
+        // Children's margins are part of the room they take, as in the sizing passes (layout_engine.cee's fit sizes).
         for (k in 0..node.childCount) {
             let child = childOf(l, index, k);
-            let withPadding = (l.nodes.items[child].dims.h + tb).max(l.nodes.items[index].dims.h);
+            let m = marginOf(l, child);
+            let withPadding = (l.nodes.items[child].dims.h + m.top + m.bottom + tb).max(l.nodes.items[index].dims.h);
             l.nodes.items[index].dims.h = withPadding.max(hmin).min(hmax);
         }
     } else {
@@ -219,7 +221,8 @@ fn propagateHeights(l: borrow mut LayoutTree, index: usize) {
         for (k in 0..node.childCount) {
             let child = childOf(l, index, k);
             applyFlexBasis(mut l, child, false);
-            content += l.nodes.items[child].dims.h;
+            let m = marginOf(l, child);
+            content += l.nodes.items[child].dims.h + m.top + m.bottom;
         }
         content += usizeF(node.childCount - 1) * layout.childGap;
         l.nodes.items[index].dims.h = content.max(hmin).min(hmax);

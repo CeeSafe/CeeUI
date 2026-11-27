@@ -156,3 +156,43 @@ fn aFitParentHoldsItsChildrensMargins() -> Result<void, TestFailure> {
     Check.isTrue(row.w > 29.5 && row.w < 30.5 && row.h > 13.5 && row.h < 14.5, "a row too: 20 + 10 by 10 + 4")?;
     return Ok();
 }
+
+@test
+fn aPopupHoldsItsSeparators() -> Result<void, TestFailure> {
+    var storage = [0u8; 262144];
+    let memory = FixedBufferAllocator.over(mut storage);
+    var ui = Ui.create(memory, UiCapacity.of(32));
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var open = true;
+    for (frame in 0..3) {
+        ui.begin(mut platform);
+        ui.open(Style.box().w(Size.fixed(400.0)).h(Size.fixed(300.0)));
+        if (Controls.popup(mut ui, "sep", mut open, 50.0, 20.0)) {
+            ui.open(Style.column().id("sepItems").minW(120.0));
+            let _ = Controls.menuItem(mut ui, "sep", 0, "One", true, false);
+            Controls.menuSeparator(mut ui);
+            let _ = Controls.menuItem(mut ui, "sep", 1, "Two", true, false);
+            Controls.menuSeparator(mut ui);
+            let _ = Controls.menuItem(mut ui, "sep", 2, "Three", true, true);
+            ui.close();
+            Controls.popupEnd(mut ui, "sep", mut open);
+        }
+        ui.close();
+        finish(mut ui, mut platform)?;
+    }
+    let popup = ui.boxOf("sep")!;
+    let column = ui.boxOf("sepItems")!;
+    let last = ui.boxOfHash(menuItemId("sep", 2))!;
+    Console.write("  popup ");
+    Console.write(truncate<u64>(popup.y));
+    Console.write("+");
+    Console.write(truncate<u64>(popup.h));
+    Console.write(" column +");
+    Console.write(truncate<u64>(column.h));
+    Console.write(" last ");
+    Console.write(truncate<u64>(last.y));
+    Console.write("+");
+    Console.writeLine(truncate<u64>(last.h));
+    Check.isTrue(last.y + last.h <= column.y + column.h + 0.5, "the column holds its last item")?;
+    return Check.isTrue(column.y + column.h <= popup.y + popup.h + 0.5, "the popup holds its column");
+}
