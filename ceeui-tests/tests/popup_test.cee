@@ -1,0 +1,112 @@
+// SPDX-License-Identifier: MIT
+// Popups and context menus: kept inside the window (moved left at the right edge, above the point at the bottom),
+// transparent the first frame they are open, closed by a choice, a press outside or Escape; menu items that are
+// disabled or destructive. Uses ui_test.cee's FakePlatform, platformAt and finish.
+
+import ceeui;
+
+const ITEMS: [StringView; 3] = ["Reply", "Copy", "Delete"];
+
+/// One frame of a 400 by 300 window holding the menu `id` at (x, y), with the second item disabled and the third
+/// destructive; the index chosen.
+fn menuFrame(
+    ui: borrow mut Ui,
+    platform: borrow mut FakePlatform,
+    open: borrow mut bool,
+    x: f32,
+    y: f32,
+) -> Result<usize?, TestFailure> {
+    ui.begin(mut platform);
+    ui.open(Style.box().w(Size.fixed(400.0)).h(Size.fixed(300.0)));
+    var chosen: usize? = null;
+    if (Controls.popup(mut ui, "menu", mut open, x, y)) {
+        ui.open(Style.column().id("items").minW(120.0));
+        for (k in 0usize..3) {
+            if (Controls.menuItem(mut ui, "menu", k, ITEMS[k], k != 1, k == 2)) {
+                chosen = Some(k);
+                open = false;
+            }
+        }
+        Controls.menuSeparator(mut ui);
+        ui.close();
+        Controls.popupEnd(mut ui, "menu", mut open);
+    }
+    ui.close();
+    finish(mut ui, mut platform)?;
+    return Ok(chosen);
+}
+
+@test
+fn aPopupStaysInsideTheWindow() -> Result<void, TestFailure> {
+    var storage = [0u8; 524288];
+    let memory = FixedBufferAllocator.over(mut storage);
+    var ui = Ui.create(memory, UiCapacity.of(64));
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var open = true;
+    // Asked for near the bottom right corner: the first frame it is transparent, the next inside the window.
+    let _ = menuFrame(mut ui, mut platform, mut open, 380.0, 280.0)?;
+    Check.isTrue(ui.needsFrame(), "another frame is asked for")?;
+    let _ = menuFrame(mut ui, mut platform, mut open, 380.0, 280.0)?;
+    let b = ui.boxOf("menu")!;
+    Check.isTrue(b.x + b.w <= 400.0 - 8.0 + 0.5, "moved left of the right edge")?;
+    Check.isTrue(b.y + b.h <= 280.0 + 0.5, "above the point")?;
+    Check.isTrue(b.x >= 8.0 - 0.5 && b.y >= 8.0 - 0.5, "inside the top left margin")?;
+    Check.isTrue(b.w >= 120.0, "at least as wide as asked")?;
+    // Asked for in the middle: where it was asked.
+    open = false;
+    let _ = menuFrame(mut ui, mut platform, mut open, 0.0, 0.0)?;
+    open = true;
+    let _ = menuFrame(mut ui, mut platform, mut open, 100.0, 60.0)?;
+    let _ = menuFrame(mut ui, mut platform, mut open, 100.0, 60.0)?;
+    let m = ui.boxOf("menu")!;
+    Check.isTrue(m.x > 99.5 && m.x < 100.5 && m.y > 59.5 && m.y < 60.5, "at the point when it fits")?;
+    return Ok();
+}
+
+@test
+fn aMenuIsChosenOrClosed() -> Result<void, TestFailure> {
+    var storage = [0u8; 524288];
+    let memory = FixedBufferAllocator.over(mut storage);
+    var ui = Ui.create(memory, UiCapacity.of(64));
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    var open = true;
+    let _ = menuFrame(mut ui, mut platform, mut open, 100.0, 60.0)?;
+    let _ = menuFrame(mut ui, mut platform, mut open, 100.0, 60.0)?;
+    let copy = ui.boxOfHash(subIdOf("menu", 1))!;
+    let delete = ui.boxOfHash(subIdOf("menu", 2))!;
+    // The disabled item is not chosen, and the menu stays open.
+    platform.pointerState = Pointer.at(Vec2 { x: copy.x + 4.0, y: copy.y + 4.0 });
+    platform.pointerState.down = true;
+    platform.pointerState.pressed = true;
+    Check.isTrue(menuFrame(mut ui, mut platform, mut open, 100.0, 60.0)? is null, "a disabled item is not chosen")?;
+    Check.isTrue(open, "and the menu stays")?;
+    // The destructive item is chosen, and the menu closes.
+    platform.pointerState = Pointer.at(Vec2 { x: delete.x + 4.0, y: delete.y + 4.0 });
+    platform.pointerState.down = true;
+    platform.pointerState.pressed = true;
+    match (menuFrame(mut ui, mut platform, mut open, 100.0, 60.0)?) {
+        Some(k) => { Check.equalU64(2, k as u64)?; }
+        null => { return Check.isTrue(false, "Delete is chosen"); }
+    }
+    Check.isTrue(!open, "a choice closes it")?;
+    // A press outside closes it.
+    open = true;
+    platform.pointerState = Pointer.at(Vec2 { x: 390.0, y: 290.0 });
+    let _ = menuFrame(mut ui, mut platform, mut open, 100.0, 60.0)?;
+    platform.pointerState.down = true;
+    platform.pointerState.pressed = true;
+    let _ = menuFrame(mut ui, mut platform, mut open, 100.0, 60.0)?;
+    Check.isTrue(!open, "a press outside closes it")?;
+    // Escape closes it.
+    open = true;
+    platform.pointerState = Pointer.at(Vec2 { x: -1.0, y: -1.0 });
+    let _ = menuFrame(mut ui, mut platform, mut open, 100.0, 60.0)?;
+    platform.pressed = 1u64 << (keyIndex(Key.Escape) as u64);
+    let _ = menuFrame(mut ui, mut platform, mut open, 100.0, 60.0)?;
+    platform.pressed = 0;
+    Check.isTrue(!open, "Escape closes it")?;
+    return Ok();
+}
+
+/// The id of item `k` of the menu `menu`, as Controls.menuItem makes it.
+fn subIdOf(menu: StringView, k: usize) -> u32 => menuItemId(menu, k);

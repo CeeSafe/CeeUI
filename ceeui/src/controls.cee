@@ -10,6 +10,9 @@
 // (`textInputEx`, for its caret) takes the text metrics as an argument, since the Ui does not hold them between
 // frames.
 
+/// The id of item `index` of the menu `menu` (Controls.menuItem's), to find its box or give it focus.
+public fn menuItemId(menu: StringView, index: usize) -> u32 => subId(menu, "", truncate<i64>(index));
+
 /// The id of sub-element `suffix`/`index` of control `base` (C: snprintf("%s~%d") / "%s~pop").
 fn subId(base: StringView, suffix: StringView, index: i64) -> u32 {
     var buffer = [0u8; 96];
@@ -440,8 +443,91 @@ public struct Controls {
         return changed;
     }
 
-    /// ClayWind_ContextMenu: while `open`, a menu fixed to the window at (x, y); returns the chosen index, else null.
-    /// (The caller opens it, typically on a secondary press: `ui.secondaryPressedOn(id)`.)
+    /// A popup while `open`: a box fixed to the window at (x, y), above everything, holding what the caller puts in it
+    /// until `popupEnd`. It stays inside the window and its safe area: moved left when it would pass the right edge, and
+    /// above (x, y) when it would pass the bottom (or as low as fits). Its size is the one it had last frame, so the
+    /// first frame it is open it is drawn transparent and another frame is asked for: it is never seen elsewhere.
+    /// Whether it is open (then call `popupEnd`). The caller opens it, typically on a secondary press or a long press
+    /// (`ui.secondaryPressedOn(id)`, which a long press on a touch screen is too) at the pointer.
+    public fn popup(ui: borrow mut Ui, id: StringView, open: borrow mut bool, x: f32, y: f32) -> bool {
+        if (!open) {
+            return false;
+        }
+        let h = hashId(id);
+        let screen = ui.screenSize();
+        let safe = ui.safeArea();
+        let margin = space(2.0);
+        var left = x;
+        var top = y;
+        let known = match (ui.boxOfHash(h)) {
+            Some(b) => {
+                let right = screen.w - safe.right - margin;
+                let bottom = screen.h - safe.bottom - margin;
+                if (left + b.w > right) {
+                    left = right - b.w;
+                }
+                left = left.max(safe.left + margin);
+                if (top + b.h > bottom) {
+                    // Above the point when it fits there, else as low as it fits.
+                    top = if (y - b.h >= safe.top + margin) y - b.h else (bottom - b.h).max(safe.top + margin);
+                }
+                true
+            }
+            null => false,
+        };
+        ui.open(
+            Style.box().idHash(h).fixed().left(left).top(top).z(300).bg(ui.tone(SLATE_900)).p(space(1.0))
+                .rounded(Radius.Md).border(1.0, ui.tone(SLATE_600)).shadow(ShadowSize.Lg)
+                .opacity(if (known) 1.0 else 0.0),
+        );
+        if (!known) {
+            ui.requestFrame(); // drawn where it fits from the next frame
+        }
+        return true;
+    }
+
+    /// Closes the popup `popup` opened: a press outside it, or Escape, closes it.
+    public fn popupEnd(ui: borrow mut Ui, id: StringView, open: borrow mut bool) {
+        ui.close();
+        if (open && (ui.pressedOutside(hashId(id), 0) || ui.keyPressed(Key.Escape))) {
+            open = false;
+        }
+    }
+
+    /// An item of the menu `menuId` in a popup: its `label`, dimmed and not choosable unless `enabled`, red when
+    /// `destructive` (Delete). Whether it was chosen. The items of one menu are numbered by `index`, and a column holds
+    /// them, as wide as the widest.
+    public fn menuItem(
+        ui: borrow mut Ui,
+        menuId: StringView,
+        index: usize,
+        label: StringView,
+        enabled: bool,
+        destructive: bool,
+    ) -> bool {
+        let row = menuItemId(menuId, index);
+        let look = Style.box().idHash(row).w(Size.grow()).px(space(3.0)).py(space(2.0)).rounded(Radius.Sm);
+        ui.open(
+            if (enabled) look.cursor(Cursor.Pointer).hover(Style.of().bg(if (destructive) RED_600 else BLUE_600))
+            else look,
+        );
+        let chosen = enabled && ui.pressedOn(row);
+        let node = ui.access(row, AccessRole.MenuItem, label.bytes());
+        ui.accessFlag(node, ACCESS_DISABLED, !enabled);
+        let color = if (!enabled) ui.tone(SLATE_500) else if (destructive) RED_400 else ui.tone(SLATE_100);
+        ui.label(label, Text.of().color(color));
+        ui.close();
+        return chosen;
+    }
+
+    /// A line between groups of a popup's menu items.
+    public fn menuSeparator(ui: borrow mut Ui) {
+        ui.open(Style.box().w(Size.grow()).h(Size.fixed(1.0)).my(space(1.0)).bg(ui.tone(SLATE_700)));
+        ui.close();
+    }
+
+    /// ClayWind_ContextMenu: while `open`, a menu in a popup at (x, y), kept inside the window; returns the chosen
+    /// index, else null. (The caller opens it, typically on a secondary press: `ui.secondaryPressedOn(id)`.)
     public fn contextMenu(
         ui: borrow mut Ui,
         id: StringView,
@@ -455,7 +541,8 @@ public struct Controls {
     }
 
     /// `contextMenu` with items that can be disabled: item i is enabled when `enabled` has no i-th entry or it is
-    /// true. A disabled item is drawn dimmed, takes no hover, cannot be chosen, and says so to a screen reader.
+    /// true. A disabled item is drawn dimmed, takes no hover, cannot be chosen, and says so to a screen reader. The
+    /// menu is as wide as its widest item, at least 180.
     public fn contextMenuWith(
         ui: borrow mut Ui,
         id: StringView,
@@ -465,37 +552,21 @@ public struct Controls {
         x: f32,
         y: f32,
     ) -> usize? {
-        if (!open) {
+        if (!Controls.popup(mut ui, id, mut open, x, y)) {
             return null;
         }
-        let h = hashId(id);
         var chosen: usize? = null;
-        ui.open(
-            Style.box().idHash(h).fixed().left(x).top(y).z(300).bg(ui.tone(SLATE_900)).p(space(1.0)).rounded(Radius.Md)
-                .border(1.0, ui.tone(SLATE_600)),
-        );
         let menu = subId(id, "menu", 0);
-        ui.open(Style.column().idHash(menu).w(Size.fixed(180.0)));
+        ui.open(Style.column().idHash(menu).minW(180.0));
         let _ = ui.access(menu, AccessRole.Menu, "".bytes()); // its items, "2 of 5" (CeeSafe ADR 0207)
         for (i in 0..items.length) {
-            let row = subId(id, "", truncate<i64>(i));
-            let on = i >= enabled.length || enabled[i];
-            let look = Style.box().idHash(row).w(Size.grow()).px(space(3.0)).py(space(2.0)).rounded(Radius.Sm);
-            ui.open(if (on) look.cursor(Cursor.Pointer).hover(Style.of().bg(BLUE_600)) else look);
-            if (on && ui.pressedOn(row)) {
+            if (Controls.menuItem(mut ui, id, i, items[i], i >= enabled.length || enabled[i], false)) {
                 chosen = i;
                 open = false;
             }
-            let node = ui.access(row, AccessRole.MenuItem, items[i].bytes());
-            ui.accessFlag(node, ACCESS_DISABLED, !on);
-            ui.label(items[i], Text.of().color(ui.tone(if (on) SLATE_100 else SLATE_500)));
-            ui.close();
         }
         ui.close();
-        ui.close();
-        if (open && ui.pressedOutside(h, 0)) {
-            open = false;
-        }
+        Controls.popupEnd(mut ui, id, mut open);
         return chosen;
     }
 
