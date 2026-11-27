@@ -543,6 +543,12 @@ public fn lineBreaks(utf8: Slice<u8>, breaks: SliceMut<u8>, scratch: SliceMut<u3
         scratch[n * 2 + 1] = c | (flags << 8);
         previous = c;
         n += 1;
+        // A character's other bytes are no break either: `breaks` is often reused from text to text (the layout's
+        // marks), and a mark left there split a word inside a character (Marivil's ❤️, whose VS16 is three bytes,
+        // measured as five of its six bytes, an invalid character as wide as three emoji).
+        for (inner in i + 1..(i + cp[1] as usize).min(utf8.length)) {
+            breaks[inner] = BREAK_NONE;
+        }
         i += cp[1] as usize;
     }
     let chars = LineChars { s: scratch, n: truncate<i32>(n) };

@@ -319,3 +319,74 @@ fn aWrappedRowGivesEachButtonItsOwnWidth() -> Result<void, TestFailure> {
     Check.isTrue(ui.boxOf("rx1")!.w < thumb * 1.25, "the heart's button is as wide as the thumbs-up's")?;
     return Ok();
 }
+
+@test
+fn androidsFontsGiveTheHeartAnEmojisWidth() -> Result<void, TestFailure> {
+    // Android's own fonts (DroidSans.ttf, NotoColorEmoji.ttf from /system/fonts), from CEEUI_ANDROID_FONTS.
+    let dir = match (Environment.variable("CEEUI_ANDROID_FONTS")) {
+        Some(d) => d,
+        null => {
+            Console.writeLine("  (CEEUI_ANDROID_FONTS not set: skipped)");
+            return Ok();
+        }
+    };
+    var droidPath = String.create();
+    let _ = droidPath.append(dir);
+    let _ = droidPath.append("/DroidSans.ttf");
+    var emojiPath = String.create();
+    let _ = emojiPath.append(dir);
+    let _ = emojiPath.append("/NotoColorEmoji.ttf");
+    let droid = readFile(droidPath.view());
+    let emoji = readFile(emojiPath.view());
+    var storage = heap(134217728);
+    let memory = FixedBufferAllocator.over(mut storage.viewMut());
+    var c = RasterCapacity.of(411, 300);
+    c.imagePixels = 2097152;
+    c.fontBytes = 100663296;
+    var ras = Raster.create(memory, c);
+    Check.isTrue(ras.loadFont(0, droid.view()) && ras.loadFont(5, emoji.view()) && ras.addFallback(5), "fonts load")?;
+    let reactions: [StringView; 6] = ["\u{1F44D}", "\u{2764}\u{FE0F}", "\u{1F602}", "\u{1F62E}", "\u{1F622}", "\u{1F64F}"];
+    for (k in 0usize..6) {
+        let m = ras.measure(reactions[k].bytes(), TextConfig.of(22.0));
+        Console.write("  measure ");
+        Console.write(k as u64);
+        Console.write(" = ");
+        Console.writeLine(truncate<u64>(m.w * 100.0));
+    }
+    var ui = Ui.create(memory, UiCapacity.of(64));
+    var platform = platformAt(411.0, 300.0, -1.0, -1.0);
+    let names: [StringView; 6] = ["rx0", "rx1", "rx2", "rx3", "rx4", "rx5"];
+    for (frame in 0..2) {
+        ui.begin(mut platform);
+        ui.open(Style.row().gap(4.0));
+        for (k in 0usize..6) {
+            ui.open(Style.box().id(names[k]).px(8.0).py(4.0));
+            ui.label(reactions[k], Text.of().size(22.0));
+            ui.close();
+        }
+        ui.close();
+        Check.isTrue(ui.endFrame(mut platform, ras) is Ok(_), "frame fits")?;
+    }
+    for (k in 0usize..6) {
+        Console.write("  cell ");
+        Console.write(k as u64);
+        Console.write(" w ");
+        Console.writeLine(truncate<u64>(ui.boxOf(names[k])!.w));
+    }
+    let thumb = ui.boxOf("rx0")!.w;
+    return Check.isTrue(ui.boxOf("rx1")!.w < thumb * 1.25, "the heart's cell is as wide as the thumbs-up's");
+}
+
+@test
+fn lineBreaksMarkNothingInsideACharacterOfReusedMarks() -> Result<void, TestFailure> {
+    // The marks hold what an earlier text left (a break at every byte); a heart with VS16 (six bytes) has its only
+    // break at its end, which has no entry: none inside, at bytes 1 to 5.
+    var marks = [BREAK_ALLOWED; 16];
+    var scratch = [0u32; 64];
+    let heart = "\u{2764}\u{FE0F}";
+    Check.isTrue(lineBreaks(heart.bytes(), mut marks[..], mut scratch[..]), "it fits")?;
+    for (k in 0usize..6) {
+        Check.isTrue(marks[k] == BREAK_NONE, "no break inside the heart")?;
+    }
+    return Ok();
+}
