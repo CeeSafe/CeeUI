@@ -440,6 +440,9 @@ impl GestureState {
                             this.reportPan(GesturePhase.Cancelled, t.position, Vec2.zero());
                         }
                     }
+                    Recognizing.LongPressed => {
+                        this.last = t.position; // where a long press lifted (a held element's release is there)
+                    }
                     _ => {}
                 }
                 if (mine || t.id == this.primary) {
@@ -528,15 +531,22 @@ impl<region r> Ui<r> {
             return given;
         }
         this.touchGiven = given.position;
-        // A drag claims the finger: it stays the pointer, pressed, until it lifts.
-        let dragging = this.drag.active || this.drag.candidate != 0;
+        // A drag, or a held element (holdOn), claims the finger: it stays the pointer, pressed, until it lifts.
+        let dragging = this.drag.active || this.drag.candidate != 0 || this.held != 0;
         var p = Pointer.at(this.gestures.pointerPosition());
+        var heldLift = false;
         if (this.gestures.began) {
             p.pressed = true;
             p.down = true;
         }
         if (this.gestures.pressing() || (dragging && this.gestures.primaryDown())) {
             p.down = true;
+        } else if (this.held != 0) {
+            // A held finger lifted, wherever it went (a long press or a pan too): its release, and the hold is over.
+            p.released = true;
+            p.down = false;
+            this.held = 0;
+            heldLift = true;
         } else if (this.gestures.released || this.gestures.cancelled) {
             p.released = !this.gestures.began || this.gestures.released;
             p.down = false;
@@ -544,14 +554,14 @@ impl<region r> Ui<r> {
                 this.pressCancelled = true;
             }
         }
-        if (this.gestures.longPress != null) {
+        if (this.gestures.longPress != null && this.held == 0) {
             p.secondaryPressed = true;
         }
-        if (this.gestures.longPressing()) {
+        if (this.gestures.longPressing() && this.held == 0) {
             p.secondaryDown = true;
         }
-        if (this.gestures.idle() && !this.gestures.released) {
-            // No finger, and no tap to click: nothing is under the pointer (no hover sticks after a touch).
+        if (this.gestures.idle() && !this.gestures.released && !heldLift) {
+            // No finger, and no tap or held lift to see where it was: nothing is under the pointer (no hover sticks after a touch).
             p.position = Vec2 { x: -1000000.0, y: -1000000.0 };
         }
         this.touchDriven = true;
@@ -560,7 +570,7 @@ impl<region r> Ui<r> {
 
     /// Scrolling by touch: the pan moves the scroll container it picked, and its release flings it.
     fn touchScrolling(borrow mut this) {
-        let dragging = this.drag.active || this.drag.candidate != 0;
+        let dragging = this.drag.active || this.drag.candidate != 0 || this.held != 0;
         match (this.gestures.pan) {
             Some(p) => {
                 let began = match (p.phase) {

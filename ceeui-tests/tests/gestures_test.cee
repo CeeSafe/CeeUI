@@ -331,3 +331,70 @@ fn pinchScalesAndCancelsTheTap() -> Result<void, TestFailure> {
     seen = frame(mut ui, mut platform)?;
     return Check.isTrue(!seen.clicked && seen.tap == null, "a pinch is no click and no tap");
 }
+
+/// What one frame of a held button (holdOn on "btn") saw: whether it is held, the pointer, and the list's scroll.
+struct HeldSeen {
+    held: bool;
+    down: bool;
+    released: bool;
+    over: bool;
+    secondary: bool;
+    scroll: f32;
+}
+
+fn heldFrame(ui: borrow mut Ui, platform: borrow mut FakePlatform) -> Result<HeldSeen, TestFailure> {
+    ui.begin(mut platform);
+    scene(mut ui);
+    let p = ui.pointer();
+    let seen = HeldSeen {
+        held: ui.holdOn(hashId("btn")),
+        down: p.down,
+        released: p.released,
+        over: ui.hovered("btn"),
+        secondary: ui.secondaryPressedOn(hashId("btn")),
+        scroll: ui.scrollOffset("list").y,
+    };
+    finish(mut ui, mut platform)?;
+    platform.touchCount = 0;
+    platform.touchRead = 0;
+    platform.clock += platform.dt as f64;
+    return Ok(seen);
+}
+
+@test
+fn aHeldElementKeepsTheFinger() -> Result<void, TestFailure> {
+    var storage = [0u8; 524288];
+    let memory = FixedBufferAllocator.over(mut storage);
+    var ui = Ui.create(memory, UiCapacity.of(64));
+    var platform = platformAt(400.0, 300.0, -1.0, -1.0);
+    setUp(mut ui, mut platform)?;
+    touch(mut platform, 1, TouchPhase.Began, 50.0, 50.0);
+    var seen = heldFrame(mut ui, mut platform)?;
+    Check.isTrue(seen.held && seen.down, "a press holds it")?;
+    // Past the long press's time: still down, and no secondary press.
+    platform.clock += 0.6;
+    seen = heldFrame(mut ui, mut platform)?;
+    seen = heldFrame(mut ui, mut platform)?;
+    Check.isTrue(seen.held && seen.down && !seen.secondary, "held past a long press: down, no context menu")?;
+    // Moved far, over the list: still down, and the list does not scroll.
+    touch(mut platform, 1, TouchPhase.Moved, 50.0, 130.0);
+    seen = heldFrame(mut ui, mut platform)?;
+    touch(mut platform, 1, TouchPhase.Moved, 50.0, 110.0);
+    seen = heldFrame(mut ui, mut platform)?;
+    Check.isTrue(seen.held && seen.down && !seen.over, "moved off: still held, not over it")?;
+    expect("the list does not scroll", seen.scroll, 0.0)?;
+    // Lifted away from it: released, not over it, and no longer held.
+    touch(mut platform, 1, TouchPhase.Ended, 50.0, 110.0);
+    seen = heldFrame(mut ui, mut platform)?;
+    Check.isTrue(seen.released && !seen.over && !seen.held, "lifted away: released off it")?;
+    seen = heldFrame(mut ui, mut platform)?;
+    Check.isTrue(!seen.held && !seen.down, "and the hold is over")?;
+    // Held again and lifted over it: released over it.
+    touch(mut platform, 2, TouchPhase.Began, 50.0, 50.0);
+    seen = heldFrame(mut ui, mut platform)?;
+    platform.clock += 0.6;
+    seen = heldFrame(mut ui, mut platform)?;
+    touch(mut platform, 2, TouchPhase.Ended, 52.0, 50.0);
+    seen = heldFrame(mut ui, mut platform)?;
+    return Check.isTrue(seen.released && seen.over, "lifted over it: released over it");
+}

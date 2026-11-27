@@ -175,6 +175,8 @@ public struct Ui<region r> {
     triggered: FixedList<r, u32>;
     /// The drag under way, if any (drag.cee).
     drag: DragState;
+    /// The element held by a press (holdOn): it keeps the finger as the pointer until it lifts; 0 for none.
+    held: u32;
     /// Actions dispatched this frame, triggered at the next `begin` (actions.cee).
     queuedActions: [u32; 8];
     queuedCount: usize;
@@ -310,6 +312,7 @@ public struct Ui<region r> {
             keystrokes: FixedList<Keystroke>.over(keystrokes),
             triggered: FixedList<u32>.over(triggered),
             drag: DragState.none(),
+            held: 0,
             queuedActions: [0u32; 8],
             queuedCount: 0,
             openDepth: 0,

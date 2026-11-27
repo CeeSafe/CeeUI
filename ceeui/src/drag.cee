@@ -122,6 +122,20 @@ impl<region r> Ui<r> {
         return this.drag.active && this.drag.source == id;
     }
 
+    /// Makes element `id` (open, or just closed) press-and-hold, as a hold-to-record button: a press on it keeps the
+    /// finger as the pointer, down, until it lifts, wherever it moves (no long press, pan or scroll takes it), so its
+    /// release can be read and `hovered` tells whether it lifted over the element. Whether it is held now.
+    public fn holdOn(borrow mut this, id: u32) -> bool {
+        if (this.pressedOn(id)) {
+            this.held = id;
+        }
+        if (this.held == id && !this.pointerState.down && !this.pointerState.pressed) {
+            this.held = 0;
+            return false;
+        }
+        return this.held == id;
+    }
+
     /// Makes element `id` a drop target for drags of `kind` (DRAG_FILES for the system's files): whether one is over
     /// it this frame, or was dropped on it.
     public fn dropTarget(borrow this, id: u32, kind: u32) -> DropState {
