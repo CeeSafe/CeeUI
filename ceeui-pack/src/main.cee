@@ -806,6 +806,9 @@ fn androidManifest(o: borrow Options) -> String {
         // The camera's app writes to an item of the gallery, which needs this before Android 10 (CeeSafe ADR 0265).
         m.append("  <uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\"");
         m.append(" android:maxSdkVersion=\"28\"/>\n");
+        // The code scanner's own camera (CeeSafe ADR 0274), asked at run time by CodeScanner.open; with it declared,
+        // the runtime asks it before a capture too.
+        m.append("  <uses-permission android:name=\"android.permission.CAMERA\"/>\n");
     }
     if (o.microphone.view().length > 0) {
         // A voice note's recording (CeeSafe ADR 0272), asked at run time by AudioRecorder.start.
