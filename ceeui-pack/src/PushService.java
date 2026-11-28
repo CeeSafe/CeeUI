@@ -47,11 +47,9 @@ public final class PushService extends FirebaseMessagingService {
 
     @Override
     public void onMessageReceived(RemoteMessage message) {
-        if ("running".equals(System.getProperty("ceesafe.program"))) {
-            return;
-        }
         Map<String, String> data = message.getData();
-        // A call (CeeSafe ADR 0278): the system's call notification, or its end.
+        // A call (CeeSafe ADR 0278): the system's call notification, or its end, whether or not the program runs: the
+        // server pushes a call only when it has no connection from the app, so a running program has not heard of it.
         String kind = data.get("kind");
         if ("call".equals(kind) && data.get("callId") != null) {
             String from = data.get("fromName");
@@ -66,6 +64,9 @@ public final class PushService extends FirebaseMessagingService {
             if (manager != null) {
                 manager.cancel("call:" + data.get("callId"), 1);
             }
+            return;
+        }
+        if ("running".equals(System.getProperty("ceesafe.program"))) {
             return;
         }
         String title = data.get("title");
@@ -226,7 +227,8 @@ public final class PushService extends FirebaseMessagingService {
         PendingIntent decline = callChoice(context, id, name, "decline", 3);
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(context, channel)
                 : new Notification.Builder(context);
-        builder.setSmallIcon(context.getApplicationInfo().icon)
+        int icon = context.getApplicationInfo().icon;
+        builder.setSmallIcon(icon != 0 ? icon : android.R.drawable.sym_call_incoming) // an APK may have no icon
                 .setContentTitle(name)
                 .setContentText("Incoming call")
                 .setCategory(Notification.CATEGORY_CALL)
