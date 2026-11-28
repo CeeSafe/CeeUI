@@ -58,7 +58,7 @@ struct Options {
     contacts: String;   // --contacts, why the app reads the address book (CeeSafe ADR 0271); empty for none
     microphone: String; // --microphone, why it records sound (a captured video)
     savePhotos: String; // --save-photos, why it adds its captures to Photos (iOS)
-    bluetooth: String; // --bluetooth, why the app uses Bluetooth (CeeSafe ADR 0177 §2.2): Android's permissions and
+    bluetooth: String;  // --bluetooth, why the app uses Bluetooth (CeeSafe ADR 0177 §2.2): Android's permissions and
     // Apple's NSBluetoothAlwaysUsageDescription; empty for an app that uses none
     notifications: bool; // --notifications: Android's POST_NOTIFICATIONS (CeeSafe ADR 0243)
     push: bool;          // --push: iOS's aps-environment, from the profile (CeeSafe ADR 0244)

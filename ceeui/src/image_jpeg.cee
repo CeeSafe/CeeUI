@@ -682,7 +682,12 @@ fn turn(orientation: u32, x: usize, y: usize, w: usize, h: usize) -> [usize; 2] 
 
 /// Decodes a JPEG into `pixels` (`info.w * info.h`, as `jpegInfo` gives them: turned as the photo is meant to be
 /// seen), using `scratch` (`info.scratchBytes`).
-fn decodeJpeg(b: Slice<u8>, info: ImageInfo, pixels: SliceMut<u32>, scratch: SliceMut<u8>) -> Result<void, ImageError> =>
+fn decodeJpeg(
+    b: Slice<u8>,
+    info: ImageInfo,
+    pixels: SliceMut<u32>,
+    scratch: SliceMut<u8>,
+) -> Result<void, ImageError> =>
     decodeJpegScaled(b, info, 1, mut pixels, mut scratch);
 
 /// The same at 1/`scale` of the size (1 or 8, as `jpegInfoScaled`): at an eighth, each block is one sample, its DC

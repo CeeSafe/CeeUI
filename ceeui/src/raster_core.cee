@@ -423,7 +423,8 @@ public struct Raster<region r> {
             var oldestDrawn: u64 = 0;
             for (k in 0..this.images.length()) {
                 let rec = this.images.get(k);
-                if (rec.handle < COLOR_HANDLE_BASE && rec.drawn + 1 < this.frames && (oldest == 0 || rec.drawn < oldestDrawn)) {
+                if (rec.handle < COLOR_HANDLE_BASE && rec.drawn + 1 < this.frames &&
+                    (oldest == 0 || rec.drawn < oldestDrawn)) {
                     oldest = rec.handle;
                     oldestDrawn = rec.drawn;
                 }

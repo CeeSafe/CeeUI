@@ -509,7 +509,7 @@ public struct Controls {
         let look = Style.box().idHash(row).w(Size.grow()).px(space(3.0)).py(space(2.0)).rounded(Radius.Sm);
         ui.open(
             if (enabled) look.cursor(Cursor.Pointer).hover(Style.of().bg(if (destructive) RED_600 else BLUE_600))
-            else look,
+                else look,
         );
         // Chosen as a button is clicked: down and up over it (a finger lifted after a long press that opened the menu
         // chooses nothing, and one slid off cancels), so what the choice focuses keeps the focus after the release.
