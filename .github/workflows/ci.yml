@@ -20,7 +20,7 @@ env:
   # line (ADR 0199, CEESAFE-FINDINGS.md Q4); 0.84.0: ceeui-pack passes --arch for each Android ABI (ADR 0192); on
   # Linux, 0.77's runtime left the browser host's input unread when its frames ran behind. 0.95.3: the system's Back,
   # WindowKey.Back and Window.setBackWanted (ADR 0233), which ceeui-desktop maps.
-  CEESAFE_VERSION: v0.95.3
+  CEESAFE_VERSION: v0.95.27
 
 defaults:
   run:
