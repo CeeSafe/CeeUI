@@ -21,6 +21,8 @@
 // when the app first reaches a device on the local network.
 // `--contacts WHY` is for an app that reads the address book (CeeSafe ADR 0271): iOS's and the Mac's sentence, and
 // Android's READ_CONTACTS.
+// `--calls` is for an app that rings while it is not running (CeeSafe ADR 0278): iOS's `voip` and `audio` background
+// modes; Android's USE_FULL_SCREEN_INTENT, PushService's call notification and src/CallChoice.java.
 // `--camera WHY`, `--microphone WHY` and `--save-photos WHY` are for an app that captures with the camera (CeeSafe ADR
 // 0265, MediaPicker.capture): iOS's sentences for the camera, the microphone (a video records sound) and adding the
 // capture to Photos; on Android, --camera declares the storage permission up to Android 9, where the gallery's item
@@ -61,6 +63,7 @@ struct Options {
     bluetooth: String;  // --bluetooth, why the app uses Bluetooth (CeeSafe ADR 0177 §2.2): Android's permissions and
     // Apple's NSBluetoothAlwaysUsageDescription; empty for an app that uses none
     notifications: bool; // --notifications: Android's POST_NOTIFICATIONS (CeeSafe ADR 0243)
+    calls: bool;         // --calls: calls that ring while the app is not running (CeeSafe ADR 0278)
     push: bool;          // --push: iOS's aps-environment, from the profile (CeeSafe ADR 0244)
     group: String;       // --group: an App Group the app (and its extension) share (CeeSafe ADR 0246)
     extension: String;   // --extension: the directory of a package built as the app's notification service extension
@@ -335,6 +338,10 @@ fn infoPlist(o: borrow Options, phone: bool) -> String {
     // iOS ends an app that asks.
     usageText(mut p, "NSContactsUsageDescription", o.contacts.view());
     usageText(mut p, "NSMicrophoneUsageDescription", o.microphone.view());
+    if (phone && o.calls) {
+        // Calls (CeeSafe ADR 0278): VoIP pushes wake the app for CallKit; a call's audio goes on with the screen locked.
+        p.append("\t<key>UIBackgroundModes</key><array><string>voip</string><string>audio</string></array>\n");
+    }
     p.append("</dict>\n</plist>\n");
     return p;
 }
@@ -820,6 +827,10 @@ fn androidManifest(o: borrow Options) -> String {
         // The address book (CeeSafe ADR 0271), asked at run time by Contacts.read.
         m.append("  <uses-permission android:name=\"android.permission.READ_CONTACTS\"/>\n");
     }
+    if (o.calls) {
+        // A call's notification over the lock screen (CeeSafe ADR 0278).
+        m.append("  <uses-permission android:name=\"android.permission.USE_FULL_SCREEN_INTENT\"/>\n");
+    }
     if (o.notifications) {
         // Android 13 and later ask for it at run time (CeeSafe ADR 0243); before them it is granted at install.
         m.append("  <uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>\n");
@@ -862,6 +873,14 @@ fn androidManifest(o: borrow Options) -> String {
         m.append("      <intent-filter>\n");
         m.append("        <action android:name=\"com.google.firebase.MESSAGING_EVENT\"/>\n");
         m.append("      </intent-filter>\n    </service>\n");
+        if (o.calls) {
+            // A call notification's choice (CeeSafe ADR 0278): src/CallChoice.java, a windowless activity.
+            m.append("    <activity android:name=\"org.ceeui.pack.CallChoice\" android:exported=\"false\"");
+            m.append(
+                " android:theme=\"@android:style/Theme.Translucent.NoTitleBar\" android:excludeFromRecents=\"true\"",
+            );
+            m.append(" android:noHistory=\"true\" android:taskAffinity=\"\"/>\n");
+        }
         if (o.extension.view().length > 0) {
             // The notification extension's process (CeeSafe ADR 0263): src/ExtensionHost.java, which PushService binds.
             m.append("    <service android:name=\"org.ceeui.pack.ExtensionHost\" android:exported=\"false\"");
@@ -880,6 +899,7 @@ fn androidManifest(o: borrow Options) -> String {
 /// The messaging service an APK with Firebase carries (CeeSafe ADR 0249), and the class through which it starts the
 /// app's notification extension (CeeSafe ADR 0263), whose natives the extension's runtime registers.
 const PUSH_SERVICE: StringView = embedText("PushService.java");
+const CALL_CHOICE: StringView = embedText("CallChoice.java");
 const EXTENSION_CLASS: StringView = embedText("Extension.java");
 const EXTENSION_HOST: StringView = embedText("ExtensionHost.java");
 /// The content provider every APK carries (CeeSafe ADR 0268).
@@ -956,6 +976,7 @@ fn gradleBuild(o: borrow Options, sdk: StringView, base: StringView) -> i32 {
         ) ||
         !writeText(cat([project, "/local.properties"]).view(), cat(["sdk.dir=", sdk, "\n"]).view()) ||
         !writeText(cat([java.view(), "/PushService.java"]).view(), PUSH_SERVICE) ||
+        !writeText(cat([java.view(), "/CallChoice.java"]).view(), CALL_CHOICE) ||
         !writeText(cat([ceesafeJava.view(), "/Extension.java"]).view(), EXTENSION_CLASS) ||
         !writeText(cat([java.view(), "/ExtensionHost.java"]).view(), EXTENSION_HOST) ||
         !writeText(cat([ceesafeJava.view(), "/Files.java"]).view(), FILES_PROVIDER)) {
@@ -1314,7 +1335,9 @@ fn usage() -> i32 {
     Console.writeErrorLine(
         "           [--keystore FILE] [--keystore-pass PASSWORD] [--network WHY] [--bluetooth WHY]",
     );
-    Console.writeErrorLine("           [--camera WHY] [--microphone WHY] [--save-photos WHY] [--contacts WHY]");
+    Console.writeErrorLine(
+        "           [--camera WHY] [--microphone WHY] [--save-photos WHY] [--contacts WHY] [--calls]",
+    );
     Console.writeErrorLine("           [--notifications] [--push] [--group ID] [--extension DIR] [--firebase FILE]");
     Console.writeErrorLine("           [--font FILE]... [--fallback FILE]...");
     Console.writeErrorLine("run in the app's package directory; the result is under out/pack");
@@ -1457,6 +1480,7 @@ fn main() -> i32 {
         savePhotos: String.create(),
         bluetooth: String.create(),
         notifications: false,
+        calls: false,
         push: false,
         group: String.create(),
         extension: String.create(),
@@ -1467,6 +1491,11 @@ fn main() -> i32 {
     var i: usize = 2;
     while (i < Process.argumentCount()) {
         let flag = Process.argument(i) ?? "";
+        if (flag == "--calls") {
+            o.calls = true; // a switch
+            i += 1;
+            continue;
+        }
         if (flag == "--notifications") {
             o.notifications = true; // a switch: no value follows
             i += 1;

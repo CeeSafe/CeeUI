@@ -51,6 +51,23 @@ public final class PushService extends FirebaseMessagingService {
             return;
         }
         Map<String, String> data = message.getData();
+        // A call (CeeSafe ADR 0278): the system's call notification, or its end.
+        String kind = data.get("kind");
+        if ("call".equals(kind) && data.get("callId") != null) {
+            String from = data.get("fromName");
+            if (from == null || from.isEmpty()) {
+                from = data.get("fromPhone");
+            }
+            showCall(this, data.get("callId"), from != null ? from : "Call");
+            return;
+        }
+        if (("call-end".equals(kind) || "gcall-end".equals(kind)) && data.get("callId") != null) {
+            NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            if (manager != null) {
+                manager.cancel("call:" + data.get("callId"), 1);
+            }
+            return;
+        }
         String title = data.get("title");
         String body = data.get("body");
         RemoteMessage.Notification shown = message.getNotification();
@@ -183,5 +200,60 @@ public final class PushService extends FirebaseMessagingService {
         } catch (RuntimeException e) {
             // A notification that cannot be shown is not shown; the app syncs at its next start.
         }
+    }
+
+    /**
+     * An incoming call as the system's call notification (CeeSafe ADR 0278): full screen over the lock screen, ringing,
+     * Decline and Answer, gone after 45 s; each choice goes to CallChoice, which leaves it for the program. The same
+     * notification as the runtime's CallNotice.show.
+     */
+    static void showCall(Context context, String id, String name) {
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null) {
+            return;
+        }
+        String channel = "ceesafe-calls";
+        if (Build.VERSION.SDK_INT >= 26) {
+            NotificationChannel calls = new NotificationChannel(channel, "Calls", NotificationManager.IMPORTANCE_HIGH);
+            calls.setSound(android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE),
+                    new android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE).build());
+            calls.enableVibration(true);
+            manager.createNotificationChannel(calls);
+        }
+        PendingIntent full = callChoice(context, id, name, "show", 1);
+        PendingIntent answer = callChoice(context, id, name, "answer", 2);
+        PendingIntent decline = callChoice(context, id, name, "decline", 3);
+        Notification.Builder builder = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(context, channel)
+                : new Notification.Builder(context);
+        builder.setSmallIcon(context.getApplicationInfo().icon)
+                .setContentTitle(name)
+                .setContentText("Incoming call")
+                .setCategory(Notification.CATEGORY_CALL)
+                .setOngoing(true)
+                .setAutoCancel(false)
+                .setContentIntent(full)
+                .setFullScreenIntent(full, true);
+        if (Build.VERSION.SDK_INT >= 26) {
+            builder.setTimeoutAfter(45000);
+        }
+        if (Build.VERSION.SDK_INT >= 31) {
+            builder.setStyle(Notification.CallStyle.forIncomingCall(
+                    new android.app.Person.Builder().setName(name).build(), decline, answer));
+        } else {
+            builder.addAction(new Notification.Action.Builder(null, "Decline", decline).build());
+            builder.addAction(new Notification.Action.Builder(null, "Answer", answer).build());
+        }
+        manager.notify("call:" + id, 1, builder.build());
+    }
+
+    private static PendingIntent callChoice(Context context, String id, String name, String action, int which) {
+        Intent choice = new Intent(context, CallChoice.class);
+        choice.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        choice.putExtra("ceesafe.call.action", action);
+        choice.putExtra("ceesafe.call.id", id);
+        choice.putExtra("ceesafe.call.name", name);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0);
+        return PendingIntent.getActivity(context, (id.hashCode() & 0xFFFFFF) * 4 + which, choice, flags);
     }
 }
