@@ -811,8 +811,10 @@ fn androidManifest(o: borrow Options) -> String {
         m.append("  <uses-permission android:name=\"android.permission.CAMERA\"/>\n");
     }
     if (o.microphone.view().length > 0) {
-        // A voice note's recording (CeeSafe ADR 0272), asked at run time by AudioRecorder.start.
+        // A voice note's recording (CeeSafe ADR 0272), asked at run time by AudioRecorder.start; and a call's audio
+        // (CeeSafe ADR 0277), whose AudioManager goes into communication mode and picks the speaker or the earpiece.
         m.append("  <uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>\n");
+        m.append("  <uses-permission android:name=\"android.permission.MODIFY_AUDIO_SETTINGS\"/>\n");
     }
     if (o.contacts.view().length > 0) {
         // The address book (CeeSafe ADR 0271), asked at run time by Contacts.read.
